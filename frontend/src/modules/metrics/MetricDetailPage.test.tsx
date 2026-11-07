@@ -2,7 +2,7 @@
  * 지표 상세가 지키는 것 — **셀마다 목록 조건으로 돌아가고, 계산 시각을 숨기지 않는다.**
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -212,7 +212,7 @@ describe('지표 상세', () => {
     const link = screen.getByRole('link', { name: /2건 보기/ })
     expect(link).toHaveAttribute(
       'href',
-      '/o/svc_case?f.symptom.eq=%EC%86%8C%EC%9D%8C&f.received.gte=2026-02-01&f.received.lt=2026-03-01',
+      '/o/svc_case?f.symptom.eq=%EC%86%8C%EC%9D%8C&f.received.gte=2026-02-01&f.received.lt=2026-03-01&year=all',
     )
     // 분모가 있으니 비율 열이 선다.
     expect(screen.getByText('2.5')).toBeInTheDocument()
@@ -417,7 +417,7 @@ describe('지표 상세', () => {
     expect(table).toHaveTextContent('소음(%)')
     expect(screen.getAllByRole('link', { name: '75' })[0]).toHaveAttribute(
       'href',
-      '/o/svc_case?f.received.gte=2026-01-01',
+      '/o/svc_case?f.received.gte=2026-01-01&year=all',
     )
   })
 
@@ -560,6 +560,73 @@ describe('지표 상세', () => {
       { timeout: LAZY_WAIT },
     )
     expect(screen.getByRole('tab', { name: '분석' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('주소의 dims · by · split · cumulative 를 처음에 읽는다 — 지표 응답의 link 가 연 화면', async () => {
+    // 표 — 빈 `dims` 는 「묶지 않음」, `by` 는 기간 · 코호트 하나만 읽는다.
+    metricsApi.values.mockClear()
+    await mount('/metrics/cases_monthly?dims=&by=period&period_from=2026-01-01')
+    await waitFor(() =>
+      expect(metricsApi.values).toHaveBeenCalledWith(
+        'cases_monthly',
+        expect.objectContaining({ dims: [], by: ['period'], period_from: '2026-01-01' }),
+      ),
+    )
+    cleanup()
+    metricsApi.values.mockClear()
+    await mount('/metrics/cases_monthly?tab=table&dims=symptom&by=age&composition=symptom')
+    await waitFor(() =>
+      expect(metricsApi.values).toHaveBeenCalledWith(
+        'cases_monthly',
+        expect.objectContaining({ dims: ['symptom'], by: [], composition: 'symptom' }),
+      ),
+    )
+    cleanup()
+    // 추이 — 선 나누기와 구성비('true').
+    metricsApi.series.mockClear()
+    metricsApi.series.mockResolvedValue({
+      ...HEADER,
+      split: 'symptom',
+      lines_truncated: false,
+      composition: true,
+      lines: [],
+    })
+    await mount('/metrics/cases_monthly?tab=series&split=symptom&composition=true')
+    await waitFor(() =>
+      expect(metricsApi.series).toHaveBeenCalledWith(
+        'cases_monthly',
+        expect.objectContaining({ split: 'symptom', composition: true }),
+      ),
+    )
+    cleanup()
+    // 코호트 — 'false' 일 때만 누적을 끈다(화면의 기본은 누적).
+    metricsApi.cohort.mockClear()
+    await mount('/metrics/cases_monthly?tab=cohort&cumulative=false')
+    await waitFor(() =>
+      expect(metricsApi.cohort).toHaveBeenCalledWith(
+        'cases_monthly',
+        expect.objectContaining({ cumulative: false }),
+      ),
+    )
+    expect(screen.getByRole('checkbox', { name: /누적/ })).not.toBeChecked()
+    cleanup()
+    // 분석이 연 화면에서는 같은 이름이 그 분석의 인자로도 간다(관리도의 split).
+    metricsApi.analysis.mockClear()
+    metricsApi.analysis.mockReturnValue(new Promise(() => {}))
+    await mount('/metrics/cases_monthly?tab=analysis&recipe=control&split=symptom', {
+      ...METRIC,
+      analyses: [{ recipe: 'control', label: '관리도', ok: true, reason: null }],
+    })
+    await waitFor(
+      () =>
+        expect(metricsApi.analysis).toHaveBeenCalledWith(
+          'cases_monthly',
+          'control',
+          expect.objectContaining({ split: 'symptom' }),
+          expect.anything(),
+        ),
+      { timeout: LAZY_WAIT },
+    )
   })
 
   it('경보 탭은 이 지표에 건 내 경보를 보인다', async () => {

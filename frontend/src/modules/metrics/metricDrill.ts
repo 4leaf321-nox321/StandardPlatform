@@ -4,6 +4,9 @@
  * 서버가 셀마다 그 수를 이룬 기록의 목록 조건(`drill`)을 준다. 화면은 그것을 그대로 주소에
  * 적는다 — 기간은 버킷 시작일의 범위(`gte` + `lt`), 기준은 같은 주소의 `eq`. 조건으로 못 적은
  * 축(`partial`)이 있으면 목록의 수가 셀의 수보다 클 수 있다고 함께 말한다.
+ *
+ * **`year=all` 을 함께 단다.** 셀의 수는 연도와 상관없이 센 것인데 목록 화면은 연도를 쓰는
+ * 타입이면 올해가 기본이다 — 안 달면 지난해 셀의 「N건 보기」 가 올해 것만(대개 0건) 연다.
  */
 
 import type { Drill } from '@/modules/metrics/api'
@@ -11,8 +14,8 @@ import type { Drill } from '@/modules/metrics/api'
 export function drillHref(drill: Drill): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(drill.params)) params.append(key, value)
-  const text = params.toString()
-  return `/o/${drill.type_slug}${text ? `?${text}` : ''}`
+  if (!params.has('year')) params.set('year', 'all')
+  return `/o/${drill.type_slug}?${params.toString()}`
 }
 
 /** 수를 사람이 읽게 — 정수는 그대로, 소수는 두 자리까지. 없으면 「—」. */

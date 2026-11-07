@@ -251,6 +251,7 @@ def test_이름은_env_에서_오고_화면에_심긴다(
     monkeypatch.setenv("APP_NAME", "PLM 기준정보 <허브>")
     monkeypatch.setenv("APP_TAGLINE", "한 줄")
     monkeypatch.setenv("EXTENSIONS", "sample")
+    monkeypatch.setenv("PUBLIC_URL", "https://hub.example.com/plmhub/")
     get_settings.cache_clear()
     try:
         with TestClient(create_app()) as web:
@@ -262,6 +263,10 @@ def test_이름은_env_에서_오고_화면에_심긴다(
             assert '<meta name="app-extensions" content="sample" />' in page
             health = web.get("/api/health").json()
             assert health["app"] == "PLM 기준정보 <허브>" and health["slug"] == "plmhub"
+            # MCP 가 답에 「같은 조건의 화면」 을 붙이는 바탕 — 적은 공개 주소(끝 `/` 뗌)와
+            # 접두어.
+            assert health["public_url"] == "https://hub.example.com/plmhub"
+            assert health["base_path"] == ""
             assert (
                 web.get("/api/openapi.json").json()["info"]["title"]
                 == "PLM 기준정보 <허브> API"

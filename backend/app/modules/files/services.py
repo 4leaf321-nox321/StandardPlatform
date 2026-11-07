@@ -13,7 +13,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
-from urllib.parse import urlsplit
 
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
@@ -22,7 +21,7 @@ from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.files.schemas import AttachmentOut, TicketOut
-from app.shared import extensions, filestore, images
+from app.shared import extensions, filestore, images, public_url
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 from app.shared.permissions import (
     require_owner_edit,
@@ -418,18 +417,10 @@ def _public_upload_url(path: str) -> str | None:
 
     MCP 포트를 바로 적은 값(`http://<IP>:<앱+2>/mcp` — ReportArchive 가 그렇게 쓴다)이면 그
     주소에서 `/mcp` 를 떼도 앱이 아니라 MCP 포트다. 그때는 만들지 않는다 — MCP 서버가 들어온
-    주소로 만든다(앱 포트)."""
-    settings = get_settings()
-    configured = settings.mcp_public_url.strip().rstrip("/")
-    if not configured.endswith("/mcp"):
-        return None
-    if urlsplit(configured).port == settings.port + 2:
-        return None
-    base = configured[: -len("/mcp")]
-    prefix = settings.base_path
-    if prefix and base.endswith(prefix):
-        base = base[: -len(prefix)]
-    return f"{base}{path}"
+    주소로 만든다(앱 포트). 규칙은 화면의 바탕 주소와 같은 자리에
+    있다(`shared/public_url.py`)."""
+    origin = public_url.mcp_app_origin(get_settings())
+    return f"{origin}{path}" if origin else None
 
 
 def issue_ticket(

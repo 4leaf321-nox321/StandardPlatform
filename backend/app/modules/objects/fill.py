@@ -47,6 +47,7 @@ from app.modules.accounts.models import User
 from app.modules.datasources.models import DataSource
 from app.modules.metrics.models import MetricDef
 from app.modules.objects import edges, misses, system
+from app.modules.objects.listlinks import list_link
 from app.modules.objects.models import (
     ObjectAlias,
     ObjectInstance,
@@ -697,6 +698,14 @@ def _field_gain(fill: TypeFill, one: FieldFill, uses: Uses) -> str:
     return "; ".join(parts) + "."
 
 
+def _empty_link(slug: str, key: str) -> str:
+    """「그 칸이 빈 것만」 목록 화면 — **연도 전부**(`year=all`). 채울 곳의 수는 연도와
+    무관하게 센 것인데 화면의 기본은 올해라, 연도를 안 실으면 눌러 연 목록이 그 수보다
+    적었다."""
+    link, _missing = list_link(slug, [(key, "")], interface=False)
+    return link or f"/o/{slug}"
+
+
 def _priorities(
     object_type: ObjectType, fill: TypeFill, usage: _Usage, *, hidden: bool
 ) -> list[Priority]:
@@ -757,7 +766,7 @@ def _priorities(
                 weight=weight,
                 uses=one.uses,
                 gain=_field_gain(fill, one, uses),
-                link=f"{base}?f.{one.key}.empty=",
+                link=_empty_link(slug, f"f.{one.key}.empty"),
                 estimated=fill.estimated,
             )
         )
@@ -788,7 +797,7 @@ def _priorities(
                 weight=weight,
                 uses=relation.uses,
                 gain="; ".join(why) + ".",
-                link=f"{base}?f.{head}.{relation.relation}.empty=",
+                link=_empty_link(slug, f"f.{head}.{relation.relation}.empty"),
                 estimated=fill.estimated,
             )
         )

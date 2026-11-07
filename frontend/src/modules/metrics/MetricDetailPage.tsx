@@ -180,7 +180,10 @@ function MetricDetail({ slug }: { slug: string }) {
   const [search] = useSearchParams()
   const metric = useResource(() => metricsApi.get(slug), [slug])
   // 경보 알림의 링크(ADR 0016)는 `?tab=analysis&recipe=…&d.<기준>=…` 로 그 분석을 그 인자로
-  // 연다 — 처음 한 번만 읽는다(그 뒤의 고르기는 화면의 것).
+  // 연다 — 처음 한 번만 읽는다(그 뒤의 고르기는 화면의 것). 지표 읽기 응답의 `link`(MCP 로 받은
+  // 답을 사람이 확인하는 주소)는 표 · 추이 · 코호트의 고르기도 싣는다 — `dims`(쉼표, 빈 값은
+  // 묶지 않음) · `by` · `composition` · `split` · `cumulative`. **여기서 읽는 이름을 바꾸면 서버
+  // `metrics/links.py` 도** — 안 바꾸면 응답이 「빠진 인자」 를 틀리게 말한다.
   const [opened] = useState(() => {
     const asked = search.get('tab') as Tab | null
     const filtersAsked: Record<string, string | null> = {}
@@ -190,26 +193,45 @@ function MetricDetail({ slug }: { slug: string }) {
       else if (key !== 'tab' && key !== 'recipe') params[key] = value
     })
     const recipe = search.get('recipe')
+    const tab: Tab = asked && TABS.includes(asked) ? asked : 'table'
+    const dimsAsked = search.get('dims')
+    const byAsked = search.get('by')
+    const share = search.get('composition') ?? ''
     return {
-      tab: asked && TABS.includes(asked) ? asked : 'table',
+      tab,
       filters: filtersAsked,
       periodFrom: params.period_from ?? '',
       periodTo: params.period_to ?? '',
+      // 없으면 null — 화면의 기본(첫 기준)으로. 빈 값은 「묶지 않음」 이다.
+      dims:
+        dimsAsked === null
+          ? null
+          : dimsAsked
+              .split(',')
+              .map((one) => one.trim())
+              .filter(Boolean),
+      // 화면은 기간 · 코호트 하나만 묶는다 — 그 밖(`age` · 여럿)은 안 읽는다.
+      by: (byAsked === 'period' || byAsked === 'cohort' ? byAsked : 'none') as By,
+      // 구성비 — 표면 기준 이름, 추이면 'true'.
+      composition: tab === 'series' ? '' : share,
+      seriesComposition: tab === 'series' && share === 'true',
+      split: search.get('split') ?? '',
+      cumulative: search.get('cumulative') !== 'false',
       analysis: recipe ? { recipe, params } : null,
     }
   })
   const [tab, setTab] = useState<Tab>(opened.tab)
-  const [dims, setDims] = useState<string[] | null>(null)
-  const [by, setBy] = useState<By>('none')
+  const [dims, setDims] = useState<string[] | null>(opened.dims)
+  const [by, setBy] = useState<By>(opened.by)
   const [filters, setFilters] = useState<Record<string, string | null>>(opened.filters)
   const [periodFrom, setPeriodFrom] = useState(opened.periodFrom)
   const [periodTo, setPeriodTo] = useState(opened.periodTo)
-  const [split, setSplit] = useState('')
-  const [cumulative, setCumulative] = useState(true)
+  const [split, setSplit] = useState(opened.split)
+  const [cumulative, setCumulative] = useState(opened.cumulative)
   const [ratio, setRatio] = useState(true)
   // 구성비 — 표는 기준 이름(묶은 것 중 하나), 추이는 선을 나눈 기준의 기간마다 100%.
-  const [composition, setComposition] = useState('')
-  const [seriesComposition, setSeriesComposition] = useState(false)
+  const [composition, setComposition] = useState(opened.composition)
+  const [seriesComposition, setSeriesComposition] = useState(opened.seriesComposition)
 
   const found = metric.data
   const chosen = dims ?? (found?.dims[0] ? [found.dims[0].name] : [])

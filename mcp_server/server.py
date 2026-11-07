@@ -191,12 +191,79 @@ def tool() -> Any:
     도구마다 따로 감싸면 새 도구를 넣은 사람이 그 한 줄을 잊고, 그러면 **그 도구만
     측정에서 빠진다** — 빠진 줄은 「안 쓴 도구」 처럼 보인다. **위험 도구의 관리자 확인**
     (`_admin_only`)도 같은 이유로 여기서 건다 — 새 위험 도구를 목록에 넣는 것만으로 걸린다.
+    **화면 주소**(`_with_screen_urls`)도 — 새 도구의 답에 `link` 가 있으면 저절로 `url` 이
+    붙는다.
     """
 
     def wrap(fn: Any) -> Any:
-        return mcp.tool()(_traced(_admin_only(fn)))
+        return mcp.tool()(_traced(_with_screen_urls(_admin_only(fn))))
 
     return wrap
+
+
+#: 사람 · 데이터가 이름을 지은 값의 자리 — 그 안의 `link` 는 화면 경로가 아니라 값이다. 속성
+#: 묶음, SPARQL 의 줄(`rows` — 변수 이름이 `link` 일 수 있다), 이어진 칸의 값(`linked` ·
+#: `value`).
+_FREE_KEYS = frozenset({"properties", "rows", "linked", "value"})
+#: 답 전체가 자유 꼴인 도구 — 훑지 않는다(질의 결과 · 확장의 응답).
+_FREE_TOOLS = frozenset({"rdf_query", "extension_call"})
+
+
+def _linked_nodes(found: Any) -> list[dict[str, Any]]:
+    """답 안에서 `link` 가 화면 경로(`/…`)이고 `url` 이 아직 없는 dict 전부 — **한 번 훑는다.**
+
+    `url` 이 이미 있으면 다른 뜻일 수 있어(RA 보고서의 원문 주소) 건드리지 않는다. 사람 ·
+    데이터가 이름을 지은 자리(`_FREE_KEYS`)는 `link` 라는 칸이 값일 수 있다 — 그 안으로는 안
+    들어간다(값에 없던 `url` 칸이 생기면 AI 는 그것을 원래 데이터로 읽는다, 2026-11-07 검토).
+    큰 목록도 재귀 없이 쌓아 가며 한 번에."""
+    hits: list[dict[str, Any]] = []
+    stack: list[Any] = [found]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            link = node.get("link")
+            if (
+                isinstance(link, str)
+                and link.startswith("/")
+                and not link.startswith("//")
+                and "url" not in node
+            ):
+                hits.append(node)
+            stack.extend(
+                value
+                for key, value in node.items()
+                if key not in _FREE_KEYS and isinstance(value, dict | list)
+            )
+        elif isinstance(node, list):
+            stack.extend(value for value in node if isinstance(value, dict | list))
+    return hits
+
+
+def _with_screen_urls(fn: Any) -> Any:
+    """답의 화면 경로(`link`)마다 옆에 **사람이 눌러 여는 절대 주소**(`url`)를 단다.
+
+    백엔드는 라우터 기준 경로만 안다(접두어 · 호스트를 모른다) — 바깥 AI 는 그 경로를 사람에게
+    링크로 줄 수 없다. 바탕(`_screen_base`)을 모르면 그대로 둔다(상대 `link` 만 남는다).
+    덤이라 바탕을 묻다 실패해도 본래 답은 그대로 돌려준다. `link` 가 없는 답이면 바탕을 묻지도
+    않는다. 답 전체가 자유 꼴인 도구(`_FREE_TOOLS`)는 감싸지 않는다."""
+    if fn.__name__ in _FREE_TOOLS:
+        return fn
+
+    @functools.wraps(fn)
+    async def inner(ctx: Any, *args: Any, **kwargs: Any) -> Any:
+        got = await fn(ctx, *args, **kwargs)
+        if not isinstance(got, dict | list):
+            return got
+        hits = _linked_nodes(got)
+        if not hits:
+            return got
+        base = await _screen_base(ctx)
+        if base:
+            for node in hits:
+                node["url"] = base + node["link"]
+        return got
+
+    return inner
 
 
 ADMIN_ONLY_MESSAGE = (
@@ -1317,6 +1384,8 @@ async def objects_list(
     status: str | None = None,
     as_of: str | None = None,
     columns: list[str] | None = None,
+    year: int | None = None,
+    types: list[str] | None = None,
 ) -> Any:
     """그 타입의 객체 목록 — 화면의 목록과 **같은 거르기**다.
 
@@ -1352,6 +1421,10 @@ async def objects_list(
     - `as_of`: **기준일**(`YYYY-MM-DD`, 비우면 오늘) — 관계 조건(`out.` · `in.`) · 「하위
       전체」(`under`)가 **그날 유효한 관계만** 따라간다(유효 기간, ADR 0039). 「3월 기준 그
       어셈블리 아래 부품」 은 `under` 조건에 `as_of="2026-03-31"`.
+    - `year`: 그 해로 좁힌다(화면 주소의 `year=<해>`) — 안 주면 전부(화면의 `year=all`). 사람이
+      준 목록 화면 주소에 `year` 가 **없으면** 그 화면은 올해(또는 사람이 고른 해)다 — 올해로
+      부르고, 다른 해를 골랐는지 사람에게 확인한다.
+    - `types`: 인터페이스 목록을 구현 타입 몇으로 좁힌다(화면 주소의 `types=a|b`).
     - `columns`: **이어진 칸** — 줄마다 그 주소의 값을 `linked[<id>][<주소>]` 로 싣는다
       (`object_fields` 의 주소 · 선의 칸, 10개까지). **상대의 값이 필요하면 줄마다
       `object_get` 하지 말고 `columns`** 로 한 번에. 칸마다 20개까지 · 이어진 것마다 값
@@ -1368,14 +1441,22 @@ async def objects_list(
     「없습니다」 라고 답하지 마라 — 있는 것을 없다고 하면 사람은 그것을 새로 만든다.
 
     **긴 글 칸(보고서 본문 같은 것)은 앞 300자만** 온다 — 줄의 `clipped` 가 그 칸의 전체
-    길이를 말한다. 내용으로 답하려면 그 객체를 `object_get` 으로 읽는다."""
-    filters = _filter_params(q, status, properties, conditions, as_of)
+    길이를 말한다. 내용으로 답하려면 그 객체를 `object_get` 으로 읽는다.
+
+    **`url`** 은 같은 조건의 화면(줄마다는 상세)이다 — 사람이 눌러 확인한다. 수를 옮길 때 `url`
+    과 부른 때를 함께, `link_missing` 이 있으면 화면이 그 인자 없이 연다고 말한다."""
+    filters = _filter_params(q, status, properties, conditions, as_of, year, types)
     params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
     params += [("columns", one) for one in columns or []]
     found = await _get(ctx, f"/api/objects/{type_slug}", params=params)
     if isinstance(found, dict):
-        for row in found.get("items") or []:
+        items = found.get("items") or []
+        # 줄마다 상세 화면 — 사람이 그 한 건을 눌러 확인한다. 바탕을 모르면 안 단다.
+        base = await _screen_base(ctx) if items else None
+        for row in items:
             _clip(row, start=0, size=LIST_TEXT)
+            if base:
+                _object_url(base, row)
     if isinstance(found, dict) and found.get("total") == 0:
         # **0건은 「없다」 가 아니다.** 안 채운 타입일 수도, 부서 밖이라 안 보일 수도,
         # 조건이 좁을 뿐일 수도 있다. 셋을 안 가르면 모델은 「없다」 로 읽고 없는 것을
@@ -1394,6 +1475,8 @@ def _filter_params(
     properties: dict[str, str] | None,
     conditions: list[dict[str, str]] | None,
     as_of: str | None = None,
+    year: int | None = None,
+    types: list[str] | None = None,
 ) -> list[tuple[str, Any]]:
     """목록과 통계가 **같은 거르기**를 보낸다.
 
@@ -1405,6 +1488,13 @@ def _filter_params(
         params.append(("q", q))
     if as_of:
         params.append(("as_of", as_of))
+    if year is not None:
+        # 화면 주소의 `year=<해>` — 안 주면 전부다(화면의 `year=all`). 사람이 준 화면 주소를
+        # 그대로 다시 부를 수 있게.
+        params.append(("year", year))
+    if types:
+        # 인터페이스 목록을 구현 타입 몇으로 좁힌다(화면 주소의 `types=a|b`).
+        params.append(("types", "|".join(types)))
     if status:
         params.append(("status", status))
     for key, value in (properties or {}).items():
@@ -1606,8 +1696,9 @@ async def review_list(
 
     줄마다 `question`(물음) · `evidence`(근거) · `choices`(후보, `score`) · `recommended` ·
     `confidence`(0~1) · `reason`(왜 이 추천인가) · `rows`(한 결정이 손대는 줄 수) · `blocked`
-    (이 토큰의 주인이 처리할 수 없는 까닭) · `link`(원래 화면). `kinds` 가 종류마다 수를 센다
-    (`total` 원래 자리에 있는 수 · `matched` 거르기에 맞는 수) — **요약할 때 이것으로.**
+    (이 토큰의 주인이 처리할 수 없는 까닭) · `link`(원래 화면 — 사람에게는 옆의 `url`).
+    `kinds` 가 종류마다 수를 센다(`total` 원래 자리에 있는 수 · `matched` 거르기에 맞는 수) —
+    **요약할 때 이것으로.**
 
     거르기: `kind`(종류 하나) · `type_slug` · `workspace`(부서 slug, `@global` 은 전역) ·
     `min_confidence`. `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄을 한 줄로
@@ -1722,6 +1813,8 @@ async def objects_summary(
     conditions: list[dict[str, str]] | None = None,
     status: str | None = None,
     as_of: str | None = None,
+    year: int | None = None,
+    types: list[str] | None = None,
 ) -> Any:
     """**통계** — 「부서별 몇 건」 「개발사 국가별 툴 수」. 화면의 「통계」 와 같다.
 
@@ -1746,6 +1839,7 @@ async def objects_summary(
       날짜 축을 **시간순**으로 볼 때).
     - `as_of`: 기준일(`YYYY-MM-DD`, 비우면 오늘) — 관계 너머의 기준(`out.` · `in.`) · 계층 축
       (`@<단계>`) · 관계 조건이 **그날 유효한 관계만** 따라간다(`objects_list` 와 같다).
+    - `year` · `types`: 목록과 같다.
     - `grain`: 날짜 축의 기간 단위 `day`·`week`·`month`·`quarter`·`year`(기본). 「월별
       추이」 는 `grain="month", order="key"`. 날짜 칸의 `buckets[].key` 는 그 기간의
       **시작일**이고 `range` 가 `{gte, lt}` 다 — 그 칸을 보려면 `objects_list` 에
@@ -1758,7 +1852,9 @@ async def objects_summary(
       관계) — 칸의 합이 `total` 보다 클 수 있다고 함께 말한다.
     - 「그 칸이 뭔데」 는 `buckets[].key` 를 조건 값으로 `objects_list`:
       기준이 `properties.<키>` 면 field 는 `<키>`, 다른 타입의 칸이면 그 주소,
-      `status` 면 `status` 인자. key 가 null 이면 op 는 `empty`."""
+      `status` 면 `status` 인자. key 가 null 이면 op 는 `empty`.
+    - `url`(같은 조건의 통계 화면 — 사람이 눌러 확인한다)과 부른 때. `link_missing` 이 있으면
+      화면이 그 인자 없이 연다고 말한다."""
     params: list[tuple[str, Any]] = [
         ("group_by", group_by),
         ("metric", metric),
@@ -1770,7 +1866,7 @@ async def objects_summary(
         params.append(("metric_field", metric_field))
     if grain:
         params.append(("grain", grain))
-    params += _filter_params(q, status, properties, conditions, as_of)
+    params += _filter_params(q, status, properties, conditions, as_of, year, types)
     return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
 
 
@@ -1861,7 +1957,9 @@ async def object_get(
 
     **긴 글 칸은 6,000자씩** 온다. `clipped[<칸>] = {from, to, length}` 가 있으면 잘린
     것이다 — `to < length` 면 `text_from=<to>` 로 다시 불러 이어 읽는다. 다 읽기 전에
-    「본문에 그런 내용은 없다」 고 답하지 마라."""
+    「본문에 그런 내용은 없다」 고 답하지 마라.
+
+    `url` 은 그 객체의 상세 화면이다 — 값을 옮길 때 함께 준다(사람이 눌러 확인한다)."""
     params: list[tuple[str, Any]] = []
     if as_of:
         params.append(("as_of", as_of))
@@ -1869,6 +1967,10 @@ async def object_get(
         params.append(("all_periods", "true"))
     found = await _get(ctx, f"/api/objects/{type_slug}/{object_id}", params=params or None)
     _clip(found, start=text_from, size=GET_TEXT)
+    if isinstance(found, dict) and "error" not in found:
+        base = await _screen_base(ctx)
+        if base:
+            _object_url(base, found, type_slug)
     return found
 
 
@@ -2315,7 +2417,7 @@ async def fill_priorities(ctx: Context, type_slug: str | None = None, limit: int
     기다리는 선 · 별칭 없는 객체 · 객체 없는 타입을 세고, 그 칸 · 타입을 **쓰는 곳**(필수 ·
     지표 · 코어 공개 · 뷰 · 개수 제약 · 트리)으로 가중해 줄을 세운다(`priorities`). 줄마다
     `gain` 이 「이것을 채우면 무엇이 좋아지나」, `link` 가 빈 것만 거른 화면 주소다 — 답할 때
-    둘을 함께 전한다.
+    둘을 함께 전한다(사람에게는 `link` 옆의 `url` — 눌러 여는 주소).
 
     **큰 타입은 표본에서 센 어림이다**(`estimated`, `notes`) — 사람에게 수를 전할 때 「약」 을
     붙인다. `type_slug` 를 주면 그 타입(인터페이스면 구현 타입들)만, 칸은 전부 온다."""
@@ -2587,6 +2689,60 @@ def _public_origin(ctx: Context) -> str | None:
         port -= 2
     default = port is None or (proto, port) in (("http", 80), ("https", 443))
     return f"{proto}://{name}" if default else f"{proto}://{name}:{port}"
+
+
+#: `/api/health` 를 붙들어 두는 초 — 설치의 주소 · 접두어는 앱을 다시 띄워야 바뀐다. 도구마다
+#: 묻지 않게 프로세스에 하나만 둔다(사람마다 다르지 않다 — 로그인 없이 읽는다).
+SCREEN_TTL = 300.0
+_health_held: tuple[float, dict[str, Any]] | None = None
+
+
+async def _health() -> dict[str, Any] | None:
+    """`GET /api/health` — 붙들어 둔 것이 있으면 그것. 못 읽으면 붙들던 것(없으면 None)."""
+    global _health_held
+    held = _health_held
+    if held is not None and time.monotonic() - held[0] < SCREEN_TTL:
+        return held[1]
+    try:
+        async with _client(5.0) as client:
+            got = await client.get("/api/health")
+        body = got.json() if got.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        body = None
+    if not isinstance(body, dict):
+        return held[1] if held is not None else None
+    _health_held = (time.monotonic(), body)
+    return body
+
+
+async def _screen_base(ctx: Context) -> str | None:
+    """사람이 브라우저로 여는 **화면의 바탕 주소**(접두어 포함) — 모르면 None.
+
+    백엔드가 아는 공개 주소(`public_url` — `PUBLIC_URL` · 포털 · `MCP_PUBLIC_URL` 에서)가
+    먼저다. 포털 게이트웨이는 MCP 포트를 직접 부르므로 들어온 주소는 사람의 주소가 아니다.
+    없으면 들어온 주소(`_public_origin`)에 접두어(`base_path`)를 붙인다 — 접두어를 모르면
+    (백엔드에 못 닿음) 짐작하지 않는다: 접두어 없이 만든 주소는 다른 플랫폼의 화면일 수
+    있다."""
+    health = await _health()
+    if health is None:
+        return None
+    public = health.get("public_url")
+    if isinstance(public, str) and public.strip():
+        return public.strip().rstrip("/")
+    base_path = health.get("base_path")
+    origin = _public_origin(ctx)
+    if origin is None or not isinstance(base_path, str):
+        return None
+    return f"{origin}{base_path}"
+
+
+def _object_url(base: str, row: Any, type_slug: str | None = None) -> None:
+    """객체 줄(`type_slug` · `id`)에 그 상세 화면의 주소를 단다 — `url` 이 있으면 그대로."""
+    if not isinstance(row, dict) or "url" in row:
+        return
+    slug, object_id = row.get("type_slug") or type_slug, row.get("id")
+    if slug and object_id:
+        row["url"] = f"{base}/o/{quote(str(slug), safe='')}/{quote(str(object_id), safe='')}"
 
 
 @tool()
@@ -3497,7 +3653,9 @@ async def metric_query(
       `f.<칸>.<연산>` 키를 `{field, op, value}` 로, `nf<번호>.<칸>.<연산>`(제외 묶음 — 규칙
       기준의 「앞 규칙에 안 맞음」)은 `{field, op, value, exclude: <번호>}` 로, `fe<번호>.`
       (같은 관계 묶음 — 같은 선 하나)는 `edge: <번호>` 로 풀면 된다(`drill.partial` 이 비어
-      있을 때 수가 같다)."""
+      있을 때 수가 같다).
+    - `url`(같은 조건의 화면 — 사람이 눌러 확인한다)을 `computed_at` 과 함께. `link_missing` 이
+      있으면 화면이 그 인자 없이 연다고 말한다."""
     where = _METRIC_SHAPES.get((shape or "table").strip().lower())
     if where is None:
         return {"error": f"shape 는 {', '.join(_METRIC_SHAPES)} 중 하나입니다: {shape!r}"}
@@ -3665,7 +3823,9 @@ async def metric_analyze(
     - 위험 요인의 오즈비 · 연관의 향상도는 「함께 나옴」 이지 원인이 아니다. `unstable` 인 값은
       오즈비를 말하지 않는다. `aliased` 면 요인끼리 겹쳐 오즈비를 가를 수 없다.
     - `method`(방법과 판) · `computed_at`(계산 시각)을 함께 말한다. 근거는 `drill.params` →
-      `objects_list` 의 `conditions`(지표 읽기와 같다)."""
+      `objects_list` 의 `conditions`(지표 읽기와 같다).
+    - `url` 은 같은 인자의 분석 화면이다(사람이 눌러 확인한다) — 결론과 함께 준다.
+      `link_missing` 이 있으면 화면이 그 인자 없이 연다고 말한다."""
     name = (recipe or "").strip().lower()
     allowed = _RECIPE_OPTIONS.get(name)
     if allowed is None:
@@ -3720,6 +3880,7 @@ async def insights(
       `also` 는 같은 줄이 선 다른 지표 — 한 번만 말한다.
     - **후보다** — 원인을 단정하지 않는다. q 값 · 잠정 · 지남을 함께 말한다. 결론은 그 지표의
       셀이 든 부서를 모두 보는 사람에게만 보인다 — 비었다고 「이상 없음」 이 아니다.
+    - 결론마다 `url`(그 분석 화면 — 사람이 눌러 확인한다)을 함께 준다.
 
     처리(그만 보기 · 지금 훑기 · 지표마다 끄기)는 `insight_manage`."""
     params: list[tuple[str, Any]] = [("limit", str(max(1, min(limit, 200))))]
@@ -3794,7 +3955,7 @@ async def metric_alerts(
 
     발생(`events[]`)마다 `title`(한 줄 결론) · `detail`(수) · `created_at` · `link`(분석 탭을
     그 인자로 여는 주소). `link` 의 인자를 `metric_analyze` 의 `options` 와 `filters`
-    (`d.<기준>`)로 옮기면 지금 셀로 같은 분석을 다시 본다.
+    (`d.<기준>`)로 옮기면 지금 셀로 같은 분석을 다시 본다. 사람에게는 `url`(그 화면)을 준다.
 
     **옮길 때 규칙.** 발생은 「그때 처음 본 결론」 이지 원인이 아니다 — 관리도 신호는 조사할
     곳, 순차 검정 「나쁨」 은 정한 배수 쪽이라는 판정, 변화점의 「잠정」 은 잠정이다. 지금도

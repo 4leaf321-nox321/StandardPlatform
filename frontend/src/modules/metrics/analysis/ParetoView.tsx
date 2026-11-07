@@ -4,8 +4,8 @@
 
 import { useState } from 'react'
 
-import type { Metric, ReadOptions } from '@/modules/metrics/api'
 import { metricsApi } from '@/modules/metrics/api'
+import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import {
   AnalysisMeta,
   CaveatList,
@@ -36,12 +36,14 @@ import {
 } from '@/shared/components/ui/table'
 import { useResource } from '@/shared/hooks/useResource'
 
-export function ParetoView({ metric, read }: { metric: Metric; read: ReadOptions }) {
-  const [dim, setDim] = useState(metric.dims[0]?.name ?? '')
-  const [byPeriod, setByPeriod] = useState(false)
+export function ParetoView({ metric, read, initial = {} }: AnalysisViewProps) {
+  // 주소가 연 인자(지표 응답의 `link`) — 고르는 자리가 없는 `top` · `include_empty` 는 안 읽는다
+  // (서버 `metrics/links.py` 가 그것을 「빠진 인자」 로 말한다).
+  const [dim, setDim] = useState(initial.dim ?? metric.dims[0]?.name ?? '')
+  const [byPeriod, setByPeriod] = useState(initial.by_period === 'true')
   // 두 기간 비교 — 지금 범위(상세 위의 기간)가 앞, 여기 범위가 뒤.
-  const [compareFrom, setCompareFrom] = useState('')
-  const [compareTo, setCompareTo] = useState('')
+  const [compareFrom, setCompareFrom] = useState(initial.compare_from ?? '')
+  const [compareTo, setCompareTo] = useState(initial.compare_to ?? '')
   const key = JSON.stringify([dim, byPeriod, compareFrom, compareTo, read])
   const result = useResource<ParetoResult | null>(
     () =>

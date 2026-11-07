@@ -26,7 +26,7 @@ import type {
   SavedView,
 } from '@/modules/objects/api'
 import { AttachmentCell } from '@/modules/files/AttachmentCell'
-import { DEFAULT_SUMMARY } from '@/modules/objects/summarySettings'
+import { DEFAULT_SUMMARY, summaryFromParams } from '@/modules/objects/summarySettings'
 import type { SummarySettings } from '@/modules/objects/summarySettings'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { ViewPicker } from '@/modules/objects/ViewPicker'
@@ -41,6 +41,7 @@ import { InterfaceListPage } from '@/modules/objects/InterfaceListPage'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { AsOfPicker } from '@/modules/objects/AsOfPicker'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
+import { yearChoices, yearFromParams } from '@/modules/objects/urlYear'
 import { canBeDerived, hasStaleOnly, withStaleOnly } from '@/modules/objects/lineage'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { canCreateObject, isAnyManager } from '@/shared/auth/roles'
@@ -93,9 +94,6 @@ const SummaryPanel = lazy(() =>
 const ALL = '__all__'
 
 const NO_LINKED: LinkedField[] = []
-
-/** 고를 수 있는 해. 올해에서 뒤로 열 해 — 그보다 옛것은 「전체 연도」 로 본다. */
-const YEAR_OPTIONS = Array.from({ length: 11 }, (_, index) => new Date().getFullYear() - index)
 
 /** `list_view.columns` 를 안 정했을 때의 기본. **빈 화면이 되지는 않는다.** */
 const FALLBACK_COLUMNS = ['key', 'label', 'updated_at']
@@ -281,11 +279,10 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
    * 섞여 뜨고, 사람은 그것을 지금 쓰는 것으로 읽는다. 「전체 보기」 는 옵트인이다.
    *
    * 주소의 `year=all` 은 그 옵트인을 싣고 온 것이다 — 홈 위젯은 연도 없이 세므로, 눌러 연
-   * 목록에 올해가 걸리면 위젯의 수와 목록의 수가 달랐다(2026-10-08).
+   * 목록에 올해가 걸리면 위젯의 수와 목록의 수가 달랐다(2026-10-08). `year=2025` 처럼 해를 실어
+   * 오면 그 해다(MCP 답의 화면 주소 — 그 해로 센 수를 같은 화면에서 확인한다).
    */
-  const [year, setYear] = useState<number | null>(() =>
-    params.get('year') === 'all' ? null : new Date().getFullYear(),
-  )
+  const [year, setYear] = useState<number | null>(() => yearFromParams(params))
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
   /** 통계를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
@@ -294,8 +291,12 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
    *  있어야, 여기까지 온 사람이 무엇을 하러 왔는지 화면이 이어서 말한다. */
   const [grouping, setGrouping] = useState(params.get('group') === '1')
   /** 통계 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 기준으로 열려야 하고,
-   *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다. */
-  const [summary, setSummary] = useState<SummarySettings>(DEFAULT_SUMMARY)
+   *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다.
+   *  `?group=1` 이면 처음 열 때 주소의 설정(`group_by` · `metric` …)을 기본 위에 덮는다 — MCP 답의
+   *  화면 주소가 답과 같은 통계로 연다. 그 뒤로는 주소에 다시 적지 않는다(화면 안의 상태다). */
+  const [summary, setSummary] = useState<SummarySettings>(() =>
+    params.get('group') === '1' ? summaryFromParams(params) : DEFAULT_SUMMARY,
+  )
   /** 통계가 실제로 쓰는 기간 단위 — 날짜 축일 때만 값이 있다(패널이 알린다). 「뷰로 저장」 이
    *  이것을 담는다. 빠뜨리던 때는 월별로 저장한 뷰가 다시 열면 해별이었다(2026-10-08). */
   const [summaryGrain, setSummaryGrain] = useState<string | null>(null)
@@ -647,7 +648,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>전체 연도</SelectItem>
-                  {YEAR_OPTIONS.map((one) => (
+                  {yearChoices(year).map((one) => (
                     <SelectItem key={one} value={String(one)}>
                       {one}년
                     </SelectItem>

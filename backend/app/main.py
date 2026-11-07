@@ -76,7 +76,7 @@ from app.modules.webhooks import services as webhooks_services
 from app.modules.workspaces import routes as workspaces_routes
 from app.modules.workspaces import services as workspaces_services
 from app.schema_version import warn_if_behind
-from app.shared import events, extensions, ops, scopes, system_sources
+from app.shared import events, extensions, ops, public_url, scopes, system_sources
 from app.shared.access_log import AccessLogMiddleware
 from app.shared.errors import NotFound, code, register_error_handlers
 from app.shared.request_context import RequestIdMiddleware
@@ -90,14 +90,19 @@ def _api_router(settings: Settings) -> APIRouter:
     router = APIRouter(prefix=API_PREFIX)
 
     @router.get("/health", tags=["system"])
-    def health() -> dict[str, str]:
+    def health() -> dict[str, str | None]:
         # **버전을 함께 준다.** 원격에서 "지금 서버에 뭐가 깔렸나" 를 물을 수 있는
         # 유일한 자리다. 배포 뒤 확인도, 나중의 점검 스크립트도 여기를 본다.
+        # 접두어 · 화면의 바탕 주소는 MCP 가 답에 「같은 조건의 화면」 을 붙이려고 읽는다 —
+        # 바탕을 모르면(None) MCP 가 들어온 주소에 접두어를 붙인다. 둘 다 이미 사람에게 보이는
+        # 주소라 로그인 없이 준다.
         return {
             "status": "ok",
             "version": version.current(),
             "app": settings.app_name,
             "slug": settings.app_slug,
+            "base_path": settings.base_path,
+            "public_url": public_url.screen_base(settings),
         }
 
     # 모듈 라우터는 **여기서만** 모은다.

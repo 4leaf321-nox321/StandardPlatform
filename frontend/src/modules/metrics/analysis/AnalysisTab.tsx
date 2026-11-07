@@ -100,8 +100,8 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
           기간 범위는 이 분석에 쓰지 않습니다 — 코호트마다 닫힌 경과까지 봅니다.
         </p>
       )}
-      {recipe === 'pareto' && <ParetoView metric={metric} read={read} />}
-      {recipe === 'life' && <LifeView metric={metric} read={read} />}
+      {recipe === 'pareto' && <ParetoView metric={metric} read={read} initial={given} />}
+      {recipe === 'life' && <LifeView metric={metric} read={read} initial={given} />}
       {recipe === 'forecast' && <ForecastView metric={metric} read={read} initial={given} />}
       {recipe === 'control' && <ControlView metric={metric} read={read} initial={given} />}
       {recipe === 'changes' && <ChangesView metric={metric} read={read} initial={given} />}
@@ -111,8 +111,8 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
       {recipe === 'coverage' && <CoverageView metric={metric} read={read} initial={given} />}
       {recipe === 'recurrence' && <RecurrenceView metric={metric} read={read} initial={given} />}
       {recipe === 'profile' && <ProfileView metric={metric} read={read} initial={given} />}
-      {recipe === 'logit' && <LogitView metric={metric} read={read} />}
-      {recipe === 'assoc' && <AssocView metric={metric} read={read} />}
+      {recipe === 'logit' && <LogitView metric={metric} read={read} initial={given} />}
+      {recipe === 'assoc' && <AssocView metric={metric} read={read} initial={given} />}
     </div>
   )
 }

@@ -19,7 +19,14 @@
               "application/json": {
                 "schema": {
                   "additionalProperties": {
-                    "type": "string"
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "type": "object",
                   "title": "Response Health Api Health Get"
@@ -8665,7 +8672,7 @@
           "objects"
         ],
         "summary": "Summary",
-        "description": "통계 — **목록과 같은 거르기 위에서 센다.**\n\n거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).\n따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지\n아무도 모른다.\n\n투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을\n이 틀은 모른다.",
+        "description": "통계 — **목록과 같은 거르기 위에서 센다.**\n\n거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).\n따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지\n아무도 모른다.\n\n투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을\n이 틀은 모른다.\n\n`link` 는 같은 거르기로 통계를 펼쳐 연 목록 화면 주소다(`listlinks`).",
         "operationId": "summary_api_objects__type_slug__summary_get",
         "parameters": [
           {
@@ -10565,7 +10572,7 @@
           "objects"
         ],
         "summary": "List Objects",
-        "description": "이 타입의 객체 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**\n\n목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.\n`columns`(이어진 칸, ADR 0043)를 주면 줄마다 그 주소의 값이 `linked` 로 함께 온다 —\n상대의 값이 필요할 때 줄마다 상세를 다시 읽지 않게.",
+        "description": "이 타입의 객체 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**\n\n목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.\n`columns`(이어진 칸, ADR 0043)를 주면 줄마다 그 주소의 값이 `linked` 로 함께 온다 —\n상대의 값이 필요할 때 줄마다 상세를 다시 읽지 않게.\n\n`link` 는 같은 조건의 목록 화면 주소다(`listlinks`) — 화면이 주소로 못 받는 인자는\n`link_missing` 에 이름이 적힌다.",
         "operationId": "list_objects_api_objects__type_slug__get",
         "parameters": [
           {
@@ -24243,6 +24250,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -26248,6 +26273,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -26754,6 +26797,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -27084,6 +27145,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "cumulative": {
             "type": "boolean",
@@ -27542,6 +27621,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -29184,6 +29281,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -32365,6 +32480,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -33217,6 +33350,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -35218,6 +35369,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -36426,6 +36595,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -39985,6 +40172,24 @@
             },
             "type": "object",
             "title": "Linked"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           }
         },
         "type": "object",
@@ -41602,6 +41807,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -43240,6 +43463,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -44852,6 +45093,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -50636,6 +50895,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "split": {
             "anyOf": [
               {
@@ -51708,6 +51985,24 @@
               }
             ]
           },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -52229,6 +52524,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",
@@ -52907,6 +53220,24 @@
             },
             "type": "array",
             "title": "Metric Options"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           }
         },
         "type": "object",
@@ -53092,6 +53423,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "dims": {
             "items": {
@@ -55681,6 +56030,24 @@
                 "type": "null"
               }
             ]
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
           },
           "recipe": {
             "type": "string",

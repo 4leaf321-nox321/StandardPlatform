@@ -250,7 +250,7 @@ describe('분석 탭', () => {
     // 코호트 줄의 수는 그 기록 목록으로 간다.
     expect(screen.getByRole('link', { name: '812건 보기' })).toHaveAttribute(
       'href',
-      '/o/svc_case?f.sold.gte=2026-01-01',
+      '/o/svc_case?f.sold.gte=2026-01-01&year=all',
     )
   })
 
@@ -262,7 +262,7 @@ describe('분석 탭', () => {
     await userEvent.click(screen.getByRole('button', { name: '파레토 · 집중도' }))
     expect(await screen.findByRole('link', { name: '5건 보기' })).toHaveAttribute(
       'href',
-      '/o/svc_case?f.symptom.eq=%EC%86%8C%EC%9D%8C',
+      '/o/svc_case?f.symptom.eq=%EC%86%8C%EC%9D%8C&year=all',
     )
     expect(screen.getAllByText('62.5%').length).toBeGreaterThan(0)
   })
@@ -443,7 +443,7 @@ describe('분석 탭', () => {
     expect(within(spread).getByText('전원부')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '40건 보기' })).toHaveAttribute(
       'href',
-      '/o/svc_case?f.symptom.eq=S-a',
+      '/o/svc_case?f.symptom.eq=S-a&year=all',
     )
     const assocCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'assoc')
     expect(assocCall?.[2]).toMatchObject({ rows: 'symptom', cols: 'part' })
@@ -964,5 +964,89 @@ describe('분석 탭', () => {
       expect.objectContaining({ generation: 'model', signature: 'part' }),
       expect.anything(),
     )
+  })
+
+  it('링크가 연 파레토 · 수명 · 위험 요인 · 연관은 그 인자로 묻는다', async () => {
+    const FOUR = {
+      ...METRIC,
+      dims: [
+        ...METRIC.dims,
+        {
+          name: 'factory',
+          address: 'properties.factory',
+          label: '공장',
+          kind: 'text',
+          multi: false,
+          grain: null,
+        },
+        {
+          name: 'part',
+          address: 'properties.parts',
+          label: '교체 부품',
+          kind: 'object_ref',
+          multi: true,
+          grain: null,
+        },
+        // 방문 차례가 있으면 수명 보기의 기본은 「첫 방문」 — 링크의 basis 가 이긴다.
+        {
+          name: 'visit_no',
+          address: 'visit.number',
+          label: '방문 차례',
+          kind: 'visit',
+          multi: false,
+          grain: null,
+        },
+      ],
+      analyses: [
+        { recipe: 'pareto', label: '파레토 · 집중도', ok: true, reason: null },
+        { recipe: 'life', label: '수명 · B수명', ok: true, reason: null },
+        { recipe: 'logit', label: '재방문 위험 요인', ok: true, reason: null },
+        { recipe: 'assoc', label: '연관 · 묶음', ok: true, reason: null },
+      ],
+    } as unknown as Metric
+    // 답은 안 온다 — 무엇을 물었는지만 본다.
+    metricsApi.analysis.mockReturnValue(new Promise(() => {}))
+    const cases: [string, Record<string, string>, Record<string, unknown>][] = [
+      [
+        'pareto',
+        {
+          dim: 'factory',
+          by_period: 'true',
+          compare_from: '2026-01-01',
+          compare_to: '2026-03-01',
+          top: '5',
+        },
+        { dim: 'factory', by_period: true, compare_from: '2026-01-01', compare_to: '2026-03-01' },
+      ],
+      [
+        'life',
+        { model: 'weibull', max_age: '24', basis: 'records' },
+        { model: 'weibull', max_age: '24', basis: 'records' },
+      ],
+      [
+        'logit',
+        { factors: 'factory,symptom', min_count: '10' },
+        { factors: 'factory,symptom', min_count: '10' },
+      ],
+      [
+        'assoc',
+        { rows: 'factory', cols: 'part', min_count: '3' },
+        { rows: 'factory', cols: 'part' },
+      ],
+    ]
+    for (const [recipe, params, asked] of cases) {
+      metricsApi.analysis.mockClear()
+      const { unmount } = render(
+        <MemoryRouter>
+          <AnalysisTab metric={FOUR} read={{ filters: {} }} initial={{ recipe, params }} />
+        </MemoryRouter>,
+      )
+      await waitFor(() =>
+        expect(metricsApi.analysis).toHaveBeenCalledWith('cases', recipe, asked, expect.anything()),
+      )
+      // 고르는 자리가 없는 인자(top · min_count)는 안 읽는다 — 서버가 「빠진 인자」 로 말한다.
+      expect(metricsApi.analysis).toHaveBeenCalledTimes(1)
+      unmount()
+    }
   })
 })

@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-31a
+GUIDE_VERSION: 2026-11-07a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -34,7 +34,7 @@ GUIDE_VERSION: 2026-10-31a
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` · 경보 하나는 `alert_id`(`check=True` 면 지금 확인) | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로 |
 | **「나빠지면 알려 줘」** — 경보 걸기 · 이름 · 끄기 | `metric_alert_save(apply=false)` → 사람 확인 → `apply=true` | 미리 보기가 지금 분석을 한 번 돌려 보인다. 인자는 못 고친다 — 새로 걸고 옛 것은 `config_delete(kind="metric_alert")` |
-| **요즘 뭐가 이상한가 · 무엇부터 볼까** | `insights()` → 근거는 `metric_analyze` 로 같은 인자 | 플랫폼이 스스로 훑은 **후보**다 — 「몇 배 · 몇 건」 · q · 잠정을 그대로 옮기고 원인을 단정하지 않는다. 비었다고 「이상 없음」 이 아니다(그 지표의 셀이 든 부서를 다 봐야 보인다) |
+| **요즘 뭐가 이상한가 · 무엇부터 볼까** | `insights()` → 근거는 `metric_analyze` 로 같은 인자 | 플랫폼이 스스로 훑은 **후보**다 — 「몇 배 · 몇 건」 · q · 잠정을 그대로 옮기고 원인을 단정하지 않는다. 비었다고 「이상 없음」 이 아니다(그 지표의 셀이 든 부서를 다 봐야 보인다). 결론마다 `url`(그 분석 화면)을 함께 |
 | 「그건 확인했어」 · 지금 다시 훑기 · 잡음뿐인 지표 끄기 | `insight_manage(action="dismiss" · "restore" · "scan" · "mute" · "unmute")` | **시스템 관리자.** 모두 되돌릴 수 있다. 사람이 확인했다고 한 결론만 내린다 — 네 판단으로 내리지 않는다 |
 | 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
 | 지표를 **부서 홈**에 올리기 · 내리기 | `metric_home(slug, workspace_slug, split=)` · `remove=true` | **그 부서 관리자만.** 홈은 부서 모두가 보는 자리 — 사용자가 올리자고 한 것만 |
@@ -123,6 +123,14 @@ GUIDE_VERSION: 2026-10-31a
 - **「모름」 과 「아님」 을 안 섞는다.** 조건에 안 맞아 빠진 것과 **값이 비어 있어서**
   빠진 것은 다른 일이다. 진단의 `filters[].unknown` 이 그 수다 — 「조건에 맞는 것이
   없다」 와 「그 칸을 아직 아무도 안 채웠다」 를 갈라 말한다.
+- **수 · 목록 · 분석을 옮길 때 `url`(같은 조건의 화면)과 계산 시각을 붙인다** — 사람이 눌러 같은
+  화면으로 확인한다(지표 · 분석은 `computed_at`, 목록 · 통계는 부른 때). 사람이 화면 주소를 주면 그
+  주소의 인자로 다시 부른다 — `f.<칸>.<연산>` · `nf<n>.` · `fe<n>.` 은 `conditions` 로(지표 건 보기와
+  같은 풀이), `year=<해>` 는 `year`, `types=a|b` 는 `types` 로. 목록 화면은 연도를 쓰는 타입이면 기본이
+  올해다(`year=all` 이 전부) — 받은 주소에 `year` 가 **없으면** 그 화면은 올해(또는 사람이 고른 해)라,
+  올해로 부르고 다른 해를 골랐는지 묻는다. `link_missing` 은
+  화면이 못 받는 조건이다 — 「화면은 그 조건 없이 열린다」 고 함께 말한다. `url` 이 없으면(바탕 주소를
+  모르는 설치) 상대 `link` 를 「화면의 그 경로」 로 말한다.
 
 <!--@ schema -->
 ## 정의 읽기·바꾸기
@@ -486,7 +494,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 `action` 은 `accept`(추천대로) · `choose`(다른 것으로 — `value` 에 `choices[].value`) ·
 `ignore`(무시 — 검수 대기 별칭에는 없다). 「적용을 기다리는 계획」 · 「선 기다림」 줄은 처리
-길이 없다 — `link`(원래 화면)를 사람에게 전한다.
+길이 없다 — `url`(원래 화면, 없으면 `link` 를 「화면의 그 경로」 로)을 사람에게 전한다.
 
 **제안된 관계**(`proposed_relation`, ADR 0042) — 열린 제안마다 한 줄(근거 · 확신도 · 출처 · 양 끝).
 후보는 `accept`(확정) · `reject`(거절). 제안의 확신도가 0.5 이상이면 추천이 `accept` 이고 줄의 확신도가
@@ -507,7 +515,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - `priorities[]` — 줄 세운 것. `kind` 는 `field`(칸) · `relation`(선이 없는 관계) · `refs`(지워진
   것을 가리키는 칸) · `waiting`(데이터 소스가 끝점을 기다리는 선) · `aliases`(별칭 없는 객체 —
   못 찾은 말이 쌓인 타입에서만) · `empty_type`(객체가 하나도 없는 타입). 줄마다 `uses`(쓰는 곳),
-  `gain`(채우면 좋아지는 것), `link`(빈 것만 거른 화면 주소).
+  `gain`(채우면 좋아지는 것), `link`(빈 것만 거른 화면 주소 — 사람에게는 옆의 `url`).
 - `types[]` — 타입마다 객체 수 · 필수 칸이 빈 객체 · 칸별 채움률(낮은 것부터) · 관계 · 별칭.
   `type_slug` 를 주면 그 타입의 칸이 전부 온다.
 - **큰 타입은 표본 어림이다**(`estimated`, `sample_rows`, `notes`). 수를 전할 때 「약」 을 붙인다.
@@ -617,7 +625,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   시간순으로 세운다. 날짜 칸의 `buckets[].key` 는 기간의 **시작일**, `range` 가 `{gte, lt}` 다.
 - 옮길 때 **빼먹지 않는다**: `total` 은 객체 수, 「(비어 있음)」 도 한 칸, `other_groups`·
   `other_count` 가 0 이 아니면 「그 밖에 N종류 M건」, `overlap` 이 true 면 한 객체가 여러 칸에
-  들어 **칸의 합이 total 보다 클 수 있다**.
+  들어 **칸의 합이 total 보다 클 수 있다**. `url`(같은 조건의 통계 화면)과 부른 때를 함께 —
+  `link_missing` 이 있으면 화면은 그 조건 없이 열린다.
 - 「그 칸이 뭔데」 는 `buckets[].key` 를 조건 값으로 `objects_list` — 기준이 `properties.<키>`
   면 field `<키>`, 다른 타입의 칸이면 그 주소, key 가 null 이면 `empty`. **날짜 칸은 `range` 로** —
   `{field, op: "gte", value: range.gte}` 와 `{op: "lt", value: range.lt}` 둘(`eq` 는 0건).
@@ -1442,6 +1451,8 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 **옮길 때 빼먹지 않는 것.**
 
 - `computed_at`(계산 시각) — 세어 둔 값이다. `stale` 이 true 면 세 주기가 지나도록 안 셌다.
+- `url` — 같은 조건의 화면. 수와 `computed_at` 옆에 붙여 사람이 눌러 확인하게 한다. `link_missing`
+  이 있으면 화면이 그 인자를 못 받아 그것 없이 열린다고 말한다.
 - `closed` 가 false 인 기간은 아직 더 들어올 수 있다(`settle_days`). 「3월 인입률 0.8%」 라고
   말할 때 그 달이 닫혔는지 함께 말한다.
 - `overlap` — 한 기록이 여러 셀에 든다(여러 값 기준 · 여럿과 이어진 걸음). 셀의 합이 기록
@@ -1482,6 +1493,8 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 옮길 때 규칙:
 
 - **`caveats[]` 의 `message` 를 그대로.** `warn` 은 숫자보다 먼저 말한다.
+- `method`(방법과 판) · `computed_at`(계산 시각) · `url`(같은 인자의 분석 화면)을 결론과 함께 —
+  `link_missing` 이 있으면 화면은 그 인자 없이 열린다(그 결론과 다를 수 있다)고 말한다.
 - 수명: `status="unreachable"` 인 B수명은 **값이 없다** — 「판매의 p 만 결국 고장 나 그 비율에
   이르지 않는다」 로 말한다. 필요하면 `conditional_age` 를 「결국 고장 나는 것들 중의 B10」 이라는
   이름으로. `extrapolated` 는 「관측 밖으로 늘려 읽은 값」, `observed` 는 관측 안. 고른 모형
@@ -1547,7 +1560,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 결론만 그 사람에게 알린다 — 순차 검정은 새로 선 「나쁨」, 관리도는 끝 부분군의 신호, 변화점은 끝
 몇 기간 안의 것. `metric_alerts` 는 내 경보와 최근 발생을 읽고, 걸기 · 이름 · 끄기는 `metric_alert_save`(미리 보기 먼저 — 그 인자로 지금 분석을 돌려 보인다), 지우기는 `config_delete(kind="metric_alert")`. 발생의
 `link` 인자를 `metric_analyze` 의 `options` · `filters` 로 옮기면 지금 셀로 다시 본다 — 발생은 그때의
-결론이고 원인이 아니다.
+결론이고 원인이 아니다. 사람에게는 발생의 `url`(그 분석 화면)을 `created_at` 과 함께 준다.
 
 **방문(재방문).** 같은 제품의 기록을 시리얼로 이어 보려면 정의에 `visits` 를 둔다 —
 `{"key": "properties.<시리얼 칸>", "within_days": 90}`. 그러면 기준 주소 `visit.number`(차례 1 · 2 ·

@@ -270,6 +270,11 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   **HWAX 포털 뒤**면 포털은 MCP 경로를 열지 않는다(Report Archive 와 같다 — 9절) — 사람들의 Claude 는 포털의
   게이트웨이(`/mcp-gw/mcp`)로 붙고 게이트웨이가 이 MCP 포트를 직접 부른다. 직접 붙는 사람을 위해
   `MCP_PUBLIC_URL=http://<서버>:<MCP 포트>/mcp` 를 적는다(비우면 화면이 없는 길 `https://<포털>/<id>/mcp` 를 짐작한다).
+- **답에 붙는 화면 주소**: AI 가 받은 목록 · 통계 · 지표 · 분석에 「같은 조건의 화면」 주소(`url`)가 붙는다 —
+  사람이 눌러 확인한다. 바탕은 `/api/health` 의 `public_url` 이고, `.env` 의 `PUBLIC_URL`(접두어까지 —
+  `https://hwax.sec.samsung.net/<slug>`) → `PORTAL_LAUNCH_URL` 의 호스트 + 접두어 → `MCP_PUBLIC_URL` 이
+  `<앱 주소>/mcp` 꼴이면 그 앞 + 접두어 차례로 정하고, 다 없으면 MCP 가 들어온 주소에 접두어를 붙인다.
+  포털 뒤 · 표준 포트의 nginx 뒤면 적지 않아도 맞다. 링크가 안 열리면 `PUBLIC_URL` 을 적고 `restart`.
 - **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2** (운영 +0 · 개발 +1 다음 자리).
   바꾸려면 `sudo MCP_PORT=<포트> ./deploy.sh update`.
   한 서버에 쌍둥이를 여럿 얹을 때 **앱 포트를 10 씩 벌린다** — MCP 가 +2 를 쓰므로 8040 과

@@ -223,14 +223,22 @@ export function SummaryPanel({
   const pinTarget = defaultOwnerWorkspace(user, homeWorkspace)
   const canPin = pinnable && isAnyManager(user) && pinTarget !== null
 
-  /** 기준이나 세부 기준이 날짜 칸인가 — 그때만 기간 단위와 「시간순」 이 뜻이 있다. */
+  /**
+   * 기준이나 세부 기준이 날짜 칸인가 — 그때만 기간 단위와 「시간순」 이 뜻이 있다. 고르개 목록
+   * (`group_options`, 두 걸음까지)에 없는 주소(세 걸음 이상 · 되짚는 걸음 — 링크로 연 통계)는
+   * 서버의 판정을 쓴다: 그 기준으로 센 응답에 기간 단위(`grain`)가 있으면 날짜 축이다. 안 그러면
+   * 링크의 `grain` 을 끝내 안 보내 해별로 섰다(2026-11-07 검토).
+   */
   const dated = useMemo(() => {
     const kinds = new Set(['date', 'datetime'])
     const kindOf = (field: string) =>
-      (data?.group_options ?? []).find((one) => one.field === field)?.kind ?? ''
-    return (
-      kinds.has(kindOf(groupBy)) || (settings.splitBy ? kinds.has(kindOf(settings.splitBy)) : false)
-    )
+      (data?.group_options ?? []).find((one) => one.field === field)?.kind
+    const isDated = (field: string) => {
+      const kind = kindOf(field)
+      if (kind !== undefined) return kinds.has(kind)
+      return data?.group_field === groupBy && Boolean(data?.grain)
+    }
+    return isDated(groupBy) || (settings.splitBy ? isDated(settings.splitBy) : false)
   }, [data, groupBy, settings.splitBy])
   /**
    * 보낼 기간 단위 — 기준이나 세부 기준 중 날짜가 있을 때만. 날짜 기준에서 월을 고른 뒤 다른

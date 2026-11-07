@@ -34,7 +34,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
-from urllib.parse import urlencode
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -42,7 +41,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.jobs import services as job_services
-from app.modules.metrics import compute, params, query
+from app.modules.metrics import compute, links, params, query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import ALERT_RECIPES, MetricAlert, MetricAlertEvent, MetricDef
 from app.modules.metrics.recipes import changes, common, control, registry, series, sprt
@@ -192,9 +191,9 @@ def clean(recipe: str, raw: Mapping[str, str]) -> dict[str, str]:
 
 
 def link_of(metric_slug: str, recipe: str, values: Mapping[str, str]) -> str:
-    """분석 탭을 그 인자 그대로 연다 — 눌러서 본 것이 알림이 말한 것과 같아야 한다."""
-    query_string = urlencode({"tab": "analysis", "recipe": recipe, **values})
-    return f"/metrics/{metric_slug}?{query_string}"
+    """분석 탭을 그 인자 그대로 연다 — 눌러서 본 것이 알림이 말한 것과 같아야 한다. 읽기 응답의
+    `link`(`links.screen_link`)와 같은 인코딩이다."""
+    return links.href(metric_slug, {"tab": "analysis", "recipe": recipe, **values}.items())
 
 
 def event_link(

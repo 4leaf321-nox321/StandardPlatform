@@ -299,6 +299,12 @@ class ReadHeader(BaseModel):
     denominator: DenominatorOut | None
     stay: StayOut | None = None
     """머무는 기간이 있는 지표 — 기간의 값은 그 기간에 생긴 것이 아니라 최근 N기간의 합이다."""
+    link: str | None = None
+    """같은 조건의 지표 화면 주소(라우터 기준, `/metrics/<slug>?tab=…`) — 사람이 눌러 같은 것을
+    본다. 읽기 · 분석 경로가 싣는다(`links.screen_link`)."""
+    link_missing: list[str] = Field(default_factory=list)
+    """요청에 있었지만 화면이 주소로 받지 못해 `link` 에서 빠진 인자 이름 — 비어 있지 않으면 연
+    화면은 이 답과 조건이 다르다(예: `cohort_from`, 표의 `by=age`)."""
 
 
 class TableOut(ReadHeader):

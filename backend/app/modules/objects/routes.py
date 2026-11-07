@@ -49,6 +49,7 @@ from app.modules.objects import (
     lineage,
     linked,
     links,
+    listlinks,
     misses,
     paths,
     photos,
@@ -766,6 +767,8 @@ def summary(
 
     투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을
     이 틀은 모른다.
+
+    `link` 는 같은 거르기로 통계를 펼쳐 연 목록 화면 주소다(`listlinks`).
     """
     scope = _scope(db, type_slug)
     if _projection(scope) is not None:
@@ -800,6 +803,14 @@ def summary(
         at=edges.at(as_of),
     )
     defs = scope.defs
+    # 같은 조건의 화면 — 답을 받은 AI 가 사람에게 내밀어, 눌러서 같은 통계를 확인하게 한다.
+    link, link_missing = listlinks.list_link(
+        scope.slug,
+        request.query_params.multi_items(),
+        interface=scope.is_interface,
+        summary=True,
+        defs=defs,
+    )
     return SummaryOut(
         group_field=found.group_field,
         group_label=found.group_label,
@@ -853,6 +864,8 @@ def summary(
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
             for one in summary_service.metric_options(defs)
         ],
+        link=link,
+        link_missing=link_missing,
     )
 
 
@@ -2237,6 +2250,9 @@ def list_objects(
     목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.
     `columns`(이어진 칸, ADR 0043)를 주면 줄마다 그 주소의 값이 `linked` 로 함께 온다 —
     상대의 값이 필요할 때 줄마다 상세를 다시 읽지 않게.
+
+    `link` 는 같은 조건의 목록 화면 주소다(`listlinks`) — 화면이 주소로 못 받는 인자는
+    `link_missing` 에 이름이 적힌다.
     """
     scope = _scope(db, type_slug)
     capped = clamp_limit(limit)
@@ -2252,11 +2268,16 @@ def list_objects(
         # 행이 없다 — 원 표를 그대로 투영한다. 거르기는 검색어뿐이다(속성이 없으므로).
         refs, total = system.source_of(projected).search(db, user, q, capped, offset)
         now = datetime.now(UTC)
+        link, link_missing = listlinks.list_link(
+            scope.slug, request.query_params.multi_items(), interface=False, projection=True
+        )
         return ObjectPageOut(
             items=[system.projected(ref, projected.slug, now) for ref in refs],
             total=total,
             limit=capped,
             offset=offset,
+            link=link,
+            link_missing=link_missing,
         )
 
     stmt = _filtered(
@@ -2283,6 +2304,13 @@ def list_objects(
     names = aliases.of(db, [row.id for row in found])
     # **줄마다 제 타입** — 인터페이스 목록은 여러 타입이 섞인다(링크가 그 타입의 상세로 간다).
     slug_of = {one.id: one.slug for one in scope.types}
+    # 같은 조건의 화면 — 답을 받은 AI 가 사람에게 내밀어, 눌러서 같은 목록을 확인하게 한다.
+    link, link_missing = listlinks.list_link(
+        scope.slug,
+        request.query_params.multi_items(),
+        interface=scope.is_interface,
+        defs=scope.defs,
+    )
     return ObjectPageOut(
         items=[
             _out(
@@ -2310,6 +2338,8 @@ def list_objects(
             for one in linked_columns
         ],
         linked=_linked_cells(db, user, linked_columns, found),
+        link=link,
+        link_missing=link_missing,
     )
 
 

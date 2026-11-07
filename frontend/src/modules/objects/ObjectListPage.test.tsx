@@ -44,18 +44,23 @@ vi.mock('@/modules/objects/ViewPicker', () => ({
     </pre>
   ),
 }))
-/** 통계 — 날짜 축에서 월로 묶고 있다고 알린다(진짜 패널이 하듯). */
+/** 통계 — 날짜 축에서 월로 묶고 있다고 알린다(진짜 패널이 하듯). 받은 설정을 글로 드러낸다. */
 vi.mock('@/modules/objects/SummaryPanel', () => ({
   SummaryPanel: (props: {
     onGrain?: (grain: string | null) => void
     homeWorkspace?: string | null
     query: unknown
+    settings: unknown
   }) => {
     const { onGrain } = props
     useEffect(() => onGrain?.('month'), [onGrain])
     return (
       <pre data-testid="summary-panel">
-        {JSON.stringify({ home: props.homeWorkspace, query: props.query })}
+        {JSON.stringify({
+          home: props.homeWorkspace,
+          query: props.query,
+          settings: props.settings,
+        })}
       </pre>
     )
   },
@@ -166,6 +171,57 @@ describe('타입 목록', () => {
     await open('/o/part?year=all&view=v1')
     await waitFor(() => expect(objectApi.list).toHaveBeenCalledTimes(2))
     expect(objectApi.list.mock.calls.at(-1)?.[1]).toMatchObject({ year: null })
+  })
+
+  it('주소가 싣고 온 해로 연다 — MCP 답의 화면 주소가 그 해로 센 수를 싣는다', async () => {
+    // 안 읽던 때는 `year=2025` 를 버리고 올해로 열어, 답의 수와 화면의 수가 달랐다.
+    await open('/o/part?year=2025')
+    await waitFor(() => expect(objectApi.list.mock.calls.at(-1)?.[1]).toMatchObject({ year: 2025 }))
+    // 고르개의 목록 밖 해라도 걸려 있다고 보인다.
+    cleanup()
+    await open('/o/part?year=2001')
+    await waitFor(() => expect(objectApi.list.mock.calls.at(-1)?.[1]).toMatchObject({ year: 2001 }))
+    expect(screen.getByText('2001년')).toBeInTheDocument()
+    // 못 읽는 해는 기본(올해)이다.
+    cleanup()
+    await open('/o/part?year=20x5')
+    await waitFor(() =>
+      expect(objectApi.list.mock.calls.at(-1)?.[1]).toMatchObject({
+        year: new Date().getFullYear(),
+      }),
+    )
+  })
+
+  it('group=1 이면 주소의 통계 설정으로 펼쳐 연다 — 모르는 값은 기본으로', async () => {
+    await open(
+      '/o/part?group=1&group_by=properties.grade&split_by=status&metric=sum&metric_field=price&order=key&grain=month',
+    )
+    const panel = await screen.findByTestId('summary-panel')
+    const shown = JSON.parse(panel.textContent ?? '{}') as { settings: Record<string, unknown> }
+    expect(shown.settings).toMatchObject({
+      groupBy: 'properties.grade',
+      splitBy: 'status',
+      metric: 'sum',
+      metricField: 'price',
+      order: 'key',
+      grain: 'month',
+      chart: 'bar',
+    })
+
+    cleanup()
+    await open('/o/part?group=1&metric=median&order=random&grain=decade')
+    const fallback = JSON.parse((await screen.findByTestId('summary-panel')).textContent ?? '{}')
+    expect(fallback.settings).toMatchObject({
+      groupBy: 'status',
+      metric: 'count',
+      order: 'desc',
+      grain: '',
+    })
+
+    // `group=1` 없이 온 설정은 안 읽는다 — 통계를 펼치지 않은 목록의 주소다.
+    cleanup()
+    await open('/o/part?group_by=properties.grade')
+    expect(screen.queryByTestId('summary-panel')).not.toBeInTheDocument()
   })
 
   it('「뷰로 저장」 이 통계의 기간 단위까지 담고, 홈에서 온 부서를 통계에 넘긴다', async () => {

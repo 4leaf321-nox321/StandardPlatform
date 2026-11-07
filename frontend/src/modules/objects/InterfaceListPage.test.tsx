@@ -179,6 +179,46 @@ describe('인터페이스 목록', () => {
   })
 })
 
+describe('주소의 연도', () => {
+  const EQUIP = iface('equip', '설비', { implementers: ['tester', 'meter'] })
+  const DATED = [
+    type('tester', '시험장비', { temporal_kind: 'lifecycle' }),
+    type('meter', '계측기'),
+  ]
+
+  async function openAt(url: string) {
+    objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    const { InterfaceListPage } = await import('@/modules/objects/InterfaceListPage')
+    render(
+      <MemoryRouter initialEntries={[url]}>
+        <Routes>
+          <Route
+            path="/o/:typeSlug"
+            element={<InterfaceListPage iface={EQUIP} interfaces={[EQUIP]} types={DATED} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(objectApi.list).toHaveBeenCalled())
+  }
+
+  it('year=all 이면 연도 없이 — 연도 없이 센 답의 화면 주소가 싣는다', async () => {
+    await openAt('/o/equip?year=all&types=tester')
+    expect(objectApi.list).toHaveBeenLastCalledWith(
+      'equip',
+      expect.objectContaining({ year: null, types: ['tester'] }),
+    )
+  })
+
+  it('네 자리 해면 그 해로 연다', async () => {
+    await openAt('/o/equip?year=2023')
+    expect(objectApi.list).toHaveBeenLastCalledWith(
+      'equip',
+      expect.objectContaining({ year: 2023 }),
+    )
+  })
+})
+
 describe('공통 속성', () => {
   it('상위 인터페이스에서 이어받은 것까지, 제 것이 앞이고 같은 키는 한 번', async () => {
     const { commonProperties } = await import('@/modules/ontology/interfaces')

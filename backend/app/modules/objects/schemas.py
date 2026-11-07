@@ -144,6 +144,15 @@ class ObjectPageOut(Page[ObjectOut]):
     """요청한 이어진 칸(`columns`)의 머리 — 받은 차례대로."""
     linked: dict[str, dict[str, LinkedCellOut]] = Field(default_factory=dict)
     """{객체 id: {주소: 칸}} — 이어진 칸의 값(ADR 0043). 이어진 것이 없는 칸은 없다."""
+    link: str | None = None
+    """같은 조건의 **목록 화면 주소** — 라우터 기준의 상대 경로(`/o/<slug>?…`, 앞에 설치의
+    `base_path` 없음). 답을 받은 쪽(MCP 의 AI)이 사람에게 내밀어, 눌러서 같은 목록을 확인하게
+    한다. `p.<칸>` 은 `f.<칸>.eq` 로 옮기고, 연도를 안 줬으면 `year=all` 이 붙는다(화면의
+    기본은 올해다)."""
+    link_missing: list[str] = Field(default_factory=list)
+    """요청에 있었지만 **화면이 주소로 받지 못해 주소에서 빠진 인자 이름**(`under` · `deep`,
+    인터페이스 목록이면 `status` · `as_of` …). 비어 있지 않으면 연 화면이 답보다 넓을 수
+    있다 — 그 사실을 함께 말한다."""
 
 
 class RelatedObjectOut(BaseModel):
@@ -962,6 +971,15 @@ class SummaryOut(BaseModel):
     한 행이 여러 막대에 들기 때문이다. 화면이 그 사실을 적는다."""
     group_options: list[GroupOptionOut]
     metric_options: list[GroupOptionOut]
+    link: str | None = None
+    """같은 거르기 · 같은 통계 설정으로 **통계를 펼쳐 연 목록 화면 주소**
+    (`/o/<slug>?…&group=1&group_by=…`) — 라우터 기준의 상대 경로(앞에 `base_path` 없음).
+    주소의 규칙은 목록(`ObjectPageOut.link`)과 같고, 통계 설정(group_by · split_by · metric ·
+    metric_field · order · grain)은 요청에 온 것만 싣는다(안 온 것은 화면의 기본이 API 의
+    기본과 같다)."""
+    link_missing: list[str] = Field(default_factory=list)
+    """요청에 있었지만 화면이 주소로 받지 못해 빠진 인자 이름 — 목록과 같은 규칙에,
+    인터페이스의 통계면 통계 설정도(인터페이스 목록 화면은 통계 설정을 주소로 안 받는다)."""
 
 
 class WatchRequest(BaseModel):

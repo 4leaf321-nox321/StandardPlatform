@@ -7,8 +7,8 @@
 
 import { useMemo, useState } from 'react'
 
-import type { Metric, ReadOptions } from '@/modules/metrics/api'
 import { metricsApi } from '@/modules/metrics/api'
+import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import {
   AnalysisMeta,
   CaveatList,
@@ -37,9 +37,11 @@ import {
 } from '@/shared/components/ui/table'
 import { useResource } from '@/shared/hooks/useResource'
 
-export function AssocView({ metric, read }: { metric: Metric; read: ReadOptions }) {
-  const [rows, setRows] = useState(metric.dims[0]?.name ?? '')
-  const [cols, setCols] = useState(metric.dims[1]?.name ?? '')
+export function AssocView({ metric, read, initial = {} }: AnalysisViewProps) {
+  // 주소가 연 인자(지표 응답의 `link`) — 고르는 자리가 없는 `min_count` 는 안 읽는다(서버
+  // `metrics/links.py` 가 그것을 「빠진 인자」 로 말한다).
+  const [rows, setRows] = useState(initial.rows ?? metric.dims[0]?.name ?? '')
+  const [cols, setCols] = useState(initial.cols ?? metric.dims[1]?.name ?? '')
   // 행 · 열로 고른 기준의 거르기는 빼고 보낸다 — 값 하나로 거른 기준은 짝을 못 만든다.
   const filters = Object.fromEntries(
     Object.entries(read.filters ?? {}).filter(([name]) => name !== rows && name !== cols),

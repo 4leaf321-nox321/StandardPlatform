@@ -7,8 +7,8 @@
 
 import { useMemo, useState } from 'react'
 
-import type { Metric, ReadOptions } from '@/modules/metrics/api'
 import { metricsApi } from '@/modules/metrics/api'
+import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import {
   AnalysisMeta,
   CaveatList,
@@ -70,12 +70,13 @@ export function lifeText(life: BLife, fit: LifeFit | undefined, unit: string): s
   return `${name}: ${shownNumber(life.age, 1)}${unit} (${STATUS_LABELS[life.status]})`
 }
 
-export function LifeView({ metric, read }: { metric: Metric; read: ReadOptions }) {
-  const [model, setModel] = useState('auto')
-  const [maxAge, setMaxAge] = useState('')
+export function LifeView({ metric, read, initial = {} }: AnalysisViewProps) {
+  const [model, setModel] = useState(initial.model ?? 'auto')
+  const [maxAge, setMaxAge] = useState(initial.max_age ?? '')
   // 방문 차례 기준이 있으면 시리얼마다 첫 방문만 셀 수 있다 — 기록 수가 곧 고장 난 대수.
+  // 그래서 기본이 서버(기록마다)와 다르다 — 지표 응답의 `link` 는 `basis` 를 늘 적는다.
   const visitNumber = metric.dims.find((one) => one.address === 'visit.number')
-  const [basis, setBasis] = useState(visitNumber ? 'first_visits' : 'records')
+  const [basis, setBasis] = useState(initial.basis ?? (visitNumber ? 'first_visits' : 'records'))
   const filters = Object.fromEntries(
     Object.entries(read.filters ?? {}).filter(
       ([name]) => !(basis === 'first_visits' && name === visitNumber?.name),

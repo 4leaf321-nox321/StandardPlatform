@@ -152,18 +152,33 @@ def _ctx(authorization: str | None) -> Any:
     return SimpleNamespace(request_context=SimpleNamespace(request=request))
 
 
-def _serve(handler: Any, *, admin: bool | None = True) -> list[httpx.Request]:
+#: 바탕 주소를 모르는 설치의 `/api/health` — 들어온 주소도 없으면(`_ctx`) 답에 `url` 이 안
+#: 붙는다.
+_NO_SCREEN = {"status": "ok", "base_path": "", "public_url": None}
+
+
+def _serve(
+    handler: Any,
+    *,
+    admin: bool | None = True,
+    health: dict[str, Any] | None = _NO_SCREEN,
+) -> list[httpx.Request]:
     """가짜 백엔드. 받은 요청을 모아 두고 handler 의 응답을 돌려준다.
 
     위험 도구는 부를 때마다 `GET /api/auth/me` 로 시스템 관리자인지 먼저 묻는다 — 그
     물음은 `admin` 으로 답하고 `seen` 에 넣지 않는다(시험마다 첫 요청이 그것이면 시험이
-    도구가 하는 일을 못 본다). `admin=None` 이면 그 물음도 handler 가 받는다.
+    도구가 하는 일을 못 본다). `admin=None` 이면 그 물음도 handler 가 받는다. 답에 `link` 가
+    있으면 묻는 화면의 바탕(`GET /api/health`)도 같다 — `health` 로 답하고, None 이면
+    handler 가 받는다. 붙들어 둔 바탕은 부를 때마다 비운다(시험끼리 섞이지 않게).
     """
     seen: list[httpx.Request] = []
+    server._health_held = None
 
     def respond(request: httpx.Request) -> httpx.Response:
         if admin is not None and request.url.path == "/api/auth/me":
             return httpx.Response(200, json={"is_system_admin": admin})
+        if health is not None and request.url.path == "/api/health":
+            return httpx.Response(200, json=health)
         seen.append(request)
         return handler(request)
 
@@ -328,6 +343,23 @@ def test_조건은_화면과_같은_모양으로_건너간다() -> None:
     params = seen[0].url.params
     assert params["f.power.gte"] == "10" and params["f.power.lte"] == "50"
     assert params["f.license.in"] == "A|B" and params["status"] == "active"
+
+
+def test_화면_주소의_연도와_타입_좁히기를_그대로_건넨다() -> None:
+    """사람이 준 화면 주소에 `year=<해>` · `types=a|b` 가 있으면 그대로 다시 묻는다 — 연도를 안
+    주면 전부다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0, "groups": []}))
+    asyncio.run(server.objects_list(_ctx("Bearer t"), "part"))
+    assert all("year" not in one.url.params for one in seen)
+    before = len(seen)
+    asyncio.run(server.objects_list(_ctx("Bearer t"), "part", year=2025))
+    asked = seen[before:]
+    assert len(asked) == 2  # 목록 · 0건 진단 모두 같은 해로
+    assert all(one.url.params["year"] == "2025" for one in asked)
+    asyncio.run(server.objects_summary(_ctx("Bearer t"), "part", year=2025))
+    assert seen[-1].url.path.endswith("/summary") and seen[-1].url.params["year"] == "2025"
+    asyncio.run(server.objects_list(_ctx("Bearer t"), "equip", types=["tester", "gauge"]))
+    assert seen[-1].url.params["types"] == "tester|gauge"
 
 
 def test_뜻으로_찾기는_물을_때만_건너간다() -> None:
@@ -530,6 +562,9 @@ def test_가이드는_서버가_쥔다() -> None:
     assert "text_from" in reports["content"] and "원본에서 내려감" in reports["content"]
     assert 'topic="reports"' in overview["content"]
 
+    # 답의 화면 주소 — 수를 옮길 때 사람이 눌러 확인할 `url` 과 화면이 못 받는 조건.
+    assert "`url`" in overview["content"] and "link_missing" in overview["content"]
+
     missing = asyncio.run(server.get_guide(_ctx(None), topic="없는주제"))
     assert "error" in missing and "bulk" in missing["topics"]
 
@@ -696,6 +731,153 @@ def test_업로드_표는_자주검증_칸에도_그_자리로_묻는다() -> No
     )
     assert json.loads(seen[1].content)["owner_table"] == "objects"
     assert "photo:" not in plain["next"]
+
+
+def _host_ctx(host: str, proto: str | None = None) -> Any:
+    """사람의 PC(또는 nginx)가 MCP 에 들어온 주소를 흉내 — `_public_origin` 이 보는 머리."""
+    headers = {"authorization": "Bearer t", "host": host}
+    if proto:
+        headers["x-forwarded-proto"] = proto
+    return SimpleNamespace(
+        request_context=SimpleNamespace(request=SimpleNamespace(headers=headers))
+    )
+
+
+_LISTED = {
+    "items": [
+        {"id": "o1", "type_slug": "part", "label": "힌지", "properties": {"link": "/x"}},
+        {"id": "o2", "type_slug": "part_v2", "label": "커버", "properties": {}},
+    ],
+    "total": 2,
+    "link": "/o/part?year=all&f.grade.eq=A",
+    "link_missing": ["as_of"],
+}
+
+
+def test_답의_화면_경로마다_공개_주소를_붙인다() -> None:
+    """백엔드는 라우터 기준 경로(`link`)만 안다 — 사람이 눌러 열 주소(`url`)는 MCP 가 바탕을
+    붙여 만든다. 바탕은 백엔드가 아는 공개 주소(`public_url`)가 먼저다. 줄마다 상세 화면,
+    사람이 지은 속성(`properties.link`)은 그대로."""
+    seen = _serve(
+        lambda _r: httpx.Response(200, json=json.loads(json.dumps(_LISTED))),
+        health={"base_path": "/sp", "public_url": "https://hwax.example.com/sp/"},
+    )
+    got = asyncio.run(server.objects_list(_host_ctx("10.0.0.5:8042"), "part"))
+    base = "https://hwax.example.com/sp"
+    assert got["url"] == f"{base}/o/part?year=all&f.grade.eq=A"
+    assert got["link"] == "/o/part?year=all&f.grade.eq=A"
+    assert got["link_missing"] == ["as_of"]
+    assert [row["url"] for row in got["items"]] == [
+        f"{base}/o/part/o1",
+        f"{base}/o/part_v2/o2",
+    ]
+    assert got["items"][0]["properties"] == {"link": "/x"}
+    assert [r.url.path for r in seen] == ["/api/objects/part"]
+
+    _serve(
+        lambda _r: httpx.Response(
+            200, json={"id": "o1", "type_slug": "part", "properties": {}}
+        ),
+        health={"base_path": "/sp", "public_url": base},
+    )
+    detail = asyncio.run(server.object_get(_ctx("Bearer t"), "part", "o1"))
+    assert detail["url"] == f"{base}/o/part/o1"
+
+
+def test_공개_주소가_없으면_들어온_주소에_접두어를_붙인다() -> None:
+    """nginx 뒤면 그 호스트(포트 없이), MCP 포트로 바로 왔으면 앱 포트(-2) — 업로드 주소와 같은
+    짐작에 접두어(`base_path`)를 더한다."""
+    found = {"priorities": [{"kind": "field", "link": "/o/part?f.grade.empty=1"}], "types": []}
+    _serve(
+        lambda _r: httpx.Response(200, json=json.loads(json.dumps(found))),
+        health={"base_path": "/sp", "public_url": None},
+    )
+    behind = asyncio.run(server.fill_priorities(_host_ctx("sp.example.com", "https")))
+    assert behind["priorities"][0]["url"] == "https://sp.example.com/sp/o/part?f.grade.empty=1"
+    direct = asyncio.run(server.fill_priorities(_host_ctx("10.0.0.5:8042")))
+    assert direct["priorities"][0]["url"] == "http://10.0.0.5:8040/sp/o/part?f.grade.empty=1"
+
+
+def test_다른_뜻의_url_과_화면_경로가_아닌_link_는_안_건드린다() -> None:
+    """RA 보고서처럼 `url` 이 이미 다른 뜻이면 덮지 않는다. 바깥 주소 · `//` 로 시작하는 값은
+    화면 경로가 아니다."""
+    found = {
+        "items": [
+            {"link": "/review?kind=alias", "url": "https://ra.example.com/r/1"},
+            {"link": "https://elsewhere.example.com/x"},
+            {"link": "//elsewhere.example.com/x"},
+            {"link": "/review?kind=merge"},
+        ]
+    }
+    _serve(
+        lambda _r: httpx.Response(200, json=json.loads(json.dumps(found))),
+        health={"base_path": "", "public_url": "https://sp.example.com"},
+    )
+    got = asyncio.run(server.review_list(_ctx("Bearer t")))
+    assert [row.get("url") for row in got["items"]] == [
+        "https://ra.example.com/r/1",
+        None,
+        None,
+        "https://sp.example.com/review?kind=merge",
+    ]
+
+
+def test_데이터가_이름을_지은_자리의_link_는_값이라_안_건드린다() -> None:
+    """2026-11-07 검토 — SPARQL 의 줄(변수 이름이 `link` 일 수 있다)과 이어진 칸의 값은
+    데이터다. 거기에 `url` 이 생기면 AI 는 그것을 원래 칸으로 읽는다. 질의 결과 · 확장 응답은
+    통째로 안 훑는다."""
+    listed = {
+        "items": [{"id": "o1", "type_slug": "part", "label": "힌지"}],
+        "total": 1,
+        "link": "/o/part?year=all",
+        "linked": {"o1": {"out.doc.label": {"values": [{"value": {"link": "/data/a"}}]}}},
+    }
+    _serve(
+        lambda _r: httpx.Response(200, json=json.loads(json.dumps(listed))),
+        health={"base_path": "", "public_url": "https://sp.example.com"},
+    )
+    got = asyncio.run(server.objects_list(_ctx("Bearer t"), "part"))
+    assert got["url"] == "https://sp.example.com/o/part?year=all"
+    cell = got["linked"]["o1"]["out.doc.label"]["values"][0]["value"]
+    assert cell == {"link": "/data/a"}
+    rows = {"rows": [{"link": "/data/a.step"}], "total": 1}
+    _serve(
+        lambda _r: httpx.Response(200, json=json.loads(json.dumps(rows))),
+        health={"base_path": "", "public_url": "https://sp.example.com"},
+    )
+    found = asyncio.run(server.rdf_query(_ctx("Bearer t"), "SELECT ?link WHERE {}"))
+    assert found["rows"] == [{"link": "/data/a.step"}]
+
+
+def test_바탕을_모르면_답은_그대로이고_link_가_없으면_묻지도_않는다() -> None:
+    """공개 주소도 들어온 주소도 없으면 상대 `link` 만 남는다. 백엔드에 못 닿으면 접두어를 몰라
+    짐작하지 않는다. 바탕은 프로세스에 붙들어 두어 도구마다 묻지 않는다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/health":
+            return httpx.Response(200, json={"base_path": "", "public_url": None})
+        return httpx.Response(200, json=json.loads(json.dumps(_LISTED)))
+
+    seen = _serve(handler, health=None)
+    got = asyncio.run(server.objects_list(_ctx("Bearer t"), "part"))
+    assert "url" not in got and all("url" not in row for row in got["items"])
+    asyncio.run(server.objects_summary(_ctx("Bearer t"), "part"))
+    assert [r.url.path for r in seen].count("/api/health") == 1
+
+    # 백엔드가 health 를 못 주면(오래된 판 · 끊김) 들어온 주소가 있어도 안 붙인다.
+    def down(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/health":
+            return httpx.Response(503, json={"error": {"code": "X", "message": "점검"}})
+        return httpx.Response(200, json=json.loads(json.dumps(_LISTED)))
+
+    _serve(down, health=None)
+    got = asyncio.run(server.objects_list(_host_ctx("sp.example.com", "https"), "part"))
+    assert "url" not in got and all("url" not in row for row in got["items"])
+
+    # `link` 가 없는 답이면 바탕을 묻지 않는다.
+    seen = _serve(lambda _r: httpx.Response(200, json={"types": []}), health=None)
+    asyncio.run(server.ontology_schema(_ctx("Bearer t")))
+    assert [r.url.path for r in seen] == ["/api/ontology/schema"]
 
 
 def test_파일을_주는_자리는_바이트를_안_흘린다() -> None:

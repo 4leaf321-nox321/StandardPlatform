@@ -7,8 +7,8 @@
 
 import { useState } from 'react'
 
-import type { Metric, ReadOptions } from '@/modules/metrics/api'
 import { metricsApi } from '@/modules/metrics/api'
+import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import {
   AnalysisMeta,
   CaveatList,
@@ -34,15 +34,19 @@ import { useResource } from '@/shared/hooks/useResource'
 
 const MAX_FACTORS = 4
 
-export function LogitView({ metric, read }: { metric: Metric; read: ReadOptions }) {
+export function LogitView({ metric, read, initial = {} }: AnalysisViewProps) {
   // 요인 후보 — 재방문 자신과 여러 값 기준은 안 된다(건수가 부푼다).
   const candidates = metric.dims.filter(
     (one) => one.address !== 'visit.repeat' && !one.multi,
   )
-  const [factors, setFactors] = useState<string[]>(() =>
-    candidates.slice(0, 1).map((one) => one.name),
-  )
-  const [minCount, setMinCount] = useState('30')
+  const [factors, setFactors] = useState<string[]>(() => {
+    const given = (initial.factors ?? '')
+      .split(',')
+      .map((one) => one.trim())
+      .filter(Boolean)
+    return given.length > 0 ? given : candidates.slice(0, 1).map((one) => one.name)
+  })
+  const [minCount, setMinCount] = useState(initial.min_count ?? '30')
   // 요인으로 고른 기준의 거르기는 빼고 보낸다 — 거른 기준은 값이 하나라 요인이 못 된다.
   const filters = Object.fromEntries(
     Object.entries(read.filters ?? {}).filter(([name]) => !factors.includes(name)),

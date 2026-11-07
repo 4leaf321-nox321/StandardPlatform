@@ -10,7 +10,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs.schemas import JobOut
-from app.modules.metrics import alert_routes, compute, params, query, services
+from app.modules.metrics import alert_routes, compute, links, params, query, services
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun
 from app.modules.metrics.recipes import routes as recipes_routes
@@ -239,7 +239,8 @@ def metric_values(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return query.table(db, user, row, built, ask, composition=composition or None)
+    out = query.table(db, user, row, built, ask, composition=composition or None)
+    return links.attach(out, request, "table")
 
 
 @router.get("/{slug}/series", response_model=SeriesOut)
@@ -268,7 +269,8 @@ def metric_series(
         cohort_from=None,
         cohort_to=None,
     )
-    return query.series(db, user, row, built, ask, split=split, composition=composition)
+    out = query.series(db, user, row, built, ask, split=split, composition=composition)
+    return links.attach(out, request, "series")
 
 
 @router.get("/{slug}/cohort", response_model=CohortOut)
@@ -293,7 +295,8 @@ def metric_cohort(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return query.cohort(db, user, row, built, ask, cumulative=cumulative)
+    out = query.cohort(db, user, row, built, ask, cumulative=cumulative)
+    return links.attach(out, request, "cohort")
 
 
 @router.get("/{slug}/dims", response_model=DimValuesOut)

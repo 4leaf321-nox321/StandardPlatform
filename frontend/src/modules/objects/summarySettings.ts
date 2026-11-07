@@ -55,3 +55,30 @@ export const ORDER_LABELS: Record<string, string> = {
   asc: '작은 값부터',
   key: '시간순',
 }
+
+/** 서버의 통계가 받는 값 — 주소에서 읽을 때 이것만 받는다. */
+const METRIC_VALUES = ['count', 'sum', 'avg', 'min', 'max']
+const ORDER_VALUES = ['desc', 'asc', 'key']
+
+/**
+ * 주소의 통계 설정(`group_by` · `split_by` · `metric` · `metric_field` · `order` · `grain`) —
+ * 기본 위에 덮어쓴다. MCP 답의 화면 주소(`group=1&group_by=…`)가 싣고 온다: 안 읽으면 답은 등급별인데
+ * 연 화면은 상태별이다. 그림 종류는 주소에 없다(기본 그대로). 고를 것이 정해진 값(metric · order ·
+ * grain)은 **모르는 값이면 기본으로** — 손으로 고친 주소 · 다른 판의 주소일 수 있다. 기준 칸은 타입마다
+ * 달라 여기서 못 가린다(서버가 거절하면 패널이 그 말을 적는다).
+ */
+export function summaryFromParams(params: URLSearchParams): SummarySettings {
+  const pick = (key: string) => params.get(key)?.trim() ?? ''
+  const metric = pick('metric')
+  const order = pick('order')
+  const grain = pick('grain')
+  return {
+    ...DEFAULT_SUMMARY,
+    groupBy: pick('group_by') || DEFAULT_SUMMARY.groupBy,
+    splitBy: pick('split_by'),
+    metric: METRIC_VALUES.includes(metric) ? metric : DEFAULT_SUMMARY.metric,
+    metricField: pick('metric_field') || null,
+    order: ORDER_VALUES.includes(order) ? order : DEFAULT_SUMMARY.order,
+    grain: GRAINS.some((one) => one.value === grain) ? grain : DEFAULT_SUMMARY.grain,
+  }
+}

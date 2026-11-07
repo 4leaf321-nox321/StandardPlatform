@@ -177,6 +177,20 @@ describe('통계', () => {
     )
   })
 
+  it('고르개에 없는 날짜 주소는 서버의 판정으로 기간 단위를 보낸다', async () => {
+    // 링크로 연 통계 — 세 걸음 날짜 주소는 고르개(두 걸음까지)에 없다. 서버가 그 기준으로 센 응답에
+    // 기간 단위를 주면 날짜 축이다(2026-11-07 검토: 안 그러면 해별로 섰다).
+    objectApi.summary.mockClear()
+    const deep = 'ref.a.ref.b.ref.c.properties.made'
+    await panel({ ...BASE, group_field: deep, grain: 'year' }, { groupBy: deep, grain: 'month' })
+    await waitFor(() =>
+      expect(objectApi.summary.mock.calls.at(-1)?.[2]).toMatchObject({
+        groupBy: deep,
+        grain: 'month',
+      }),
+    )
+  })
+
   it('접힌 그룹이 있으면 몇 종류 몇 건이 빠졌는지 적는다', async () => {
     await panel({ ...BASE, total: 40, other_groups: 7, other_count: 35 })
     expect(screen.getByText(/7종류 35건은 접혔습니다/)).toBeInTheDocument()

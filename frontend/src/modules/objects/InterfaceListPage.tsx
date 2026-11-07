@@ -20,6 +20,7 @@ import { propertyText } from '@/modules/objects/PropertyFields'
 import { DEFAULT_SUMMARY } from '@/modules/objects/summarySettings'
 import type { SummarySettings } from '@/modules/objects/summarySettings'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
+import { yearChoices, yearFromParams } from '@/modules/objects/urlYear'
 import type { ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { commonProperties, defaultInterfaceColumns } from '@/modules/ontology/interfaces'
 import type { InterfaceWithProperties } from '@/modules/ontology/interfaces'
@@ -56,7 +57,6 @@ const SummaryPanel = lazy(() =>
 
 const ALL = '__all__'
 const NO_LINKED: LinkedField[] = []
-const YEAR_OPTIONS = Array.from({ length: 11 }, (_, index) => new Date().getFullYear() - index)
 
 interface Column {
   id: string
@@ -122,10 +122,11 @@ export function InterfaceListPage({
   const implementers = types.filter((one) => iface.implementers.includes(one.slug))
   /**
    * **올해가 기본이다**(타입 목록과 같다). 구현 타입 중 하나라도 연도를 쓰면 선다 — 서버가
-   * 타입마다 제 시간 정책대로 거르고, 상시 타입은 연도와 상관없이 늘 나온다.
+   * 타입마다 제 시간 정책대로 거르고, 상시 타입은 연도와 상관없이 늘 나온다. 주소의 `year`
+   * (`all` · 네 자리 해)는 처음 열 때 읽는다 — 연도 없이 센 답의 화면 주소가 `year=all` 을 싣는다.
    */
   const yearApplies = implementers.some((one) => one.temporal_kind !== 'evergreen')
-  const [year, setYear] = useState<number | null>(new Date().getFullYear())
+  const [year, setYear] = useState<number | null>(() => yearFromParams(params))
 
   const defs = useMemo(() => commonProperties(iface, interfaces), [iface, interfaces])
   const columns = useMemo(() => {
@@ -258,7 +259,7 @@ export function InterfaceListPage({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={ALL}>전체 연도</SelectItem>
-                    {YEAR_OPTIONS.map((one) => (
+                    {yearChoices(year).map((one) => (
                       <SelectItem key={one} value={String(one)}>
                         {one}년
                       </SelectItem>

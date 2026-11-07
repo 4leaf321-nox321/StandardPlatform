@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.metrics import compute, params, query, services
+from app.modules.metrics import compute, links, params, query, services
+from app.modules.metrics import spec as spec_module
 from app.modules.metrics.recipes import (
     assoc,
     changes,
@@ -53,6 +54,13 @@ from app.shared.auth import current_user
 router = APIRouter(prefix="/{slug}/analysis")
 
 
+def _model_dim(built: spec_module.Built) -> dict[str, str]:
+    """순차 검정 보기가 스스로 고르는 모델 기준 — 분모 짝의 첫 기준(`SprtView`). 그 값을 준
+    요청은 화면이 `dim` 을 못 받아도 같은 것을 연다."""
+    den = built.spec.denominator
+    return {"dim": den.on[0]} if den is not None and den.on else {}
+
+
 @router.get("/pareto", response_model=ParetoOut)
 def pareto_analysis(
     slug: str,
@@ -87,7 +95,7 @@ def pareto_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return pareto.run(
+    out = pareto.run(
         db,
         user,
         metric,
@@ -101,6 +109,7 @@ def pareto_analysis(
         compare_to=params.parse_date(compare_to, "compare_to"),
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="pareto")
 
 
 @router.get("/life", response_model=LifeOut)
@@ -131,7 +140,7 @@ def life_analysis(
     metric = services.get(db, slug)
     built = compute.built_of(db, metric)
     ask = params.ask_from_request(request, cohort_from=cohort_from, cohort_to=cohort_to)
-    return life.run(
+    out = life.run(
         db,
         user,
         metric,
@@ -142,6 +151,7 @@ def life_analysis(
         basis=basis,
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="life")
 
 
 @router.get("/control", response_model=ControlOut)
@@ -181,7 +191,7 @@ def control_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return control.run(
+    out = control.run(
         db,
         user,
         metric,
@@ -193,6 +203,7 @@ def control_analysis(
         baseline_to=params.parse_date(baseline_to, "baseline_to"),
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="control")
 
 
 @router.get("/changes", response_model=ChangesOut)
@@ -226,7 +237,8 @@ def changes_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return changes.run(db, user, metric, built, ask, axis=axis, window=window, compact=compact)
+    out = changes.run(db, user, metric, built, ask, axis=axis, window=window, compact=compact)
+    return links.attach(out, request, "analysis", recipe="changes")
 
 
 @router.get("/changes/scan", response_model=ChangesScanOut)
@@ -264,9 +276,10 @@ def changes_scan(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return changes.scan(
+    out = changes.scan(
         db, user, metric, built, ask, by=by, axis=axis, window=window, top=top, compact=compact
     )
+    return links.attach(out, request, "analysis", recipe="changes/scan")
 
 
 @router.get("/sprt/scan", response_model=SprtScanOut)
@@ -295,7 +308,7 @@ def sprt_scan(
     metric = services.get(db, slug)
     built = compute.built_of(db, metric)
     ask = params.ask_from_request(request)
-    return sprt.scan(
+    out = sprt.scan(
         db,
         user,
         metric,
@@ -311,6 +324,7 @@ def sprt_scan(
         beta=beta,
         top=top,
     )
+    return links.attach(out, request, "analysis", recipe="sprt/scan", same=_model_dim(built))
 
 
 @router.get("/groups", response_model=GroupsOut)
@@ -344,9 +358,12 @@ def groups_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return groups.run(
+    out = groups.run(
         db, user, metric, built, ask, dim=dim, axis=axis, window=window, compact=compact
     )
+    # 기준을 비우면 서버가 분모 짝의 첫 기준을 고른다 — 보기는 제 기본(첫 후보)을 골라 다를 수
+    # 있으니 서버가 쓴 기준을 주소에 적는다.
+    return links.attach(out, request, "analysis", recipe="groups", chosen={"dim": out.dim})
 
 
 @router.get("/cutin", response_model=CutinOut)
@@ -383,7 +400,7 @@ def cutin_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return cutin.run(
+    out = cutin.run(
         db,
         user,
         metric,
@@ -395,6 +412,7 @@ def cutin_analysis(
         skip_first=skip_first,
         effect=effect,
     )
+    return links.attach(out, request, "analysis", recipe="cutin")
 
 
 @router.get("/forecast", response_model=ForecastOut)
@@ -427,7 +445,7 @@ def forecast_analysis(
     metric = services.get(db, slug)
     built = compute.built_of(db, metric)
     ask = params.ask_from_request(request, cohort_from=cohort_from, cohort_to=cohort_to)
-    return forecast.run(
+    out = forecast.run(
         db,
         user,
         metric,
@@ -440,6 +458,7 @@ def forecast_analysis(
         cost=cost,
         backtest=backtest,
     )
+    return links.attach(out, request, "analysis", recipe="forecast")
 
 
 @router.get("/coverage", response_model=CoverageOut)
@@ -478,7 +497,7 @@ def coverage_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return coverage.run(
+    out = coverage.run(
         db,
         user,
         metric,
@@ -488,6 +507,7 @@ def coverage_analysis(
         via=[one.strip() or None for one in via.split(",")] if via else [],
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="coverage")
 
 
 @router.get("/coverage/ways", response_model=list[WayOut])
@@ -534,7 +554,7 @@ def recurrence_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return recurrence.run(
+    out = recurrence.run(
         db,
         user,
         metric,
@@ -545,6 +565,7 @@ def recurrence_analysis(
         via=via,
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="recurrence")
 
 
 @router.get("/profile", response_model=ProfileOut)
@@ -573,7 +594,8 @@ def profile_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return profile.run(db, user, metric, built, ask, dim=dim, value=value, compact=compact)
+    out = profile.run(db, user, metric, built, ask, dim=dim, value=value, compact=compact)
+    return links.attach(out, request, "analysis", recipe="profile")
 
 
 @router.get("/sprt", response_model=SprtOut)
@@ -604,7 +626,7 @@ def sprt_analysis(
     metric = services.get(db, slug)
     built = compute.built_of(db, metric)
     ask = params.ask_from_request(request)
-    return sprt.run(
+    out = sprt.run(
         db,
         user,
         metric,
@@ -619,6 +641,7 @@ def sprt_analysis(
         beta=beta,
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="sprt", same=_model_dim(built))
 
 
 @router.get("/logit", response_model=LogitOut)
@@ -652,7 +675,7 @@ def logit_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return logit.run(
+    out = logit.run(
         db,
         user,
         metric,
@@ -662,6 +685,7 @@ def logit_analysis(
         min_count=min_count,
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="logit")
 
 
 @router.get("/assoc", response_model=AssocOut)
@@ -696,7 +720,7 @@ def assoc_analysis(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return assoc.run(
+    out = assoc.run(
         db,
         user,
         metric,
@@ -707,3 +731,4 @@ def assoc_analysis(
         min_count=min_count,
         compact=compact,
     )
+    return links.attach(out, request, "analysis", recipe="assoc")

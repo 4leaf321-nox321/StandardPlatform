@@ -63,7 +63,8 @@ def test_쓰는_곳이_많은_칸이_위에_서고_무엇이_좋아지는지_말
     grade = _mine(report, part)[0]
     assert grade["missing"] == 2 and grade["total"] == 4
     assert grade["uses"] == ["뷰 1개"] and "뷰 1개" in grade["gain"]
-    assert grade["link"] == f"/o/{part}?f.grade.empty="
+    # 연도 전부 — 채울 곳의 수는 연도와 무관한데 화면의 기본은 올해다.
+    assert grade["link"] == f"/o/{part}?f.grade.empty=&year=all"
     memo = _mine(report, part)[1]
     assert memo["uses"] == [] and "쓰는 곳이 없는" in memo["gain"]
     assert grade["score"] > memo["score"]
@@ -160,7 +161,7 @@ def test_관계는_끝을_정한_종류만_세고_하나인_끝이_무겁다(
     ]
     (row,) = [one for one in _mine(report, part) if one["kind"] == "relation"]
     assert row["uses"] == ["개수 제약(하나)"] and row["weight"] == 1 + fill.W_ONE
-    assert row["link"] == f"/o/{part}?f.out.{supplied}.empty="
+    assert row["link"] == f"/o/{part}?f.out.{supplied}.empty=&year=all"
     listed = client.get(
         f"/api/objects/{part}?f.out.{supplied}.empty=", headers=admin.headers
     ).json()
