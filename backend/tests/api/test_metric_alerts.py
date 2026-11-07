@@ -428,3 +428,41 @@ def test_변화점_경보를_증상마다_훑으면_값마다_따로_센다(
     events = client.get(f"{'/api/metrics/alerts/events'}", headers=admin.headers).json()
     (event,) = [one for one in events if one["alert_id"] == made["id"]]
     assert event["key"] == "up:2029-09-01@누수" and event["detail"]["provisional"] is True
+
+
+def test_원천_기록이_끊긴_뒤의_결론은_보류하지_않고_그_말을_함께_싣는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """원천이 멎으면 닫힌 기간의 0건 · 튐이 결론으로 선다 — 끝쪽 0건이 진짜일 때도 있어 결론은
+    그대로 두되, 그 계산의 머리가 빈 기간을 말했으면(주의 `data_gap`) 지금 확인의 줄 · 발생의
+    `detail.data_gap` · 알림 본문의 끝 줄에 그 말을 싣는다."""
+    from tests.api.test_metric_data_through import _stamp
+
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
+    slug = monthly["slug"]
+    counts = [round(200 * (1 + 0.1 * np.sin(i * 1.7))) for i in range(30)]
+    _plant_months(w, sales, monthly, counts, 20000.0, datetime(2028, 8, 15, tzinfo=UTC))
+    made = _create(client, admin, slug, "control", {}, name="월 인입률 관리도")
+    assert made["baseline"]["findings"] == [] and made["baseline"]["notes"] == []
+
+    counts.append(400)  # 2028-07 이 닫히며 튄다
+    _plant_months(w, sales, monthly, counts, 20000.0, datetime(2028, 9, 15, tzinfo=UTC))
+    # 원천은 5월까지 — 경계(08-16) 앞의 6 · 7월은 아직 안 들어온 것일 수 있다.
+    _stamp(slug, source_through="2028-05-01")
+    checked = client.post(
+        f"/api/metrics/{slug}/alerts/{made['id']}/check", headers=admin.headers
+    ).json()
+    line = checked["notes"][-1]
+    assert line.startswith("2028-06 이후는 미반영 구간입니다(원천 최종 반영 기간 2028-05)")
+    assert checked["findings"], checked
+    assert all(one["detail"]["data_gap"] == line for one in checked["findings"])
+
+    assert _after(slug)["new"] >= 1
+    events = client.get(
+        f"/api/metrics/{slug}/alerts/{made['id']}/events", headers=admin.headers
+    ).json()
+    (signal,) = [one for one in events if one["key"] == "-:2028-07-01:1"]
+    assert signal["detail"]["data_gap"] == line and "2028-07" in signal["title"]
+    (note,) = _notes(client, admin, "metric.alert")
+    assert (note["body"] or "").endswith(f"주의: {line}")

@@ -49,6 +49,10 @@ export function InsightList({
                 ` · 적게 잡아 ${one.detail.ratio_bound.toFixed(2)}배`}
               {one.also && one.also.length > 0 && ` · 같은 줄: ${one.also.join(', ')}`}
             </p>
+            {/* 원천 기록이 끊긴 뒤의 결론일 수 있다 — 결론은 그대로 두고 그 말을 함께 싣는다. */}
+            {typeof one.detail.data_gap === 'string' && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">{one.detail.data_gap}</p>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Link to={one.link} className="text-xs underline">

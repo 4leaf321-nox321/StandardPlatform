@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -24,7 +25,7 @@ from typing import Any
 
 import httpx
 from sqlalchemy import event, func, select, update
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.database import SessionLocal
@@ -788,6 +789,15 @@ def sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> 
         return _sync_announced(db, user, source, apply=True)
 
 
+def resumable(source: DataSource) -> bool:
+    """형제 코어가 **끊은 자리를 들고 있나**(객체 · 선 어느 쪽이든) — 다음 차례가 잇는다."""
+    options = source.options or {}
+    return source.kind == "sp_core" and any(
+        isinstance(options.get(key), dict) and bool(options[key].get("next"))
+        for key in (RESUME, RESUME_EDGES)
+    )
+
+
 def _sync_announced(
     db: Session, user: User | None, source: DataSource, *, apply: bool
 ) -> SyncResult:
@@ -1020,6 +1030,7 @@ def _sync_body(
             source.last_run_at = run.finished_at
             source.last_status = run.status
         if run.applied:
+            source.last_success_at = run.finished_at
             audit.record(
                 db,
                 action="datasource.sync",
@@ -1236,6 +1247,11 @@ def _sync_body(
     run.finished_at = datetime.now(UTC)
     source.last_run_at = run.finished_at
     source.last_status = run.status
+    # **받아서 다 넣었을 때만** — 선을 못 넣었거나 한꺼번에 사라져 멈춘 것(held back)은
+    # 들어간 객체가 있어도 「실패」 다. 그것까지 성공으로 세면 「언제까지 들어왔나」 가 빠진
+    # 것을 감춘다.
+    if run.status == "ok":
+        source.last_success_at = run.finished_at
     audit.record(
         db,
         action="datasource.sync",
@@ -1571,6 +1587,8 @@ def _sync_ra(
     run.finished_at = now
     source.last_run_at = now
     source.last_status = run.status
+    if run.status == "ok":
+        source.last_success_at = now
     audit.record(
         db,
         action="datasource.sync",
@@ -2683,11 +2701,100 @@ def workspace_content(
     ]
 
 
-# --- 홈 「남은 일」 ------------------------------------------------------------
+# --- 멎음 — 홈 「남은 일」 · 객체 응답의 신선도 ----------------------------------
 
 #: 간격의 이 배를 넘도록 안 돌았으면 「멎었다」 로 본다. 딱 한 배로 보면 5분 간격에서
 #: 타이머가 한 번만 늦어도 경고가 뜨고, 그런 경고는 곧 무시된다.
 STALE_FACTOR = 3
+
+
+def is_stale(source: DataSource, now: datetime) -> bool:
+    """**멎었나** — 간격의 `STALE_FACTOR` 배를 넘도록 안 돌았다. 홈의 「남은 일」
+    (`maintenance`)과 객체 응답의 신선도(`freshness`)가 이 하나를 쓴다 — 두 벌이면 홈은
+    「멎음 0」 인데 목록은 「멎음」 을 다는 날이 온다.
+
+    손으로만 도는 것(간격 0)은 멎을 일이 없다. **실패 중인 것은 여기서 빼고 따로 센다** — 겹쳐
+    세면 소스 하나가 경고 둘로 보인다. **한 번도 안 돈 것은 만든 때부터 잰다** — 예전에는
+    `last_run_at` 이 없으면 빼서, 타이머나 워커가 처음부터 없던 설치의 소스는 영영 「멎음」 에
+    안 걸렸다(2026-10-08)."""
+    if source.interval_minutes <= 0 or source.last_status == "failed":
+        return False
+    since = source.last_run_at or source.created_at
+    return since + timedelta(minutes=source.interval_minutes * STALE_FACTOR) < now
+
+
+@dataclass(frozen=True)
+class Freshness:
+    """한 타입에 들어오는 원천 하나 — 그 자료가 **언제까지 들어왔나**(마지막 성공)와 지금
+    멎었나."""
+
+    slug: str
+    name: str
+    kind: str
+    type_slug: str
+    """이 소스가 넣는 타입 — 인터페이스 목록이면 구현 타입마다 다르다."""
+    interval_minutes: int
+    last_success_at: datetime | None
+    last_run_at: datetime | None
+    failing: bool
+    stale: bool
+    active: bool = True
+    """꺼 둔 소스도 싣는다 — 그 타입의 자료는 그 소스의 마지막 성공까지다. 빼면 「들어오는
+    원천이 없는 타입(손 · MCP)」 으로 읽혀 옛 수를 최신으로 옮긴다(2026-11-08 검토). 끈 것은
+    실패 · 멎음을 세우지 않는다(일부러 멈췄다)."""
+    catching_up: bool = False
+    """형제 코어가 **끊은 자리를 들고 있다**(`resumable`) — 차례는 성공이라 마지막 성공은
+    방금이어도 처음 받기 · 큰 따라잡기가 아직 다 안 들어왔다(2026-11-08 검토)."""
+
+
+def freshness(db: Session, type_ids: Sequence[uuid.UUID]) -> list[Freshness]:
+    """그 타입들에 넣는 데이터 소스마다의 신선도 — 이름 순, 꺼 둔 것도(`active`).
+
+    원천 하나가 멎어도 목록 · 통계 · 답은 그 사실을 말하지 않았다. 숫자는 맞아 보이고 —
+    틀린 값이 아니라 옛 값이기 때문이다. 그래서 그 타입을 읽는 응답이 함께 싣는다. 끈 소스도
+    싣되 실패 · 멎음은 세우지 않는다(일부러 멈춘 것이라 「멎음」 이 아니지만, 그 타입의 자료는
+    그 마지막 성공까지다). **질의 한 번** — 목록 · 통계마다 붙으므로 칸도 필요한 것만
+    읽는다(대응 · 기다리는 선 같은 큰 칸은 안 읽는다)."""
+    ids = list(dict.fromkeys(type_ids))
+    if not ids:
+        return []
+    rows = db.execute(
+        select(DataSource, ObjectType.slug)
+        .join(ObjectType, ObjectType.id == DataSource.type_id)
+        .where(DataSource.type_id.in_(ids))
+        .options(
+            load_only(
+                DataSource.slug,
+                DataSource.name,
+                DataSource.kind,
+                DataSource.interval_minutes,
+                DataSource.last_success_at,
+                DataSource.last_run_at,
+                DataSource.last_status,
+                DataSource.created_at,
+                DataSource.is_active,
+                DataSource.options,  # 끊은 자리(`resumable`) — 작은 칸
+            )
+        )
+        .order_by(DataSource.name, DataSource.slug)
+    ).all()
+    now = datetime.now(UTC)
+    return [
+        Freshness(
+            slug=source.slug,
+            name=source.name,
+            kind=source.kind,
+            type_slug=type_slug,
+            interval_minutes=source.interval_minutes,
+            last_success_at=source.last_success_at,
+            last_run_at=source.last_run_at,
+            failing=source.is_active and source.last_status == "failed",
+            stale=source.is_active and is_stale(source, now),
+            active=source.is_active,
+            catching_up=resumable(source),
+        )
+        for source, type_slug in rows
+    ]
 
 
 def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
@@ -2711,8 +2818,6 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
         )
     )
     now = datetime.now(UTC)
-    # **한 번도 안 돈 것도 센다** — 만든 때부터 잰다. 예전에는 `last_run_at` 이 없으면 빼서,
-    # 타이머나 워커가 처음부터 없던 설치의 소스는 영영 「멎음」 에 안 걸렸다(2026-10-08).
     stale = [
         one
         for one in db.scalars(
@@ -2720,15 +2825,12 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
                 DataSource.is_active.is_(True), DataSource.interval_minutes > 0
             )
         )
-        if one.last_status != "failed"
-        and (one.last_run_at or one.created_at)
-        + timedelta(minutes=one.interval_minutes * STALE_FACTOR)
-        < now
+        if is_stale(one, now)
     ]
     return [
         extensions.MaintenanceItem(
             key="datasource_failed",
-            label="동기화가 실패한 데이터 소스",
+            label="수집 실패 데이터 소스",
             count=len(failed),
             link="/admin/datasources",
             # **경고다.** 여기가 실패하면 화면의 값이 조용히 낡아 가고, 그 사실은
@@ -2737,7 +2839,7 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
         ),
         extensions.MaintenanceItem(
             key="datasource_stale",
-            label="정해진 간격보다 오래 안 돈 데이터 소스",
+            label="수집 지연 데이터 소스",
             count=len(stale),
             link="/admin/datasources",
             severity="warning",

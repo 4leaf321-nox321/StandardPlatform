@@ -218,6 +218,54 @@ describe('지표 상세', () => {
     expect(screen.getByText('2.5')).toBeInTheDocument()
   })
 
+  it('머리가 최종 반영 기간을 적고, 미반영 구간이 있으면 경고를 따로 세운다', async () => {
+    await mount('/metrics/cases_monthly', METRIC, {
+      ...TABLE,
+      data_through: '2026-05-01',
+      source_through: '2026-07-01',
+      own_gap: true,
+      data_gap: true,
+      denominator: { ...HEADER.denominator!, grain: 'month', data_through: '2026-09-01' },
+    })
+    await waitFor(() => expect(screen.getByText(/최종 반영 기간 2026-05/)).toBeInTheDocument())
+    // 머리 한 줄에 분자 · 원천 · 분모의 것이 함께 선다(경고 줄도 원천 것을 말하므로 줄로 본다).
+    const line = screen.getByText(/최종 반영 기간 2026-05/)
+    expect(line).toHaveTextContent('원천 최종 반영 기간 2026-07')
+    expect(line).toHaveTextContent('분모 최종 반영 기간 2026-09')
+    expect(screen.getByRole('note')).toHaveTextContent(
+      '2026-08 이후는 미반영 구간입니다(원천 최종 반영 기간 2026-07) — 이 구간의 0건 · 감소는 수집 지연 때문일 수 있으므로, 데이터 소스의 수집 현황을 확인해야 합니다.',
+    )
+  })
+
+  it('원천 하나가 수집 실패면 미반영 구간이 아니어도 그 원천을 따로 말한다', async () => {
+    await mount('/metrics/cases_monthly', METRIC, {
+      ...TABLE,
+      data_through: '2026-09-01',
+      source_through: '2026-09-01',
+      freshness: [
+        {
+          slug: 'erp',
+          name: '가 ERP',
+          kind: 'odata',
+          type_slug: 'svc_case',
+          interval_minutes: 60,
+          last_success_at: null,
+          last_run_at: '2026-11-07T03:00:00Z',
+          failing: true,
+          stale: false,
+          active: true,
+          catching_up: false,
+        },
+      ],
+    })
+    await waitFor(() => expect(screen.getByRole('note')).toBeInTheDocument())
+    expect(screen.getByRole('note')).toHaveTextContent(
+      '원천 「가 ERP」 수집 실패(최종 수집 시각 없음) — 해당 원천의 새 기록이 집계에 빠졌을 수 있습니다.',
+    )
+    // 원천 최종 반영 기간이 지표의 것과 같으면 따로 안 적는다.
+    expect(screen.queryByText(/원천 최종 반영 기간/)).toBeNull()
+  })
+
   it('머무는 기간이 있는 지표는 머리가 「최근 N기간의 합」 이라고 말한다', async () => {
     await mount('/metrics/cases_monthly', METRIC, {
       ...TABLE,

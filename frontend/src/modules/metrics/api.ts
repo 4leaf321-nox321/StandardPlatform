@@ -222,7 +222,18 @@ export interface MetricRun {
   rows: number
   cells: number
   error: string | null
-  stats: Record<string, number>
+  /**
+   * 숨기지 않는 수들 — 못 묶은 수 · 기록 끝(`data_through`) · 원천 기록 끝(`source_through`,
+   * 둘 다 기간 시작일) · 규칙 판.
+   */
+  stats: {
+    unbucketed?: number
+    unbucketed_cohort?: number
+    negative_age?: number
+    data_through?: string
+    source_through?: string
+    [key: string]: unknown
+  }
   /** `full` 전부 다시 셌다 · `incremental` 바뀐 기간만. 옛 판의 기록에는 없다. */
   mode?: 'full' | 'incremental'
   /** 증분이 다시 센 기간(시작일, 날짜 없는 칸은 null). */
@@ -241,6 +252,29 @@ export interface Drill {
   partial: string[]
 }
 
+/**
+ * 원천 타입에 넣는 데이터 소스 하나의 신선도 — 서버 `FreshnessOut`(목록 · 통계의 `freshness` 와
+ * 같은 모양). 꺼 둔 소스(`active` 거짓)는 실패 · 멎음이 서지 않는다.
+ */
+export interface SourceFreshness {
+  slug: string
+  name: string
+  kind: string
+  type_slug: string
+  /** 동기화 간격(분). 0 이면 손으로만 — 멎음이 서지 않는다. */
+  interval_minutes: number
+  /** 받아서 적용까지 성공한 마지막 실행이 끝난 때 — 그 원천의 자료는 이때까지 들어왔다. */
+  last_success_at: string | null
+  last_run_at: string | null
+  /** 마지막 실행이 실패했다. */
+  failing: boolean
+  /** 정해진 간격의 3배를 넘도록 안 돌았다(실패 중이면 서지 않는다). */
+  stale: boolean
+  active: boolean
+  /** 형제 코어가 끊은 자리를 들고 있다 — 처음 받기 · 큰 따라잡기가 아직 다 안 들어왔다. */
+  catching_up: boolean
+}
+
 export interface DenominatorInfo {
   metric: string
   label: string
@@ -251,6 +285,19 @@ export interface DenominatorInfo {
   /** 분모가 없거나 0 이라 비율을 못 낸 셀 수. */
   missing: number
   truncated: boolean
+  /** 분모 지표의 기간 단위 — `data_through` 를 그 단위로 읽는다. */
+  grain?: string | null
+  /** 분모 지표의 기록 끝(건수가 있는 마지막 기간의 시작일). 조건 비율 · 옛 계산은 null. */
+  data_through?: string | null
+  /** 분모 지표의 원천 기록 끝 — 분모 쪽 빈 기간을 이것으로 판정한다. 조건 비율 · 옛 계산은 null. */
+  source_through?: string | null
+  /**
+   * 분모 쪽의 닫힌 기간이 통째로 비었나 — 그 뒤 기간의 비율은 분모가 빠졌거나 덜 든 값. 기간으로
+   * 짝짓지 않은 분모(`time` null)면 분모 합이 덜 든 것.
+   */
+  data_gap?: boolean
+  /** 분모 지표의 원천 타입에 넣는 데이터 소스의 신선도. 조건 비율은 빈 목록. */
+  freshness?: SourceFreshness[]
 }
 
 /** 모든 읽기 응답의 머리 — 계산 시각 · 겹침 · 못 묶은 수 · 잘림. */
@@ -273,6 +320,22 @@ export interface ReadHeader {
   denominator: DenominatorInfo | null
   /** 머무는 기간 — 기간마다의 값이 최근 `periods` 기간의 합(ADR 0023). */
   stay?: { periods: number; periods_from: string | null; periods_from_label: string | null } | null
+  /** 기록 끝 — 이 지표에서 건수가 있는 마지막 기간의 시작일. 시간 칸이 없거나 옛 계산이면 null. */
+  data_through?: string | null
+  /**
+   * 원천 기록 끝 — 원천 타입 전체(거르기 없이)에서 날짜가 있는 마지막 기간의 시작일. 빈 기간을
+   * 이것으로 판정한다(좁은 지표 · 드문 지표의 끝은 원천이 살아 있어도 멈춘다). 옛 계산은 null.
+   */
+  source_through?: string | null
+  /** 분자 쪽만의 빈 기간 — 분자 · 분모가 둘 다 비면 이것과 `denominator.data_gap` 이 함께 참. */
+  own_gap?: boolean
+  /**
+   * 닫힌 기간이 통째로 비었나(분자 · 분모 어느 쪽이든) — 그 뒤의 0건은 아직 안 들어온 것일 수
+   * 있다. 분모 쪽만의 것은 `denominator.data_gap`.
+   */
+  data_gap?: boolean
+  /** 원천 타입에 넣는 데이터 소스의 신선도 — 원천 하나만 멎은 것을 이것이 말한다. */
+  freshness?: SourceFreshness[]
 }
 
 export interface MetricCell {

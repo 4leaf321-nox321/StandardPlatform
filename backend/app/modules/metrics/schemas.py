@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.jobs.schemas import JobOut
 from app.modules.metrics.spec import MetricSpec
+from app.modules.objects.schemas import FreshnessOut
 from app.modules.ontology.models import SLUG_MAX
 
 
@@ -266,6 +267,24 @@ class DenominatorOut(BaseModel):
     missing: int
     """분모가 없거나 0 이라 비율을 못 낸 셀 수."""
     truncated: bool
+    grain: str | None = None
+    """분모 지표의 기간 단위 — `data_through` 를 그 단위로 읽는다(짝짓지 않은 분모는 분자와
+    단위가 다를 수 있다)."""
+    data_through: date | None = None
+    """분모 지표의 **기록 끝** — 건수가 있는 마지막 기간의 시작일(그 지표의 지금 실행이
+    남긴 것, `ReadHeader.data_through` 와 같은 뜻). 조건 비율(같은 기록 전체가 분모)은 분자의
+    것과 같아 비운다."""
+    source_through: date | None = None
+    """분모 지표의 **원천 기록 끝** — 분모 지표의 원천 타입 전체에서 시간 칸 날짜가 있는
+    마지막 기간의 시작일(`ReadHeader.source_through` 와 같은 뜻). 분모 쪽 `data_gap` 을
+    이것으로 판정한다. 조건 비율 · 이 칸이 생기기 전에 센 실행은 null."""
+    data_gap: bool = False
+    """분모 쪽만의 `data_gap`(분모의 원천 기록 끝으로 판정) — 판매 대수가 멎었는데 인입은
+    들어오면 그 뒤 기간의 비율은 분모가 빠졌거나(분모 없음) 덜 든 값이다. 기간으로 짝짓지 않은
+    분모(`time` null)면 분모 합이 덜 든 것이다."""
+    freshness: list[FreshnessOut] = Field(default_factory=list)
+    """분모 지표의 원천 타입에 넣는 데이터 소스마다의 신선도(`ReadHeader.freshness` 와 같은
+    모양). 조건 비율은 분자의 것과 같아 비운다."""
 
 
 class StayOut(BaseModel):
@@ -299,6 +318,33 @@ class ReadHeader(BaseModel):
     denominator: DenominatorOut | None
     stay: StayOut | None = None
     """머무는 기간이 있는 지표 — 기간의 값은 그 기간에 생긴 것이 아니라 최근 N기간의 합이다."""
+    data_through: date | None = None
+    """**기록 끝** — 이 지표에서 건수가 있는 마지막 기간의 시작일(지금 실행이 셀 때 남긴
+    것, 전체 — 가시성과 무관). 보여 주는 값이다 — 빈 기간은 `source_through` 로 판정한다. 계산
+    시점의 기간보다 뒤로 가지 않는다(날짜 칸의 오타가 끝을 미래로 밀지 않게). 시간 칸이 없는
+    지표와 이 칸이 생기기 전에 센 실행은 null — 모르는 것이지 「비었다」 가 아니다."""
+    source_through: date | None = None
+    """**원천 기록 끝** — 원천 타입 **전체**(정의의 거르기 없이)에서 시간 칸 날짜가 있는 마지막
+    기간의 시작일, 지운 기록 제외 · 계산 시점의 기간보다 뒤로 가지 않는다(지금 실행이 남긴 것).
+    지표의 기록 끝은 거르기를 거친 기록이라 「소음」 만 센 지표 · 끝난 모델 · 정말 0건 · 드문
+    지표에서 원천이 살아 있어도 멈춘다 — 그래서 빈 기간은 이것으로 판정한다. 기록 끝보다
+    앞서지 않는다. 시간 칸이 없는 지표 · 이 칸이 생기기 전에 센 실행은 null(빈 기간으로 읽지
+    않는다)."""
+    own_gap: bool = False
+    """분자 쪽만의 빈 기간 — 원천 기록 끝의 다음 기간이 (닫힌 기간의 경계 - 여유)보다 앞이면
+    참. 여유는 한 기간, 일 단위만 5일(주말 · 설 · 추석 연휴). 분자 · 분모가 둘 다 비면
+    `own_gap` 과 `denominator.data_gap` 이 함께 참이다."""
+    data_gap: bool = False
+    """**닫힌 기간이 통째로 비었나**(분자 · 분모 어느 쪽이든) — `own_gap` 또는
+    `denominator.data_gap`. 닫힌 기간의 경계는 계산 시각에서 나와 원천이 멎어도 앞으로 가므로,
+    그 뒤 닫힌 기간의 0건은 「정말 0건」 이 아니라 「아직 안 들어옴」 일 수 있다. 지표 단위의
+    사실이라 읽은 기간 범위와 상관없다(분석의 주의는 범위가 원천 기록 끝 안에서 끝나면 빠진다).
+    수는 바꾸지 않는다 — 끝쪽 0건이 진짜일 때도 있다."""
+    freshness: list[FreshnessOut] = Field(default_factory=list)
+    """원천 타입에 넣는 데이터 소스마다의 신선도 — 목록 · 통계의 `freshness` 와 같은 모양(꺼 둔
+    것도, 이름 순). 원천 하나만 멎으면 다른 원천이 들어와 원천 기록 끝(최댓값)이 새것이라 빈
+    기간이 안 선다 — 그 하나를 이것이 말한다(분석은 주의 `source_issue`). 들어오는 원천이 없는
+    타입(손 · MCP 입력)은 빈 목록."""
     link: str | None = None
     """같은 조건의 지표 화면 주소(라우터 기준, `/metrics/<slug>?tab=…`) — 사람이 눌러 같은 것을
     본다. 읽기 · 분석 경로가 싣는다(`links.screen_link`)."""

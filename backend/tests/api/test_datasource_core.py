@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -690,6 +691,12 @@ def _saved(client: TestClient, admin: Signed, slug: str) -> dict[str, Any]:
     return dict(client.get(f"/api/datasources/{slug}", headers=admin.headers).json())
 
 
+def _when(text: str | None) -> datetime | None:
+    """응답의 시각 — 글자로 견주지 않는다(작업 결과는 UTC, 다시 읽은 것은 DB 의 시간대로
+    온다)."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
+
+
 def test_상한에서_끊기면_받은_만큼_넣고_다음_차례가_끊은_자리에서_잇는다(
     client: TestClient, admin: Signed, sibling: FakeCore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -707,8 +714,15 @@ def test_상한에서_끊기면_받은_만큼_넣고_다음_차례가_끊은_자
     assert first["run"]["status"] == "ok", first["run"]
     assert first["counts"]["create"] == 4, first["counts"]  # 쪽 경계(2행씩)에서 끊는다
     assert any("끊은 자리에서 잇습니다" in one for one in first["run"]["errors"])
+    # 차례는 성공이지만 아직 다 안 받았다 — 신선도가 「따라잡는 중」 을 말한다(2026-11-08 검토:
+    # 「방금 받은 자료」 로만 보여 덜 든 수를 최신으로 옮겼다).
+    fresh = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["freshness"]
+    mine = [one for one in fresh if one["slug"] == source["slug"]]
+    assert mine and mine[0]["catching_up"] is True
     saved = _saved(client, admin, source["slug"])
     assert saved["since_mark"] == ""  # 다 받기 전에는 시계를 안 옮긴다
+    # 끊은 자리를 들고 있어도 받은 만큼은 적용했다 — 마지막 성공은 옮긴다(시계와 다르다).
+    assert _when(saved["last_success_at"]) == _when(first["run"]["finished_at"])
     assert not any(key.startswith("_") for key in saved["options"])  # 화면의 설정이 아니다
 
     first_clock = sibling.as_of
@@ -794,12 +808,16 @@ def test_선_창구에_못_닿아도_객체와_외부_식별자는_남고_실행
     saved = _saved(client, admin, source["slug"])
     assert saved["last_status"] == "failed"
     assert saved["since_mark"] == sibling.as_of and saved["relations_since_mark"] == ""
+    # 객체는 들어갔어도 선이 빠졌다 — 「들어왔다」 가 아니다.
+    assert saved["last_success_at"] is None
 
     # 고쳐지면 다음 차례가 선을 받는다 — 객체를 새로 만들지 않는다.
     sibling.edges_status = 200
     again = _sync(client, admin, source["slug"])
     assert again["run"]["status"] == "ok", again["run"]
     assert again["counts"]["create"] == 0
+    saved = _saved(client, admin, source["slug"])
+    assert _when(saved["last_success_at"]) == _when(again["run"]["finished_at"])
 
 
 def test_지웠다_같은_키로_다시_만들면_산_것이_이긴다(

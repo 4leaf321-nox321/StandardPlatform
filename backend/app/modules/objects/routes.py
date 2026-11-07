@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.datasources import services as datasource_services
 from app.modules.files import services as files_services
 from app.modules.files.models import Attachment
 from app.modules.jobs import routes as jobs_routes
@@ -109,6 +110,7 @@ from app.modules.objects.schemas import (
     FieldOptionOut,
     FileCellOut,
     FillReportOut,
+    FreshnessOut,
     GroupOptionOut,
     HistoryBatchOut,
     HistoryEntryOut,
@@ -249,6 +251,42 @@ def _projection(scope: Scope) -> ObjectType | None:
     if scope.object_type is not None and system.is_system(scope.object_type):
         return scope.object_type
     return None
+
+
+def _freshness(db: Session, types: list[ObjectType]) -> list[FreshnessOut]:
+    """그 타입들에 들어오는 원천의 신선도(`datasources.freshness`) — 질의 한 번.
+
+    **목록 · 통계 · 상세가 함께 싣는다.** 원천 하나가 멎어도 숫자는 맞아 보이고(옛 값이지
+    틀린 값이 아니다), 그 사실을 따로 물으러 가는 사람은 없다. 다른 표를 비추는 타입은 원천이
+    그 표 자체라 빈 목록이다(데이터 소스도 그 타입에는 못 단다)."""
+    kept = [one.id for one in types if not system.is_system(one)]
+    return [
+        FreshnessOut(
+            slug=one.slug,
+            name=one.name,
+            kind=one.kind,
+            type_slug=one.type_slug,
+            interval_minutes=one.interval_minutes,
+            last_success_at=one.last_success_at,
+            last_run_at=one.last_run_at,
+            failing=one.failing,
+            stale=one.stale,
+            active=one.active,
+            catching_up=one.catching_up,
+        )
+        for one in datasource_services.freshness(db, kept)
+    ]
+
+
+def _asked_types(request: Request, scope: Scope) -> list[ObjectType]:
+    """신선도를 실을 타입 — 인터페이스를 `types=a|b` 로 좁혔으면 그 타입만(`_filtered` 와
+    같은 규칙). 안 좁히면 고르지 않은 타입 원천의 실패가 답에 「주의」 로 붙는다(2026-11-08
+    검토)."""
+    narrow = request.query_params.get("types")
+    if not narrow:
+        return scope.types
+    wanted = {one for one in narrow.split("|") if one}
+    return [one for one in scope.types if one.slug in wanted]
 
 
 #: 상세의 「관련 객체」 에 참조 칸으로 실을 상한 — 프로젝트 하나를 5천 개 과제가 가리키면 그
@@ -866,6 +904,7 @@ def summary(
         ],
         link=link,
         link_missing=link_missing,
+        freshness=_freshness(db, _asked_types(request, scope)),
     )
 
 
@@ -2340,6 +2379,7 @@ def list_objects(
         linked=_linked_cells(db, user, linked_columns, found),
         link=link,
         link_missing=link_missing,
+        freshness=_freshness(db, _asked_types(request, scope)),
     )
 
 
@@ -2660,6 +2700,7 @@ def object_profile(
         can_link=access.can_edit(db, user, object_type, row),
         watching=watches.watching(db, object_id=row.id, user_id=user.id),
         watcher_count=watches.counts(db, [row.id]).get(row.id, 0),
+        freshness=_freshness(db, [object_type]),
     )
 
 

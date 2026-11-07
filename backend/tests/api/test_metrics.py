@@ -403,7 +403,19 @@ def test_세어_둔_수가_통계_목록과_같다(client: TestClient, admin: Si
 
     runs = client.get(f"/api/metrics/{cases['slug']}/runs", headers=admin.headers).json()
     assert len(runs) == 1 and runs[0]["status"] == "ok" and runs[0]["rows"] == 8
-    assert runs[0]["stats"] == {"unbucketed": 1, "unbucketed_cohort": 1, "negative_age": 0}
+    # 기록 끝은 「오늘」 접수(건8)의 달 — 계산 시점(워터마크의 UTC 날짜)의 기간보다 뒤면
+    # 자르므로, 한국 시각으로 달이 막 바뀐 새벽이면 그 앞의 마지막 기록(3월)이다. 거르기가 없는
+    # 지표라 원천 기록 끝도 같다(같은 선으로 자른다).
+    seen = datetime.fromisoformat(runs[0]["watermark"]).astimezone(UTC).date()
+    this_month = date.fromisoformat(w["today"]).replace(day=1)
+    through = this_month if this_month <= seen else date(2026, 3, 1)
+    assert runs[0]["stats"] == {
+        "unbucketed": 1,
+        "unbucketed_cohort": 1,
+        "negative_age": 0,
+        "data_through": through.isoformat(),
+        "source_through": through.isoformat(),
+    }
 
 
 def test_기간별_표와_추이(client: TestClient, admin: Signed) -> None:

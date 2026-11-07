@@ -1444,7 +1444,9 @@ async def objects_list(
     길이를 말한다. 내용으로 답하려면 그 객체를 `object_get` 으로 읽는다.
 
     **`url`** 은 같은 조건의 화면(줄마다는 상세)이다 — 사람이 눌러 확인한다. 수를 옮길 때 `url`
-    과 부른 때를 함께, `link_missing` 이 있으면 화면이 그 인자 없이 연다고 말한다."""
+    과 부른 때를 함께, `link_missing` 이 있으면 화면이 그 인자 없이 연다고 말한다.
+    `freshness`(수집 현황)는 그 타입에 들어오는 원천의 최종 수집 시각 · 수집 실패 · 수집 지연 ·
+    적재 진행 중 — 이상이 있으면 「○○ 원천의 △△ 까지 자료」 라고 붙인다."""
     filters = _filter_params(q, status, properties, conditions, as_of, year, types)
     params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
     params += [("columns", one) for one in columns or []]
@@ -1846,6 +1848,8 @@ async def objects_summary(
       `{field: <칸>, op: "gte"}` 와 `{op: "lt"}` 둘을 건다(`eq` 는 0건).
 
     사용자에게 옮길 때 **빼먹지 않는다**:
+    - `freshness`(수집 현황) — 원천의 최종 수집 시각 · 수집 실패 · 수집 지연 · 적재 진행 중.
+      이상이 있으면 「○○ 원천의 △△ 까지 자료」 라고 붙인다(GUIDE 「기본 습관」).
     - `total` 은 거른 **객체 수**. 「(비어 있음)」 칸도 숨기지 않는다.
     - `other_groups`·`other_count` 가 0 이 아니면 「그 밖에 N종류 M건」.
     - `overlap` 이 true 면 한 객체가 여러 칸에 든다(여러 값 칸, 여럿과 이어진
@@ -1959,7 +1963,9 @@ async def object_get(
     것이다 — `to < length` 면 `text_from=<to>` 로 다시 불러 이어 읽는다. 다 읽기 전에
     「본문에 그런 내용은 없다」 고 답하지 마라.
 
-    `url` 은 그 객체의 상세 화면이다 — 값을 옮길 때 함께 준다(사람이 눌러 확인한다)."""
+    `url` 은 그 객체의 상세 화면이다 — 값을 옮길 때 함께 준다(사람이 눌러 확인한다).
+    `freshness`(수집 현황)는 그 타입에 들어오는 원천의 최종 수집 시각 · 수집 실패 · 수집
+    지연이다."""
     params: list[tuple[str, Any]] = []
     if as_of:
         params.append(("as_of", as_of))
@@ -3644,6 +3650,9 @@ async def metric_query(
       몫이 아니다 — 평균 · 최소 · 최대는 거절).
 
     사용자에게 옮길 때 **빼먹지 않는다**:
+    - `source_through`(원천 최종 반영 기간) · `data_gap`(미반영 구간) · `freshness`(수집
+      현황) — `data_gap` 이면 그 구간의 0건 · 감소를 결론으로 말하지 않는다(수집이 멈췄을 수
+      있다).
     - `computed_at`(계산 시각)과 `stale` — 세어 둔 값이다. `closed` 가 false 인 기간은 더
       들어올 수 있다.
     - `overlap` 이 true 면 셀의 합이 기록 수보다 크다(여러 값 기준). `unbucketed` 는 시간 칸이

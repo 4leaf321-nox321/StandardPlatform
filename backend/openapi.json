@@ -24250,6 +24250,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -26273,6 +26314,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -26797,6 +26879,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -27145,6 +27268,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -27621,6 +27785,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -29282,6 +29487,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -29834,6 +30080,18 @@
               }
             ],
             "title": "Last Status"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
           },
           "created_at": {
             "type": "string",
@@ -30627,6 +30885,53 @@
           "truncated": {
             "type": "boolean",
             "title": "Truncated"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           }
         },
         "type": "object",
@@ -32480,6 +32785,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -32846,6 +33192,86 @@
           "cost_high"
         ],
         "title": "ForecastTotalOut"
+      },
+      "FreshnessOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "title": "Interval Minutes"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "failing": {
+            "type": "boolean",
+            "title": "Failing"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": true
+          },
+          "catching_up": {
+            "type": "boolean",
+            "title": "Catching Up",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "kind",
+          "type_slug",
+          "interval_minutes",
+          "last_success_at",
+          "last_run_at",
+          "failing",
+          "stale"
+        ],
+        "title": "FreshnessOut",
+        "description": "이 타입에 넣는 **데이터 소스** 하나(꺼 둔 것도) — 그 원천의 자료가 언제까지 들어왔나.\n\n원천 하나가 멎어도 목록 · 통계의 숫자는 맞아 보인다 — 틀린 값이 아니라 옛 값이라서다.\n읽는 쪽(사람 · AI)이 「이 수는 언제 것인가」 를 답과 함께 받게 싣는다."
       },
       "GatewayDelegationOut": {
         "properties": {
@@ -33350,6 +33776,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -35369,6 +35836,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -36595,6 +37103,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -40190,6 +40739,13 @@
             },
             "type": "array",
             "title": "Link Missing"
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           }
         },
         "type": "object",
@@ -40345,6 +40901,13 @@
             "type": "integer",
             "title": "Watcher Count",
             "default": 0
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           }
         },
         "type": "object",
@@ -41807,6 +42370,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -43463,6 +44067,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -45093,6 +45738,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -50895,6 +51581,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -51985,6 +52712,47 @@
               }
             ]
           },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
           "link": {
             "anyOf": [
               {
@@ -52524,6 +53292,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -53238,6 +54047,13 @@
             },
             "type": "array",
             "title": "Link Missing"
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           }
         },
         "type": "object",
@@ -53423,6 +54239,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [
@@ -56030,6 +56887,47 @@
                 "type": "null"
               }
             ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
           },
           "link": {
             "anyOf": [

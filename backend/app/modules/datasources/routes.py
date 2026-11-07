@@ -75,6 +75,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         is_active=row.is_active,
         last_run_at=row.last_run_at,
         last_status=row.last_status,
+        last_success_at=row.last_success_at,
         created_at=row.created_at,
         reconciled_at=row.reconciled_at,
     )
@@ -296,7 +297,13 @@ def update_source(
     if "page_size" in sent and payload.page_size is not None:
         row.page_size = payload.page_size
     if "type_slug" in sent and payload.type_slug is not None:
-        row.type_id = _type(db, payload.type_slug).id
+        type_id = _type(db, payload.type_slug).id
+        if type_id != row.type_id:
+            # 새 타입으로는 아직 한 번도 성공하지 않았다 — 옛 타입의 마지막 성공이 새 타입의
+            # 신선도로 실리면 「그 타입의 자료는 그때까지 들어왔다」 는 거짓이 된다
+            # (2026-11-08 검토).
+            row.last_success_at = None
+        row.type_id = type_id
     if "workspace_slug" in sent:
         workspace = _workspace(db, payload.workspace_slug)
         row.workspace_id = workspace.id if workspace else None

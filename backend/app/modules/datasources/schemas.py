@@ -50,7 +50,12 @@ class DataSourceOut(BaseModel):
     interval_minutes: int
     is_active: bool
     last_run_at: datetime | None
+    """마지막 실행이 끝난 때 — **실패해도 옮겨 간다.** 「언제까지 들어왔나」 는
+    `last_success_at`."""
     last_status: str | None
+    last_success_at: datetime | None = None
+    """받아서 **적용까지 성공한** 마지막 실행이 끝난 때. 계획 · 실패 · 일부만 들어간 실패는 안
+    옮긴다. 비면 아직 한 번도 성공하지 않았다."""
     created_at: datetime
     reconciled_at: datetime | None = None
     """`ra_reports` — 마지막으로 전량을 받아 대조한 때(ADR 0018)."""

@@ -24,6 +24,13 @@
   수 있다).
 
 처음 확인(만들 때)에서 본 것은 「처음부터 있던 것」(`baseline`)으로 적고 알리지 않는다.
+
+## 원천 기록이 끊긴 뒤의 결론
+
+원천이 멎으면 닫힌 기간의 0건이 「내려감 30 → 0」 · 관리도 신호로 선다. **결론을 보류하지는
+않는다** — 끝쪽 0건이 진짜일 때도 있다(대책 뒤). 대신 그 계산의 머리가 그렇다고
+말했으면(분석의 주의 `data_gap`) 그 말을 발생마다 싣는다: 발견의 `detail.data_gap`(발생 ·
+눈여겨볼 것에 남는다), 지금 확인의 `notes`, 알림 본문의 끝 줄.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from app.modules.metrics import compute, links, params, query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import ALERT_RECIPES, MetricAlert, MetricAlertEvent, MetricDef
 from app.modules.metrics.recipes import changes, common, control, registry, series, sprt
+from app.modules.metrics.recipes.schemas import AnalysisHeader
 from app.modules.notifications import services as notifications
 from app.shared.errors import AppError, code
 
@@ -106,6 +114,22 @@ class Outcome:
     run_id: uuid.UUID | None
     positions: dict[str, int] = field(default_factory=dict)
     """변화점 — 부분군 시작일 → 차례. 「두 기간 안에서 움직인 같은 변화점」 을 가른다."""
+
+
+def gap_line(out: AnalysisHeader) -> str | None:
+    """그 계산의 머리가 원천 기록이 끊긴 뒤의 닫힌 기간을 말했나 — 분석의 주의 `data_gap` 의 말
+    그대로(분자 · 분모 어느 쪽이든, 읽은 범위가 원천 기록 끝 안에서 끝나면 없다)."""
+    return next((one.message for one in out.caveats if one.code == "data_gap"), None)
+
+
+def _with_gap(outcome: Outcome, line: str | None) -> Outcome:
+    """발견마다 `detail.data_gap` 을, 지금 확인에는 한 줄을 싣는다 — 결론은 그대로 둔다."""
+    if line is None:
+        return outcome
+    for one in outcome.findings:
+        one.detail["data_gap"] = line
+    outcome.notes.append(line)
+    return outcome
 
 
 # --- 인자 -------------------------------------------------------------------------------
@@ -306,6 +330,7 @@ def _sprt(
             )
     findings: list[Finding] = []
     skipped: list[str] = []
+    gap: str | None = None
     run_id: uuid.UUID | None = metric.current_run_id
     for target in targets:
         try:
@@ -330,6 +355,7 @@ def _sprt(
             skipped.append(f"{target}: {caught.message}")
             continue
         run_id = out.run_id
+        gap = gap or gap_line(out)
         if out.decision == "continue" or (
             out.decision == "not_worse" and not _flag(values, "notify_not_worse")
         ):
@@ -365,7 +391,7 @@ def _sprt(
         notes.append(
             f"전작을 못 찾았거나 볼 수 없어 건너뛴 모델 {len(skipped)}개 — {skipped[0]}"
         )
-    return Outcome(findings, notes, run_id)
+    return _with_gap(Outcome(findings, notes, run_id), gap)
 
 
 def _sprt_scan(
@@ -443,7 +469,7 @@ def _sprt_scan(
     notes = [f"{out.by_label} {out.scanned}개를 봤습니다 — 값마다 α {out.alpha_each:.4f}."]
     if out.skipped:
         notes.append(f"견주지 못한 값 {len(out.skipped)}개 — {out.skipped[0]}")
-    return Outcome(findings, notes, out.run_id)
+    return _with_gap(Outcome(findings, notes, out.run_id), gap_line(out))
 
 
 def _number(value: float | None) -> str:
@@ -495,7 +521,7 @@ def _control(
                         },
                     )
                 )
-    return Outcome(findings, [], out.run_id)
+    return _with_gap(Outcome(findings, [], out.run_id), gap_line(out))
 
 
 def _changes(
@@ -550,7 +576,7 @@ def _changes(
             )
         )
     positions = {point.when: index for index, point in enumerate(out.points)}
-    return Outcome(findings, [], out.run_id, positions)
+    return _with_gap(Outcome(findings, [], out.run_id, positions), gap_line(out))
 
 
 def _changes_scan(
@@ -618,7 +644,7 @@ def _changes_scan(
     notes = [
         f"{out.by_label} {out.scanned}개를 봤습니다 — 변화점 벌점 +{out.extra_penalty:.1f}."
     ]
-    return Outcome(findings, notes, out.run_id, positions)
+    return _with_gap(Outcome(findings, notes, out.run_id, positions), gap_line(out))
 
 
 def evaluate(
@@ -706,6 +732,12 @@ def record(
         lines = [row.title for row in added[:BODY_LINES]]
         if len(added) > BODY_LINES:
             lines.append(f"외 {len(added) - BODY_LINES}건")
+        gap = next(
+            (row.detail["data_gap"] for row in added if row.detail.get("data_gap")), None
+        )
+        if gap:
+            # 원천 기록이 끊긴 뒤의 결론일 수 있다 — 알림만 읽고 대책을 세우지 않게.
+            lines.append(f"주의: {gap}")
         notifications.notify(
             db,
             user_id=alert.owner_id,

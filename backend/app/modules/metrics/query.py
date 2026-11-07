@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import calendar
 import re
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -46,13 +47,16 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.modules.accounts.models import User
+from app.modules.datasources import services as datasource_services
 from app.modules.metrics import schemas
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics import stay as stay_module
 from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects import axes, conditions, paths
+from app.modules.objects.schemas import FreshnessOut
 from app.modules.objects.summary import METRIC_LABELS
+from app.modules.ontology.models import ObjectType
 from app.shared.errors import AppError, code
 from app.shared.permissions import visible_owner_clause
 
@@ -338,6 +342,9 @@ class Denominator:
     run: MetricRun | None = None
     """분모 지표의 지금 실행 — 분석이 분모 쪽 기간도 닫혔는지 본다(판매가 덜 들어온 달)."""
     before: date | None = None
+    period_to: date | None = None
+    """분모를 읽은 범위의 끝(「앞까지」) — 그 범위가 분모의 원천 기록 끝 안에서 끝나면 빈
+    기간의 주의를 안 단다(`recipes.common.gap_note`). 범위 없이 전부 합이면 None."""
 
     def lookup(self, cell: Cell, grain: str | None) -> float | None:
         when: date | None = None
@@ -357,7 +364,25 @@ class Denominator:
             return None
         return numerator / found * self.per
 
-    def out(self) -> schemas.DenominatorOut:
+    @property
+    def grain(self) -> str | None:
+        """분모 지표의 기간 단위 — 기록 끝 · 빈 기간을 그 단위로 잰다."""
+        return self.spec.time.grain if self.spec.time is not None else None
+
+    def through(self) -> date | None:
+        """분모 지표의 기록 끝(`data_through_of`) — 보여 주는 값."""
+        return data_through_of(self.run)
+
+    def source_through(self) -> date | None:
+        """분모 지표의 **원천** 기록 끝(`source_through_of`) — 빈 기간을 이것으로 판정한다."""
+        return source_through_of(self.run)
+
+    def gap(self) -> bool:
+        """분모 쪽의 닫힌 기간이 통째로 비었나 — 분자와 같은 규칙(`has_gap`)을 분모 지표의
+        원천 기록 끝 · 실행 · 닫힘 일수로."""
+        return has_gap(self.source_through(), self.before, self.grain)
+
+    def out(self, freshness: list[FreshnessOut] | None = None) -> schemas.DenominatorOut:
         return schemas.DenominatorOut(
             metric=self.metric.slug,
             label=self.metric.label,
@@ -367,6 +392,11 @@ class Denominator:
             per=self.per,
             missing=self.missing,
             truncated=self.truncated,
+            grain=self.grain,
+            data_through=self.through(),
+            source_through=self.source_through(),
+            data_gap=self.gap(),
+            freshness=freshness or [],
         )
 
 
@@ -430,6 +460,7 @@ def read_denominator(
         truncated,
         run=den_run,
         before=closed_before(den_run, den_spec.settle_days),
+        period_to=period_to,
     )
 
 
@@ -446,7 +477,15 @@ class OwnTotal(Denominator):
             return None
         return numerator / cell.count * self.per
 
-    def out(self) -> schemas.DenominatorOut:
+    def through(self) -> date | None:
+        """분모가 곧 분자의 기록이라 기록 끝도 분자의 것 — 따로 보고하지 않는다."""
+        return None
+
+    def source_through(self) -> date | None:
+        """원천도 분자의 것 — 분자 쪽 판정이 이미 본다."""
+        return None
+
+    def out(self, freshness: list[FreshnessOut] | None = None) -> schemas.DenominatorOut:
         return schemas.DenominatorOut(
             metric=self.metric.slug,
             label=f"{self.metric.label} — 같은 기록 전체",
@@ -596,6 +635,9 @@ class Frame:
     run: MetricRun | None
     before: date | None
     """이 날 앞에 끝나는 기간은 닫혔다 — 계산 시각 - 닫힘 일수."""
+    period_to: date | None = None
+    """분석이 읽은 기간 범위의 끝(「앞까지」, 기간 경계로 올린 것) — 원천 기록 끝 안에서 끝나면
+    보여 준 기간에는 빈 기간이 없다(`recipes.common.gap_note`)."""
 
 
 def frame(
@@ -616,7 +658,14 @@ def frame(
         else None
     )
     run = current_run(db, metric)
-    return Frame(cells, truncated, den, run, closed_before(run, built.spec.settle_days))
+    return Frame(
+        cells,
+        truncated,
+        den,
+        run,
+        closed_before(run, built.spec.settle_days),
+        period_to=ask.period_to,
+    )
 
 
 def snapshot(db: Session) -> None:
@@ -962,7 +1011,72 @@ def is_closed(period: date | None, grain: str | None, before: date | None) -> bo
     return axes.next_period(period, grain) <= before
 
 
+def _stat_date(run: MetricRun | None, key: str) -> date | None:
+    """실행의 `stats` 에 남긴 날짜 하나. 그 칸이 생기기 전에 센 실행 · 시간 칸이 없는 지표 ·
+    망가진 값은 None — 모르는 것이지 비어 있는 것이 아니라서 빈 기간으로도 읽지 않는다."""
+    if run is None:
+        return None
+    raw = (run.stats or {}).get(key)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def data_through_of(run: MetricRun | None) -> date | None:
+    """그 실행이 남긴 **기록 끝**(`stats.data_through` — 이 지표에서 건수가 있는 마지막 기간의
+    시작일, `compute.data_through`). 보여 주는 값이다 — 빈 기간은 `source_through_of` 로
+    판정한다."""
+    return _stat_date(run, "data_through")
+
+
+def source_through_of(run: MetricRun | None) -> date | None:
+    """그 실행이 남긴 **원천 기록 끝**(`stats.source_through` — 원천 타입 전체에서 시간 칸
+    날짜가 있는 마지막 기간의 시작일, `compute.source_through`). 빈 기간(`has_gap`)을 이것으로
+    판정한다 — 지표의 기록 끝은 거르기를 거친 기록이라 좁은 지표 · 드문 지표에서 원천이 살아
+    있어도 멈춘다. 이 칸이 없는 옛 실행은 None 이라 빈 기간으로 읽지 않는다."""
+    return _stat_date(run, "source_through")
+
+
+#: 일 단위의 여유(닫힌 날 수) — 원천 기록 끝 뒤로 닫힌 날이 이보다 많이 비어야 빈 기간이다.
+#: 일 단위만 한 기간이 아니라 이만큼: 주말(이틀)이면 월요일 새벽 계산이 늘 경고했고, 설 · 추석
+#: 사흘이 주말에 붙으면 닷새 동안 기록이 없다 — 연휴 다음 날 새벽의 정기 계산 · 아침의 손
+#: 재계산까지 경고 없이 넘기는 값이 5 다(4 면 월 ~ 수 추석 다음 날 아침에 선다). 진짜 멎음은
+#: 엿새째에 서고, 그 전에도 원천의 실패 · 멎음은 데이터 소스 쪽(`freshness`)이 바로 말한다.
+DAY_SLACK = 5
+
+
+def has_gap(through: date | None, before: date | None, grain: str | None) -> bool:
+    """**닫힌 기간이 통째로 비었나** — (원천) 기록 끝의 다음 기간 시작이 (닫힌 기간의 경계 -
+    여유) 보다 앞이면. 여유는 한 기간, 일 단위만 `DAY_SLACK` 일.
+
+    닫힌 기간의 경계(`closed_before`)는 계산 시각에서 나온다 — 원천이 멎어도 밤마다 앞으로
+    간다. 그러면 분석은 기록이 끊긴 뒤의 기간을 「닫힌 0건」 으로 읽어 가짜 하락을 낸다.
+    여유를 빼고 견주는 것은 정상 지연을 넘기려고다: 월 단위 · 닫힘 0일이면 11월 1일에 10월이
+    막 닫히는데, 그날 10월 기록이 하나도 없는 것은 아직 들어오는 중일 수 있다. 하루라도 더 지나
+    빈 구간이 한 기간보다 길어지면 참이다."""
+    if through is None or before is None or grain is None:
+        return False
+    slack = DAY_SLACK if grain == "day" else 1
+    return axes.next_period(through, grain) < advance(before, -slack, grain)
+
+
+def freshness_of(db: Session, type_ids: list[uuid.UUID]) -> dict[str, list[FreshnessOut]]:
+    """원천 타입들에 넣는 데이터 소스의 신선도(`datasources.freshness`) — 타입 slug 마다. 질의
+    한 번(분자 · 분모의 원천을 함께). 원천 하나가 멎어도 다른 원천이 들어오면 기록 끝(최댓값)은
+    새것이라 빈 기간이 안 선다 — 그 하나를 이것이 말한다."""
+    out: dict[str, list[FreshnessOut]] = {}
+    for one in datasource_services.freshness(db, type_ids):
+        out.setdefault(one.type_slug, []).append(
+            FreshnessOut.model_validate(one, from_attributes=True)
+        )
+    return out
+
+
 def header_of(
+    db: Session,
     metric: MetricDef,
     built: spec_module.Built,
     run: MetricRun | None,
@@ -971,6 +1085,13 @@ def header_of(
     denominator: Denominator | None,
 ) -> dict[str, Any]:
     stats = run.stats if run is not None else {}
+    source = source_through_of(run)
+    own_gap = has_gap(source, closed_before(run, built.spec.settle_days), built.grain)
+    # 분모가 다른 지표면 그 원천도 — 조건 비율(같은 기록 전체)은 분자의 원천이다.
+    den_type: ObjectType | None = None
+    if denominator is not None and not isinstance(denominator, OwnTotal):
+        den_type = db.get(ObjectType, denominator.metric.source_type_id)
+    fresh = freshness_of(db, [built.source.id, *([den_type.id] if den_type else [])])
     return {
         "slug": metric.slug,
         "label": metric.label,
@@ -987,8 +1108,17 @@ def header_of(
         "unbucketed_cohort": int(stats.get("unbucketed_cohort", 0)),
         "negative_age": int(stats.get("negative_age", 0)),
         "truncated": truncated or (denominator.truncated if denominator else False),
-        "denominator": denominator.out() if denominator is not None else None,
+        "denominator": (
+            denominator.out(fresh.get(den_type.slug, []) if den_type is not None else [])
+            if denominator is not None
+            else None
+        ),
         "stay": _stay_out(built),
+        "data_through": data_through_of(run),
+        "source_through": source,
+        "own_gap": own_gap,
+        "data_gap": own_gap or (denominator.gap() if denominator is not None else False),
+        "freshness": fresh.get(built.source.slug, []),
     }
 
 
@@ -1127,7 +1257,7 @@ def table(
                 composition=part,
             )
         )
-    header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
+    header = header_of(db, metric, built, run, truncated=truncated, denominator=denominator)
     return schemas.TableOut(
         **header,
         dims=list(ask.dims),
@@ -1235,7 +1365,7 @@ def series(
                 points=points,
             )
         )
-    header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
+    header = header_of(db, metric, built, run, truncated=truncated, denominator=denominator)
     return schemas.SeriesOut(
         **header,
         split=split,
@@ -1345,7 +1475,7 @@ def cohort(
                 cells=out_cells,
             )
         )
-    header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
+    header = header_of(db, metric, built, run, truncated=truncated, denominator=denominator)
     return schemas.CohortOut(**header, cumulative=cumulative, ages=ages, rows=rows)
 
 

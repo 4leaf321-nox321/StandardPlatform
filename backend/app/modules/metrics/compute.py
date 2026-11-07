@@ -56,7 +56,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.modules.audit.models import AuditEntry
 from app.modules.coreapi import services as coreapi_services
-from app.modules.metrics import incremental, timeindex
+from app.modules.metrics import incremental, query, timeindex
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics import stay as stay_module
 from app.modules.metrics import visits as visits_module
@@ -298,6 +298,97 @@ def _spread(grouped: Any, dims: int, grain: str, stay: stay_module.Stay) -> Any:
     )
 
 
+def data_through(
+    db: Session,
+    metric: MetricDef,
+    built: spec_module.Built,
+    *,
+    cells_run: uuid.UUID,
+    seen: date,
+) -> date | None:
+    """**기록 끝** — 건수가 있는 마지막 기간의 시작일(`stats.data_through`). 시간 칸이 없으면
+    None.
+
+    읽기의 닫힌 기간 경계는 계산 시각에서 나와 원천이 멎어도 앞으로 간다 — 이 값이 「이
+    지표의 기록은 어디까지 있나」 를 따로 남겨 머리 · 분석이 보여 준다. **빈 기간의 판정은
+    이것이 아니라 원천 기록 끝(`source_through`)으로 한다** — 지표의 셀은 정의의 거르기를 거친
+    기록이라, 「소음」 만 센 지표 · 끝난 모델만 센 지표 · 대책 뒤 정말 0건 · 드문 지표(월 λ=1
+    이면 37% 의 달이 0건)는 원천이 살아 있어도 끝이 멈춘다. **계산 시점의 기간보다 뒤로는 안
+    간다** — 날짜 칸의 오타(2062-09)가 끝을 미래로 밀면 멎은 원천이 늘 「들어오는 중」 으로
+    보인다. 기간 시작일이 워터마크 날짜 이하면 그 날의 기간 이하다.
+
+    셀 표의 `max(period)` 한 번이라 싸다(`ix_metric_values_period`). **머무는 기간 지표만은
+    원천에서 잰다** — 셀이 기록을 계산 시점까지 펼쳐 두어(`_spread`) 셀로는 기록이 멎은 기간을
+    모른다. 그 지표는 늘 전량이라(증분 안 됨) 원천을 한 번 더 읽는 값이 계산 한 번의 몫 안이다.
+    """
+    if built.time is None:
+        return None
+    if built.stay is not None:
+        raw = incremental.date_expr(built.time.key)
+        found = db.scalar(
+            built.base()
+            .with_only_columns(func.max(raw))
+            .select_from(ObjectInstance)
+            .where(_within(raw, seen, built.time.grain))
+        )
+        return query.floor_period(found, built.time.grain) if isinstance(found, date) else None
+    last = db.scalar(
+        select(func.max(MetricValue.period)).where(
+            MetricValue.metric_id == metric.id,
+            MetricValue.run_id == cells_run,
+            MetricValue.count > 0,
+            MetricValue.period <= seen,
+        )
+    )
+    return last if isinstance(last, date) else None
+
+
+def _within(raw: Any, seen: date, grain: str) -> Any:
+    """날짜가 **계산 시점의 기간 안까지**인가 — 셀에서 잰 기록 끝(기간 시작일 ≤ 워터마크
+    날짜)과 같은 선. 날로 자르면(`<= seen`) 워터마크가 UTC 날짜라 한국 시각 새벽에 「오늘」
+    접수가 빠져, 원천 기록 끝이 지표의 기록 끝보다 앞섰다(시험이 잡았다 — 월 지표에서 11월
+    대신 3월)."""
+    after = incremental.next_period(query.floor_period(seen, grain), grain)
+    return raw < after if after is not None else raw <= seen
+
+
+def source_through_statement(built: spec_module.Built, seen: date) -> Any:
+    """원천 기록 끝을 묻는 문장 — **원천 타입 전체**(정의의 거르기 없이)의 시간 칸 날짜 최댓값,
+    계산 시점의 기간 안까지(`_within`) · 지운 것 제외. `built.time` 이 있어야 한다.
+
+    큰 타입은 날짜 칸 색인(`timeindex` — `sp_date(properties ->> '<칸>')` 에 `WHERE type_id =
+    '<원천>' AND deleted_at IS NULL`)을 타야 2,000만 건에서도 한 줄 읽기다: 날짜 식은 색인 식과
+    **글자 그대로 같은** `incremental.date_expr`, 원천 타입도 매개변수가 아니라 글자로(부분
+    색인의 조건을 플래너가 증명하게 — `incremental.period_filter` 와 같은 까닭), 지운 것 제외도
+    그 색인의 조건이다. 그러면 플래너가 max 를 색인의 거꾸로 읽기 한 줄(`LIMIT 1`)로 바꾼다.
+    색인이 없으면 타입 전체를 훑는다 — 2,000만 건에서 25초(2026-11-08 실측, 병렬 읽기). 켜진
+    지표의 시간 칸이면 큰 타입에는 타이머가 색인을 세운다(`timeindex.wanted`)."""
+    assert built.time is not None
+    raw = incremental.date_expr(built.time.key)
+    typed = text(f"objects.type_id = '{uuid.UUID(str(built.source.id))}'::uuid")
+    return (
+        select(func.max(raw))
+        .select_from(ObjectInstance)
+        .where(
+            typed, ObjectInstance.deleted_at.is_(None), _within(raw, seen, built.time.grain)
+        )
+    )
+
+
+def source_through(db: Session, built: spec_module.Built, *, seen: date) -> date | None:
+    """**원천 기록 끝** — 원천 타입 전체에서 시간 칸 날짜가 있는 마지막 기간의 시작일
+    (`stats.source_through`). 시간 칸이 없거나 날짜 있는 기록이 없으면 None.
+
+    빈 기간(`query.has_gap`)은 이것으로 판정한다 — 지표의 기록 끝(`data_through`)은 거르기를
+    거친 기록이라 좁은 지표 · 드문 지표 · 정말 0건인 끝에서 원천이 살아 있어도 멈춘다. 원천
+    타입 전체가 멎어야 「아직 안 들어옴」 이다. 날짜 칸의 오타는 자른다(계산 시점의 기간 뒤 —
+    지표의 기록 끝과 같은 선이라 원천 기록 끝은 그보다 앞서지 않는다)."""
+    if built.time is None:
+        return None
+    found = db.scalar(source_through_statement(built, seen))
+    return query.floor_period(found, built.time.grain) if isinstance(found, date) else None
+
+
 def built_of(db: Session, metric: MetricDef) -> spec_module.Built:
     """정의 행 → 지은 것. 정의가 깨졌으면(칸이 지워짐 · 분모가 사라짐) 그 이유를 말한다."""
     source = db.get(ObjectType, metric.source_type_id)
@@ -453,6 +544,12 @@ def run_one(
         "unbucketed_cohort": int(totals[3]) if built.cohort is not None else 0,
         "negative_age": int(totals[4]),
     }
+    through = data_through(db, metric, built, cells_run=cells_run, seen=seen)
+    if through is not None:
+        stats["data_through"] = through.isoformat()
+    source = source_through(db, built, seen=seen)
+    if source is not None:
+        stats["source_through"] = source.isoformat()
     versions = rules_versions(db, metric, built)
     if versions:
         stats["rules"] = versions

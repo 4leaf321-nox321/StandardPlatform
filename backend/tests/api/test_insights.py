@@ -419,3 +419,26 @@ def test_관리도는_튄_달을_신호로_세우고_그_모델의_차트에_적
         "2029-10-01"
     ]
     assert None not in by_value
+
+
+def test_원천_기록이_끊긴_뒤의_결론에는_그_말이_실리고_돌아오면_빠진다(
+    client: TestClient, admin: Signed
+) -> None:
+    """결론은 보류하지 않는다 — 그 분석의 머리가 빈 기간을 말했으면 결론마다 `detail.data_gap`
+    에 그 말을 싣고(경보와 같다), 원천이 돌아와 다시 훑으면 빠진다."""
+    from tests.api.test_metric_data_through import _stamp
+
+    _, slug = _setup(client, admin)
+    _stamp(slug, source_through="2029-06-01")  # 계산 2030-02-15 — 7월부터가 비었다
+    _scan(client, admin, slug)
+    found = [one for one in _mine(client, admin, slug) if not one["past"]]
+    assert {one["kind"] for one in found} >= {"change"}, found
+    for one in found:
+        assert one["detail"]["data_gap"].startswith(
+            "2029-07 이후는 미반영 구간입니다(원천 최종 반영 기간 2029-06)"
+        ), one
+
+    _stamp(slug, source_through="2030-01-01")
+    _scan(client, admin, slug)
+    again = [one for one in _mine(client, admin, slug) if not one["past"]]
+    assert again and all("data_gap" not in one["detail"] for one in again)

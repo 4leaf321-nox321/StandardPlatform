@@ -1524,3 +1524,343 @@ def test_차례는_소스를_돌기_직전에_다시_읽는다(
     result = _round(db, [first["slug"], later["slug"]])
     statuses = {one["slug"]: one["status"] for one in result["sources"]}
     assert statuses == {first["slug"]: "ok", later["slug"]: "skipped"}
+
+
+# --- 마지막 성공 · 신선도 — 자료가 언제까지 들어왔나 ----------------------------------------
+
+
+def _when(text: str | None) -> datetime | None:
+    """응답의 시각 — 글자로 견주지 않는다(작업 결과는 UTC, 다시 읽은 것은 DB 의 시간대로
+    온다)."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
+
+
+def test_마지막_성공은_받아서_적용까지_성공한_실행만_옮긴다(
+    client: TestClient, admin: Signed, plm: FakeOData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`last_run_at` 은 실패해도 옮겨 가서, 사흘째 실패 중인 소스와 방금 받은 소스가 같아
+    보였다. 계획 · 실패 · 일부만 들어간 실패 · 한꺼번에 사라져 멈춘 것은 「들어왔다」 가
+    아니다."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    plm.rows = [
+        {"VendorNo": f"V-{n:03}", "Name": f"공급사 {n}", "Short": "", "CountryCd": "KR"}
+        for n in range(1, 13)
+    ]
+    slug = _source(client, admin, vendor, **_bare(deprecate_missing=True))["slug"]
+
+    planned = _sync(client, admin, slug).json()
+    assert planned["run"]["status"] == "planned", planned["run"]
+    assert _saved(client, admin, slug)["last_success_at"] is None
+
+    done = _sync(client, admin, slug, apply=True).json()
+    assert done["run"]["status"] == "ok", done["run"]
+    success = _when(_saved(client, admin, slug)["last_success_at"])
+    assert success is not None and success == _when(done["run"]["finished_at"])
+
+    def unchanged(run: dict[str, Any]) -> None:
+        saved = _saved(client, admin, slug)
+        assert _when(saved["last_success_at"]) == success, run
+        assert _when(saved["last_run_at"]) == _when(run["finished_at"]), run
+
+    # 계획만 본 것 — `last_run_at` 도 안 옮긴다(실패일 때만).
+    again = _sync(client, admin, slug).json()["run"]
+    assert again["status"] == "planned"
+    assert _when(_saved(client, admin, slug)["last_success_at"]) == success
+
+    # 바깥에 못 닿았다.
+    plm.auth_required = "Bearer 없는것"
+    failed = _sync(client, admin, slug, apply=True).json()["run"]
+    assert failed["status"] == "failed" and failed["applied"] is False, failed
+    unchanged(failed)
+    plm.auth_required = None
+
+    # 조각은 들어갔는데 뒤에서 멈췄다(「그 전에 들어간 조각」) — 들어간 것이 있어도 실패다.
+    def boom(*_args: Any, **_kwargs: Any) -> int:
+        raise RuntimeError("사용 중지 단계에서 터짐")
+
+    monkeypatch.setattr(services, "_bury", boom)
+    crashed = _sync(client, admin, slug, apply=True).json()["run"]
+    assert crashed["status"] == "failed" and crashed["applied"] is True, crashed
+    unchanged(crashed)
+    monkeypatch.undo()
+
+    # 바깥이 한꺼번에 비어 멈췄다(held back) — 받은 행은 반영했어도 성공이 아니다.
+    plm.rows = []
+    held = _sync(client, admin, slug, apply=True).json()
+    assert held["run"]["status"] == "failed" and held["counts"]["gone_held_back"] == 12, held
+    unchanged(held["run"])
+
+
+def test_선만_받는_소스도_적용에_성공해야_마지막_성공을_적는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """선만 받는 소스는 객체 소스와 다른 길(`_sync_body` 앞쪽)로 끝난다 — 그 길도 같은 규칙."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    kind = f"partner_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "협력",
+                    "src_type_slugs": [vendor],
+                    "dst_type_slugs": [vendor],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    for key in ("V-001", "V-002"):
+        _make_object(client, admin, vendor, label=key, key=key)
+    plm.rows = [{"VendorNo": "V-001", "Name": "V-002", "Short": "", "CountryCd": ""}]
+    slug = _source(
+        client,
+        admin,
+        vendor,
+        mapping={
+            "relations": {
+                "relation": kind,
+                "src": {"column": "VendorNo"},
+                "dst": {"column": "Name"},
+            }
+        },
+    )["slug"]
+
+    assert _sync(client, admin, slug).json()["run"]["status"] == "planned"
+    assert _saved(client, admin, slug)["last_success_at"] is None
+    done = _sync(client, admin, slug, apply=True).json()["run"]
+    assert done["status"] == "ok", done
+    success = _when(_saved(client, admin, slug)["last_success_at"])
+    assert success == _when(done["finished_at"])
+
+    plm.auth_required = "Bearer 없는것"
+    failed = _sync(client, admin, slug, apply=True).json()["run"]
+    assert failed["status"] == "failed", failed
+    saved = _saved(client, admin, slug)
+    assert _when(saved["last_success_at"]) == success
+    assert _when(saved["last_run_at"]) == _when(failed["finished_at"])
+
+
+def _aged(db: Session, slug: str, **values: Any) -> None:
+    db.execute(update(DataSource).where(DataSource.slug == slug).values(**values))
+    db.commit()
+
+
+def test_목록_통계_상세가_그_타입에_들어오는_원천의_신선도를_싣는다(
+    client: TestClient, admin: Signed, plm: FakeOData, db: Session
+) -> None:
+    """원천 하나가 멎어도 목록 · 통계의 숫자는 맞아 보인다 — 틀린 값이 아니라 옛 값이라서다.
+    그 타입을 읽는 응답이 원천마다 마지막 성공 · 실패 중 · 멎음을 함께 싣는다. 끈 소스도
+    「꺼짐」 으로 싣고(빼면 「원천이 없는 타입」 으로 읽힌다 — 2026-11-08 검토) 실패 · 멎음은
+    안 세운다. 순서는 이름."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    tag = uuid.uuid4().hex[:6]
+    fresh = _source(client, admin, vendor, **_bare(name=f"나 ERP {tag}", interval_minutes=60))
+    stopped = _source(
+        client, admin, vendor, **_bare(name=f"가 PLM {tag}", interval_minutes=60)
+    )
+    failing = _source(
+        client, admin, vendor, **_bare(name=f"라 MES {tag}", interval_minutes=60)
+    )
+    off = _source(client, admin, vendor, **_bare(name=f"다 끔 {tag}", is_active=False))
+
+    ok = _sync(client, admin, fresh["slug"], apply=True).json()["run"]
+    assert ok["status"] == "ok", ok
+    assert _sync(client, admin, stopped["slug"], apply=True).json()["run"]["status"] == "ok"
+    plm.auth_required = "Bearer 없는것"
+    assert (
+        _sync(client, admin, failing["slug"], apply=True).json()["run"]["status"] == "failed"
+    )
+    plm.auth_required = None
+
+    # 「가 PLM」 은 하루째 안 돌았다(타이머가 멎었다). 「라 MES」 도 하루 전이지만 실패 중이라
+    # 멎음은 안 선다 — 홈 「남은 일」 과 같은 규칙(실패는 따로 센다).
+    stale_before = maintenance_counts(client, admin).get("datasource_stale", 0)
+    day_ago = datetime.now(UTC) - timedelta(days=1)
+    _aged(db, stopped["slug"], last_run_at=day_ago)
+    _aged(db, failing["slug"], last_run_at=day_ago)
+    assert maintenance_counts(client, admin)["datasource_stale"] == stale_before + 1
+
+    page = client.get(f"/api/objects/{vendor}", headers=admin.headers)
+    assert page.status_code == 200, page.text
+    got = page.json()["freshness"]
+    assert [one["slug"] for one in got] == [
+        stopped["slug"],
+        fresh["slug"],
+        off["slug"],
+        failing["slug"],
+    ]
+    by_slug = {one["slug"]: one for one in got}
+    assert by_slug[off["slug"]]["active"] is False
+    assert (by_slug[off["slug"]]["failing"], by_slug[off["slug"]]["stale"]) == (False, False)
+    assert all(by_slug[one["slug"]]["active"] for one in (stopped, fresh, failing))
+    assert {one["type_slug"] for one in got} == {vendor}
+    assert {one["kind"] for one in got} == {"odata"}
+    assert by_slug[stopped["slug"]]["stale"] is True
+    assert by_slug[stopped["slug"]]["failing"] is False
+    assert by_slug[stopped["slug"]]["last_success_at"] is not None
+    assert by_slug[fresh["slug"]]["stale"] is False
+    assert by_slug[fresh["slug"]]["failing"] is False
+    assert _when(by_slug[fresh["slug"]]["last_success_at"]) == _when(ok["finished_at"])
+    assert by_slug[fresh["slug"]]["interval_minutes"] == 60
+    assert by_slug[failing["slug"]]["failing"] is True
+    assert by_slug[failing["slug"]]["stale"] is False
+    assert by_slug[failing["slug"]]["last_success_at"] is None
+    assert by_slug[failing["slug"]]["last_run_at"] is not None
+
+    summary = client.get(f"/api/objects/{vendor}/summary", headers=admin.headers)
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["freshness"] == got
+    one = page.json()["items"][0]
+    detail = client.get(f"/api/objects/{vendor}/{one['id']}", headers=admin.headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["freshness"] == got
+
+    # 들어오는 원천이 없는 타입(손으로 · MCP 로 넣는다)은 빈 목록이다.
+    manual = _make_type(client, admin, label="손으로", key_policy="optional")
+    made = _make_object(client, admin, manual, label="하나")
+    assert (
+        client.get(f"/api/objects/{manual}", headers=admin.headers).json()["freshness"] == []
+    )
+    assert (
+        client.get(f"/api/objects/{manual}/summary", headers=admin.headers).json()["freshness"]
+        == []
+    )
+    assert (
+        client.get(f"/api/objects/{manual}/{made['id']}", headers=admin.headers).json()[
+            "freshness"
+        ]
+        == []
+    )
+
+
+def test_인터페이스_목록은_구현_타입_전부의_원천을_싣는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """인터페이스 목록은 여러 타입이 섞인다 — 원천도 구현 타입마다이고, 줄마다 넣는 타입을
+    말한다."""
+    from tests.api.test_interfaces import _make_interface
+
+    iface = _make_interface(client, admin, label="설비")
+    tester = _make_type(
+        client, admin, label="시험장비", key_policy="optional", interface_slugs=[iface]
+    )
+    meter = _make_type(
+        client, admin, label="계측기", key_policy="optional", interface_slugs=[iface]
+    )
+    tag = uuid.uuid4().hex[:6]
+    first = _source(client, admin, meter, **_bare(name=f"가 계측 {tag}"))
+    second = _source(client, admin, tester, **_bare(name=f"나 장비 {tag}"))
+
+    page = client.get(f"/api/objects/{iface}", headers=admin.headers)
+    assert page.status_code == 200, page.text
+    want = [(first["slug"], meter), (second["slug"], tester)]
+    assert [(one["slug"], one["type_slug"]) for one in page.json()["freshness"]] == want
+    summary = client.get(f"/api/objects/{iface}/summary", headers=admin.headers)
+    assert summary.status_code == 200, summary.text
+    assert [(one["slug"], one["type_slug"]) for one in summary.json()["freshness"]] == want
+    # 한 번도 안 돌았다 — 마지막 성공이 비어 있다(간격 0 이라 멎음도 아니다).
+    assert {one["last_success_at"] for one in page.json()["freshness"]} == {None}
+    assert {one["stale"] for one in page.json()["freshness"]} == {False}
+
+
+def test_다른_표를_비추는_타입은_신선도가_비어_있다(client: TestClient, admin: Signed) -> None:
+    """투영(system) 타입은 원천이 그 표 자체다 — 데이터 소스도 못 단다."""
+    dept = _make_type(
+        client, admin, "dept", label="부서", kind_class="system", system_source="workspace"
+    )
+    page = client.get(f"/api/objects/{dept}", headers=admin.headers)
+    assert page.status_code == 200, page.text
+    assert page.json()["freshness"] == []
+    one = page.json()["items"][0]
+    detail = client.get(f"/api/objects/{dept}/{one['id']}", headers=admin.headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["freshness"] == []
+
+
+def test_신선도는_꺼_둔_소스까지_한_번의_질의로_읽는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """목록 · 통계마다 붙는 것이라 소스 수만큼 질의가 늘면 안 된다 — 서비스 함수를 바로
+    본다."""
+    from sqlalchemy import event
+
+    from app.modules.ontology.models import ObjectType
+
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    tag = uuid.uuid4().hex[:6]
+    for name in ("다", "가", "나"):
+        _source(client, admin, vendor, **_bare(name=f"{name} {tag}"))
+    _source(client, admin, vendor, **_bare(name=f"마 끔 {tag}", is_active=False))
+    type_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == vendor))
+    assert type_id is not None
+    db.expire_all()
+
+    seen: list[str] = []
+
+    def count(*args: Any) -> None:
+        seen.append(str(args[2]))
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        got = services.freshness(db, [type_id, type_id])
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert [one.name for one in got] == [f"가 {tag}", f"나 {tag}", f"다 {tag}", f"마 끔 {tag}"]
+    assert [one.active for one in got] == [True, True, True, False]
+    assert len(seen) == 1, seen
+    assert services.freshness(db, []) == []
+
+
+def test_소스의_대상_타입을_바꾸면_마지막_성공을_비운다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """2026-11-08 검토 — 옛 타입으로 성공한 때가 새 타입의 신선도로 실리면 「그 타입의 자료는
+    그때까지 들어왔다」 는 거짓이 된다. 새 타입으로는 아직 한 번도 성공하지 않았다."""
+    first = _make_type(client, admin, label="공급사", key_policy="optional")
+    second = _make_type(client, admin, label="거래처", key_policy="optional")
+    source = _source(client, admin, first, **_bare(name=f"ERP {uuid.uuid4().hex[:6]}"))
+    assert _sync(client, admin, source["slug"], apply=True).json()["run"]["status"] == "ok"
+    before = client.get(f"/api/objects/{first}", headers=admin.headers).json()["freshness"]
+    assert before[0]["last_success_at"] is not None
+
+    # 같은 타입을 다시 적으면 그대로다.
+    same = client.patch(
+        f"/api/datasources/{source['slug']}", json={"type_slug": first}, headers=admin.headers
+    )
+    assert same.status_code == 200, same.text
+    assert same.json()["last_success_at"] is not None
+    moved = client.patch(
+        f"/api/datasources/{source['slug']}", json={"type_slug": second}, headers=admin.headers
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["last_success_at"] is None
+    after = client.get(f"/api/objects/{second}", headers=admin.headers).json()["freshness"]
+    assert [(one["slug"], one["last_success_at"]) for one in after] == [(source["slug"], None)]
+
+
+def test_인터페이스를_타입으로_좁히면_그_타입의_원천만_싣는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """2026-11-08 검토 — `types=a|b` 로 좁혀도 구현 타입 전부의 원천을 실어, 고르지 않은 타입
+    원천의 실패가 답에 「주의」 로 붙었다. 목록 · 통계 모두 좁힌 타입만."""
+    from tests.api.test_interfaces import _make_interface
+
+    iface = _make_interface(client, admin, label="설비")
+    tester = _make_type(client, admin, label="시험장비", interface_slugs=[iface])
+    gauge = _make_type(client, admin, label="계측기", interface_slugs=[iface])
+    tag = uuid.uuid4().hex[:6]
+    mine = _source(client, admin, tester, **_bare(name=f"시험 {tag}"))
+    _source(client, admin, gauge, **_bare(name=f"계측 {tag}"))
+
+    for path in (f"/api/objects/{iface}", f"/api/objects/{iface}/summary"):
+        every = client.get(path, headers=admin.headers)
+        assert every.status_code == 200, every.text
+        assert {one["type_slug"] for one in every.json()["freshness"]} == {tester, gauge}
+        narrowed = client.get(path, params={"types": tester}, headers=admin.headers)
+        assert narrowed.status_code == 200, narrowed.text
+        assert [one["slug"] for one in narrowed.json()["freshness"]] == [mine["slug"]]

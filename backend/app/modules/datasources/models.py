@@ -139,6 +139,16 @@ class DataSource(Base):
         DateTime(timezone=True), nullable=True
     )
     last_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """**받아서 적용까지 성공한** 마지막 실행이 끝난 때 — 「자료가 언제까지 들어왔나」 의 답.
+
+    `last_run_at` 은 실패해도 옮겨 가서, 그것만으로는 사흘째 실패 중인 소스와 방금 받은 소스가
+    같아 보인다 — 원천 하나가 멎어도 목록 · 통계 · 답은 그 사실을 말하지 못했다. 계획만 본
+    실행 · 실패 · 일부만 들어간 실패(「그 전에 들어간 조각」) · 한꺼번에 사라져 멈춘 것
+    (held back)은 옮기지 않는다. 형제 코어가 끊은 자리를 들고 잇는 중의 성공한 차례는 옮긴다
+    — 받은 만큼은 적용했다."""
 
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

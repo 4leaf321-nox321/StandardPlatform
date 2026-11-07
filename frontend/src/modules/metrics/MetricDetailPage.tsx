@@ -28,7 +28,14 @@ import type {
   MetricTable,
   ReadHeader,
 } from '@/modules/metrics/api'
-import { GRAIN_LABELS, drillHref, shownNumber } from '@/modules/metrics/metricDrill'
+import {
+  GRAIN_LABELS,
+  dataGapNotice,
+  dataThroughParts,
+  drillHref,
+  shownNumber,
+  sourceIssueNotice,
+} from '@/modules/metrics/metricDrill'
 import { Chart } from '@/shared/charts'
 import { LazyPlot } from '@/shared/charts/LazyPlot'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -83,7 +90,11 @@ function tookOf(run: MetricRun): string {
   return Number.isFinite(took) ? `${shownNumber(Math.max(0, took), 1)}초` : '—'
 }
 
-/** 응답 머리 — 계산 시각 · 신선도 · 겹침 · 못 묶은 수 · 잘림 · 분모 없음. */
+/**
+ * 응답 머리 — 계산 시각 · 신선도 · 최종 반영 기간(원천 최종 반영 기간이 다르면 그것도) · 겹침 ·
+ * 못 묶은 수 · 잘림 · 분모 없음. 미반영 구간이 있으면, 그리고 원천 하나가 수집 실패 · 수집 지연 ·
+ * 적재 진행 중이면(수집 이상) 경고를 따로 세운다 — 한 줄에 섞으면 안 읽힌다.
+ */
 function HeaderLine({ header }: { header: ReadHeader }) {
   const parts: string[] = []
   parts.push(
@@ -93,6 +104,7 @@ function HeaderLine({ header }: { header: ReadHeader }) {
   )
   if (header.stale) parts.push('오래됨 — 세 주기가 지나도록 안 셌습니다')
   if (header.settle_days > 0) parts.push(`닫힌 기간: ${header.settle_days}일 지난 것`)
+  parts.push(...dataThroughParts(header))
   if (header.stay)
     parts.push(
       header.stay.periods_from_label
@@ -109,7 +121,23 @@ function HeaderLine({ header }: { header: ReadHeader }) {
   if (header.truncated) parts.push('상한에서 잘렸습니다 — 기준이나 기간을 좁히세요')
   if (header.denominator?.missing)
     parts.push(`분모가 없어 비율이 빈 셀 ${shownNumber(header.denominator.missing)}개`)
-  return <p className="text-muted-foreground text-xs">{parts.join(' · ')}</p>
+  const notices = [dataGapNotice(header), sourceIssueNotice(header)].filter(
+    (one): one is string => one !== null,
+  )
+  return (
+    <div className="space-y-1">
+      <p className="text-muted-foreground text-xs">{parts.join(' · ')}</p>
+      {notices.map((one) => (
+        <p
+          key={one}
+          role="note"
+          className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100"
+        >
+          {one}
+        </p>
+      ))}
+    </div>
+  )
 }
 
 /** 기준 값으로 거르기 — 값 목록은 서버가 세어 둔 것에서 온다(이름 포함). */

@@ -11,6 +11,9 @@
   섞여 샌다.
 - **「새로」** — (지표, 열쇠)가 유일. 처음 훑기의 것도 보인다(경보와 다르다). 이번에 다시 안
   나온 것은 「지남」.
+- **원천 기록이 끊긴 뒤** — 그 분석의 머리가 빈 기간을 말했으면(주의 `data_gap`) 결론을 그대로
+  두고 그 말을 `detail.data_gap` 에 싣는다(경보와 같다, `alerts.gap_line`). 다시 훑을 때 원천이
+  돌아왔으면 빠진다.
 """
 
 from __future__ import annotations
@@ -458,6 +461,7 @@ def _groups(
         window=int(plan.values.get("window", DEFAULT_WINDOW)),
     )
     threshold = GROUP_Q / max(plan.looks, 1)
+    gap = alerts.gap_line(result)
     out: list[Found] = []
     for row in result.rows:
         if row.flag != "high" or row.q_value >= threshold:
@@ -493,6 +497,9 @@ def _groups(
                 "ratio": ratio,
                 "q_value": row.q_value,
                 "looks": plan.looks,
+                # 원천 기록이 끊긴 뒤의 결론일 수 있다 — 경보의 발생과 같은 말
+                # (`alerts.gap_line`).
+                "data_gap": gap,
             },
             score=0.0,
             run_id=result.run_id,
@@ -534,6 +541,7 @@ def _control(
         split=split,
     )
     seen_until = _seen_until(today, grain, plan)
+    gap = alerts.gap_line(result)
     out: list[Found] = []
     for chart in result.charts:
         center = chart.center
@@ -584,6 +592,7 @@ def _control(
                         "center": center,
                         "ucl": point.ucl,
                         "ratio": round(ratio, 4),
+                        "data_gap": gap,
                     },
                     score=0.0,
                     run_id=result.run_id,

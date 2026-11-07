@@ -266,6 +266,12 @@ def _full(client: TestClient, admin: Signed, report: str, key: str) -> dict[str,
     return dict(got.json()["object"])
 
 
+def _when(text: str | None) -> datetime | None:
+    """응답의 시각 — 글자로 견주지 않는다(작업 결과는 UTC, 다시 읽은 것은 DB 의 시간대로
+    온다)."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
+
+
 def _age_reconcile(source_slug: str) -> None:
     """하루가 지난 것처럼 — 다음 동기화가 전량 대조를 한다."""
     from app.database import SessionLocal
@@ -471,13 +477,18 @@ def test_한꺼번에_사라지면_내려감을_적지_않고_멈춘다(
     w = _setup(client, admin)
     for rid in range(1, 14):
         ra.add(rid, f"보고 {rid}", board="cae-2", changed=rid)
-    _sync(client, admin, w["source"])
+    first = _sync(client, admin, w["source"])
+    assert first["run"]["status"] == "ok", first["run"]
     ra.reports.clear()
     _age_reconcile(w["source"])
     done = _sync(client, admin, w["source"])
     assert done["run"]["status"] == "failed"
     assert done["counts"]["gone_held_back"] == 13 and done["counts"]["gone"] == 0
     assert any("절반이 넘어" in str(one) for one in done["errors"])
+    # 「언제까지 들어왔나」 는 앞의 성공에 머문다 — 멈춘 대조는 성공이 아니다.
+    saved = client.get(f"/api/datasources/{w['source']}", headers=admin.headers).json()
+    assert _when(saved["last_success_at"]) == _when(first["run"]["finished_at"])
+    assert _when(saved["last_run_at"]) == _when(done["run"]["finished_at"])
     states = {
         one["properties"].get("origin_state")
         for one in _records(client, admin, w["report"]).values()

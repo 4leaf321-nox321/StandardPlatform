@@ -107,4 +107,31 @@ describe('경보 탭', () => {
       '/metrics/cases?tab=analysis&recipe=sprt&target=S',
     )
   })
+
+  it('미반영 구간의 발생은 그 말을 함께 보인다', async () => {
+    const gap =
+      '2028-06 이후는 미반영 구간입니다(원천 최종 반영 기간 2028-05) — 이 구간의 0건 · 감소는 수집 지연 때문일 수 있으므로, 데이터 소스의 수집 현황을 확인해야 합니다.'
+    metricsApi.alerts.mockResolvedValue([{ ...ALERT, last_status: 'ok', last_error: null }])
+    metricsApi.alertEvents.mockResolvedValue([
+      {
+        id: 'e3',
+        alert_id: 'a1',
+        alert_name: 'S 초기 고장',
+        metric: 'cases',
+        metric_label: '인입',
+        recipe: 'changes',
+        key: 'down:2028-06-01',
+        title: '2028-06부터 내려감: 30 → 0',
+        detail: { data_gap: gap },
+        baseline: false,
+        run_id: 'r2',
+        created_at: '2028-09-15T02:31:00+09:00',
+        link: '/metrics/cases?tab=analysis&recipe=changes',
+      },
+    ])
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: '발생' }))
+    const listed = await screen.findByLabelText('발생')
+    expect(listed).toHaveTextContent(gap)
+  })
 })

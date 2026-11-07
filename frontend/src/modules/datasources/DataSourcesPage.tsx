@@ -142,9 +142,7 @@ export default function DataSourcesPage() {
                   {source.name}
                 </button>
                 <code className="text-muted-foreground text-xs">{source.slug}</code>
-                {!source.is_active && (
-                  <span className="text-muted-foreground text-xs">사용 안 함</span>
-                )}
+                {!source.is_active && <span className="text-muted-foreground text-xs">비활성</span>}
                 {source.last_status && (
                   <span
                     className={
@@ -153,7 +151,7 @@ export default function DataSourcesPage() {
                         : 'text-destructive text-xs'
                     }
                   >
-                    마지막 {source.last_status === 'ok' ? '성공' : '실패'}
+                    최종 실행 {source.last_status === 'ok' ? '성공' : '실패'}
                     {source.last_run_at && ` · ${shownDateTime(source.last_run_at)}`}
                   </span>
                 )}

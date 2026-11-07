@@ -9,7 +9,7 @@ import { Link } from 'react-router-dom'
 
 import type { Drill } from '@/modules/metrics/api'
 import type { AnalysisHeader, Caveat } from '@/modules/metrics/analysis/types'
-import { drillHref, shownNumber } from '@/modules/metrics/metricDrill'
+import { dataThroughParts, drillHref, shownNumber } from '@/modules/metrics/metricDrill'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 /** 뺀 기록의 이름 — 서버 `excluded` 의 열쇠. 전작 것은 「전작:」 을 붙인다. */
@@ -62,13 +62,18 @@ export function CaveatList({ caveats }: { caveats: Caveat[] }) {
   )
 }
 
-/** 방법 · 계산 시각 · 보이는 몫 · 뺀 것 — 같은 물음의 답이 왜 달라졌는지 가를 줄. */
+/**
+ * 방법 · 계산 시각 · 최종 반영 기간(원천 최종 반영 기간이 다르면 그것도) · 보이는 몫 · 뺀 것 — 같은
+ * 물음의 답이 왜 달라졌는지 가를 줄. 미반영 구간의 경고와 원천 하나의 수집 이상은 주의
+ * (`data_gap` · `source_issue`)가 이미 말하므로 여기서 다시 쓰지 않는다.
+ */
 export function AnalysisMeta({ result }: { result: AnalysisHeader }) {
   const parts: string[] = [result.method]
   parts.push(
     result.computed_at ? `계산 시각 ${shownDateTime(result.computed_at)}` : '아직 안 셌습니다',
   )
   if (result.stale) parts.push('오래됨')
+  parts.push(...dataThroughParts(result))
   if (result.visible_share !== null && result.visible_share < 0.999)
     parts.push(`보이는 몫 ${percent(result.visible_share, 0)}`)
   const excluded = Object.entries(result.excluded)

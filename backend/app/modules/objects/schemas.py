@@ -128,6 +128,38 @@ class LinkedColumnOut(BaseModel):
     """한 줄에 값이 여럿일 수 있다(여럿과 이어진 걸음 · 여러 값 칸)."""
 
 
+class FreshnessOut(BaseModel):
+    """이 타입에 넣는 **데이터 소스** 하나(꺼 둔 것도) — 그 원천의 자료가 언제까지 들어왔나.
+
+    원천 하나가 멎어도 목록 · 통계의 숫자는 맞아 보인다 — 틀린 값이 아니라 옛 값이라서다.
+    읽는 쪽(사람 · AI)이 「이 수는 언제 것인가」 를 답과 함께 받게 싣는다."""
+
+    slug: str
+    name: str
+    kind: str
+    """odata · rest · file · sp_core(형제 코어) · ra_reports(RA 보고서)."""
+    type_slug: str
+    """이 소스가 넣는 타입 — 인터페이스의 목록 · 통계면 구현 타입마다 다르다."""
+    interval_minutes: int
+    """동기화 간격(분). 0 이면 손으로만 돌린다 — 그때는 멎음(`stale`)이 서지 않는다."""
+    last_success_at: datetime | None
+    """받아서 **적용까지 성공한** 마지막 실행이 끝난 때 — 이 원천의 자료는 이때까지 들어왔다.
+    비면 아직 한 번도 성공하지 않았다."""
+    last_run_at: datetime | None
+    """마지막 실행이 끝난 때 — 실패해도 옮겨 간다(계획만 본 실행은 실패일 때만)."""
+    failing: bool
+    """마지막 실행이 실패했다 — 그 뒤의 바깥 변경은 아직 안 들어왔다."""
+    stale: bool
+    """정해진 간격의 3배를 넘도록 안 돌았다(타이머 · 워커가 멎었다, 화면의 「수집 지연」) — 홈
+    「남은 일」 의 「수집 지연 데이터 소스」 와 같은 규칙. 실패 중이면 `failing` 만 선다."""
+    active: bool = True
+    """꺼 둔 소스면 거짓 — 그 타입의 자료는 그 소스의 마지막 성공까지다(실패 · 멎음은 안
+    선다)."""
+    catching_up: bool = False
+    """형제 코어가 끊은 자리를 들고 있다 — 마지막 성공이 방금이어도 처음 받기 · 큰 따라잡기가
+    아직 다 안 들어왔다(목록의 수는 덜 든 수다)."""
+
+
 class ObjectPageOut(Page[ObjectOut]):
     """객체 목록 한 쪽. 목록 화면(`list_view.columns`)에 파일 속성이 있으면 그 칸들이
     `files` 로 함께 온다 — 줄마다 첨부를 물으러 가면 한 쪽에 요청이 수십 개 붙는다.
@@ -153,6 +185,10 @@ class ObjectPageOut(Page[ObjectOut]):
     """요청에 있었지만 **화면이 주소로 받지 못해 주소에서 빠진 인자 이름**(`under` · `deep`,
     인터페이스 목록이면 `status` · `as_of` …). 비어 있지 않으면 연 화면이 답보다 넓을 수
     있다 — 그 사실을 함께 말한다."""
+    freshness: list[FreshnessOut] = Field(default_factory=list)
+    """그 타입에 들어오는 원천의 마지막 성공 · 실패 중 · 멎음 — 이름 순. 비면 들어오는 원천이
+    없다(손으로 · MCP 로 넣는 타입). 인터페이스면 구현 타입 전부의 원천, 다른 표를 비추는
+    타입(system)은 늘 빈 목록."""
 
 
 class RelatedObjectOut(BaseModel):
@@ -414,6 +450,10 @@ class ObjectProfileOut(BaseModel):
     """내가 이것을 지켜보고 있나 — 바뀌면 알림이 온다."""
     watcher_count: int = 0
     """몇 사람이 지켜보나. **혼자가 아니라는 것을 아는 것**이 고칠 때의 조심을 만든다."""
+    freshness: list[FreshnessOut] = Field(default_factory=list)
+    """그 타입에 들어오는 원천의 마지막 성공 · 실패 중 · 멎음 — 이름 순. 비면 들어오는 원천이
+    없다(손으로 · MCP 로 넣는 타입). 이 객체가 그 원천에서 왔는지는 `external_ids` 가 말한다.
+    다른 표를 비추는 타입(system)은 늘 빈 목록."""
 
 
 class AliasesRequest(BaseModel):
@@ -980,6 +1020,10 @@ class SummaryOut(BaseModel):
     link_missing: list[str] = Field(default_factory=list)
     """요청에 있었지만 화면이 주소로 받지 못해 빠진 인자 이름 — 목록과 같은 규칙에,
     인터페이스의 통계면 통계 설정도(인터페이스 목록 화면은 통계 설정을 주소로 안 받는다)."""
+    freshness: list[FreshnessOut] = Field(default_factory=list)
+    """그 타입에 들어오는 원천의 마지막 성공 · 실패 중 · 멎음 — 이름 순. 비면 들어오는 원천이
+    없다(손으로 · MCP 로 넣는 타입). 인터페이스면 구현 타입 전부의 원천, 다른 표를 비추는
+    타입(system)은 통계가 없다."""
 
 
 class WatchRequest(BaseModel):

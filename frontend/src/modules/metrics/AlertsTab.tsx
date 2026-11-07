@@ -158,6 +158,10 @@ function AlertRow({
               {one.baseline && (
                 <span className="text-muted-foreground ml-1">(만들 때부터 있던 것)</span>
               )}
+              {/* 원천 기록이 끊긴 뒤의 결론일 수 있다 — 그때의 계산 머리가 말한 것(서버가 싣는다). */}
+              {typeof one.detail.data_gap === 'string' && (
+                <p className="text-amber-700 dark:text-amber-400">{one.detail.data_gap}</p>
+              )}
             </li>
           ))}
         </ul>
