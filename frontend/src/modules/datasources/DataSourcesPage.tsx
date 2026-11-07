@@ -1472,7 +1472,7 @@ function EditDialog({
                   checked={active}
                   onChange={(event) => setActive(event.target.checked)}
                 />
-                사용
+                활성
               </label>
             </div>
           </div>

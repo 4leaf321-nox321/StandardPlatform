@@ -729,7 +729,7 @@ def _relink_refusal(
     if kind is None:
         return f"관계 종류 {slug} 이(가) 지금 없어 다시 이을 수 없습니다"
     if not kind.is_active:
-        return f"{kind.label}은 지금 쓰지 않는 관계 종류라 다시 잇지 않습니다"
+        return f"{kind.label}은 비활성 관계 종류라 다시 잇지 않습니다"
     src = db.get(ObjectInstance, src_id)
     dst = db.get(ObjectInstance, dst_id)
     if src is None or dst is None:  # pragma: no cover - `_missing_end` 가 먼저 본다

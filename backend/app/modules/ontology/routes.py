@@ -777,7 +777,7 @@ def _type_deletion(db: Session, row: ObjectType) -> _Deletion:
             Conflict(
                 code("ONTOLOGY", 38),
                 f"{row.label}에 {live}개가 들어 있어 지울 수 없습니다. "
-                "그만 쓰려는 것이면 「사용 안 함」 으로 두세요 — "
+                "그만 쓰려는 것이면 「비활성」 으로 두세요 — "
                 "자료는 남고 화면에서만 빠집니다.",
                 details={"object_count": int(live)},
             )
@@ -1227,7 +1227,7 @@ def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
             Conflict(
                 code("ONTOLOGY", 44),
                 f"{row.label}으로 맺힌 관계가 {edges}개 있어 지울 수 없습니다. "
-                "그만 쓰려는 것이면 「사용함」 을 끄세요 — "
+                "그만 쓰려는 것이면 「비활성」 으로 두세요 — "
                 "맺힌 것은 남고 새로 맺지만 못합니다.",
                 details={"relation_count": int(edges)},
             )

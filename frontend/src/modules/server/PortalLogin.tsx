@@ -37,7 +37,7 @@ export function PortalLogin() {
         <p className="text-muted-foreground text-sm">
           이 설치는 HWAX 포털에 연결되어 있지 않습니다. 연결하려면 <code>.env</code> 에{' '}
           <code>PORTAL_JWKS_URL</code> · <code>PORTAL_LAUNCH_URL</code> 을 적고 재시작합니다(운영
-          안내서 「HWAX 포털에 붙이기」). 꺼져 있는 동안 포털 로그인 콜백은 404 로 답합니다.
+          안내서 「HWAX 포털에 붙이기」). 비활성인 동안 포털 로그인 콜백은 404 로 답합니다.
         </p>
       )}
       {one?.enabled && (
@@ -104,8 +104,8 @@ function Delegation({ one }: { one: GatewayDelegation }) {
       </h3>
       {!one.enabled ? (
         <p className="text-muted-foreground text-sm">
-          포털의 Claude(MCP 게이트웨이)가 사람마다 이 설치의 액세스 토큰을 받는 길이 꺼져 있습니다.
-          켜려면 <code>.env</code> 에 <code>HEAX_SSO_SECRET</code> 이 있어야 합니다 — 서버에서{' '}
+          포털의 Claude(MCP 게이트웨이)가 사람마다 이 설치의 액세스 토큰을 받는 길이 비활성입니다.
+          활성화하려면 <code>.env</code> 에 <code>HEAX_SSO_SECRET</code> 이 있어야 합니다 — 서버에서{' '}
           <code>deploy.sh hwax-request</code> 가 만들고 포털에 보낼 요청서를 씁니다(운영 안내서
           「HWAX 포털에 붙이기」).
         </p>

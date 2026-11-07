@@ -104,7 +104,7 @@ export default function OntologyRelationsPage() {
                         </span>
                       </span>
                       {!row.is_active && (
-                        <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
+                        <span className="text-muted-foreground ml-2 text-xs">비활성</span>
                       )}
                       {row.managed_by && (
                         <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>

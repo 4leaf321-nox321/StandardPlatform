@@ -54,7 +54,7 @@ function AlertRow({
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{alert.name}</span>
         <Badge variant="outline">{alert.recipe_label}</Badge>
-        {!alert.is_active && <Badge variant="secondary">꺼짐</Badge>}
+        {!alert.is_active && <Badge variant="secondary">비활성</Badge>}
         {alert.last_status === 'failed' && <Badge variant="destructive">확인 실패</Badge>}
         <span className="text-muted-foreground text-xs">
           마지막 확인 {when(alert.last_checked_at)} · 발생 {alert.events}건
@@ -98,7 +98,7 @@ function AlertRow({
               })
             }
           >
-            {alert.is_active ? '끄기' : '켜기'}
+            {alert.is_active ? '비활성화' : '활성화'}
           </Button>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => setRemoving(true)}>
             삭제

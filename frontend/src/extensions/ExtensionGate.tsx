@@ -17,10 +17,10 @@ export function ExtensionGate({ name, children }: { name: string; children?: Rea
     return (
       <div className="mx-auto max-w-lg py-16 text-center">
         <PowerOff className="text-muted-foreground mx-auto size-8" />
-        <h1 className="mt-4 text-lg font-semibold">꺼진 확장입니다</h1>
+        <h1 className="mt-4 text-lg font-semibold">비활성 확장입니다</h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          확장 <span className="font-mono">{name}</span> 이 이 설치에서 꺼져 있습니다. 관리 › 서버
-          › 「확장 모듈」 에서 켤 수 있습니다.
+          확장 <span className="font-mono">{name}</span> 이 이 설치에서 비활성입니다. 관리 › 서버
+          › 「확장 모듈」 에서 활성화할 수 있습니다.
         </p>
       </div>
     )

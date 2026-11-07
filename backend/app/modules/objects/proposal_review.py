@@ -169,7 +169,7 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
         blocked: str | None = None
         if kind is None or not kind.is_active:
             blocked = (
-                f"관계 종류 「{kind_label}」 이(가) 없거나 쓰지 않는 종류입니다 — 거절하세요."
+                f"관계 종류 「{kind_label}」 이(가) 없거나 비활성 종류입니다 — 거절하세요."
             )
         elif managed.owner_of(kind):
             blocked = (

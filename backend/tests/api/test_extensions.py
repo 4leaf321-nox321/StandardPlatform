@@ -316,7 +316,7 @@ def test_꺼진_확장의_범위는_토큰_발급_목록에서_빠진다(
     refused = issue()
     assert refused.status_code == 400
     message = refused.json()["error"]["message"]
-    assert "꺼진 확장 모듈" in message and "caegroup" in message
+    assert "비활성 확장 모듈" in message and "caegroup" in message
 
     assert client.patch(toggle, json={"enabled": True}, headers=admin.headers).is_success
     assert "caegroup:write" in listed()

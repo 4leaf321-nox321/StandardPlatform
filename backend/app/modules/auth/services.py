@@ -369,8 +369,8 @@ def create_pat(
         names = sorted({name for one in off for name in scopes.extension_of(one)})
         raise AppError(
             code("AUTH", 108),
-            f"꺼진 확장 모듈의 범위입니다: {', '.join(off)} — 시스템 관리자 › 서버 › "
-            f"「확장 모듈」 에서 {', '.join(names)} 을(를) 켜면 고를 수 있습니다.",
+            f"비활성 확장 모듈의 범위입니다: {', '.join(off)} — 시스템 관리자 › 서버 › "
+            f"「확장 모듈」 에서 {', '.join(names)} 을(를) 활성화하면 선택할 수 있습니다.",
             status=400,
             details={"known": list(known), "extensions": names},
         )

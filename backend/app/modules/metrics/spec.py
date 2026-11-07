@@ -404,7 +404,7 @@ def _check_source(source: ObjectType) -> None:
             f"「{source.label}」 은 다른 표를 비추는 타입이라 행이 없어 셀 수 없습니다."
         )
     if not source.is_active:
-        raise _bad(f"「{source.label}」 은 꺼진 타입입니다.")
+        raise _bad(f"「{source.label}」 은 비활성 타입입니다.")
 
 
 def _measure(scope: Scope, spec: MetricSpec, plan: axes.JoinPlan) -> Any | None:
@@ -630,7 +630,7 @@ def _denominator(
     if found is None:
         raise _bad(f"분모 지표가 없습니다: {den_in.metric}")
     if not found.is_active:
-        raise _bad(f"분모 지표가 꺼져 있습니다: {den_in.metric}")
+        raise _bad(f"분모 지표가 비활성입니다: {den_in.metric}")
     den_spec = MetricSpec.model_validate(found.spec)
     if den_spec.denominator is not None or den_spec.measure == SHARE:
         raise _bad("분모의 분모는 둘 수 없습니다 — 비율의 비율은 읽을 수 없습니다.")

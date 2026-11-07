@@ -80,7 +80,7 @@ export function MetricInsightsTab({
             disabled={busy}
             onClick={() => void setOff(!metric.insights_off)}
           >
-            {metric.insights_off ? '훑기 켜기' : '훑기 끄기'}
+            {metric.insights_off ? '훑기 활성화' : '훑기 비활성화'}
           </Button>
         )}
       </div>

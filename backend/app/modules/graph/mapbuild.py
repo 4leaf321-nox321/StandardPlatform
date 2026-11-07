@@ -1147,7 +1147,7 @@ def paused(db: Session) -> str | None:
     집계의 실패는 멈추지 않는다 — `COUNT_RETRY` 뒤에 다시 본다(`schedule`)."""
     if not get_settings().graph_map_auto:
         return (
-            "자동 계산이 꺼져 있습니다(GRAPH_MAP_AUTO=false) — 시스템 관리자의 「전체 다시 "
+            "자동 계산이 비활성입니다(GRAPH_MAP_AUTO=false) — 시스템 관리자의 「전체 다시 "
             "배치」 만 돕니다."
         )
     last = _last_finished(db)

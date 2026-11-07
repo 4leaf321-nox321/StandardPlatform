@@ -47,9 +47,9 @@ async function show(body: PortalStatus) {
 describe('서버 화면 · HWAX 포털 로그인', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('켜져 있고 공개 키를 받았으면 kid 와 콜백 길을 보인다', async () => {
+  it('활성이고 공개 키를 받았으면 kid 와 콜백 길을 보인다', async () => {
     await show(BASE)
-    expect(await screen.findByText('켜짐')).toBeInTheDocument()
+    expect(await screen.findByText('활성')).toBeInTheDocument()
     expect(screen.getByText(/서명 키 1개 \(k1\)/)).toBeInTheDocument()
     expect(screen.getByText(/\/hwaxapp\/api\/auth\/portal-callback/)).toBeInTheDocument()
   })
@@ -67,7 +67,7 @@ describe('서버 화면 · HWAX 포털 로그인', () => {
     expect(screen.getByText(/ConnectError/)).toBeInTheDocument()
   })
 
-  it('꺼져 있으면 켜는 길을 말하고, 설정이 안 맞는 것도 보인다', async () => {
+  it('비활성이면 활성화하는 길을 말하고, 설정이 안 맞는 것도 보인다', async () => {
     await show({
       ...BASE,
       enabled: false,
@@ -75,20 +75,20 @@ describe('서버 화면 · HWAX 포털 로그인', () => {
       kids: [],
       problems: ['PORTAL_LAUNCH_URL 은 있는데 PORTAL_JWKS_URL 이 없습니다'],
     })
-    // 포털 로그인과 게이트웨이 위임 — 둘 다 꺼져 있다.
-    expect(await screen.findAllByText('꺼짐')).toHaveLength(2)
+    // 포털 로그인과 게이트웨이 위임 — 둘 다 비활성이다.
+    expect(await screen.findAllByText('비활성')).toHaveLength(2)
     expect(screen.getByText(/HWAX 포털에 연결되어 있지 않습니다/)).toBeInTheDocument()
     expect(screen.getByText(/PORTAL_JWKS_URL 이 없습니다/)).toBeInTheDocument()
   })
 
-  it('게이트웨이 위임이 꺼져 있으면 켜는 길을 말한다', async () => {
+  it('게이트웨이 위임이 비활성이면 활성화하는 길을 말한다', async () => {
     await show(BASE)
     expect(await screen.findByText(/게이트웨이 위임/)).toBeInTheDocument()
     expect(screen.getByText(/HEAX_SSO_SECRET/)).toBeInTheDocument()
-    expect(screen.getAllByText('꺼짐')).toHaveLength(1) // 포털 로그인은 켜짐, 위임만 꺼짐
+    expect(screen.getAllByText('비활성')).toHaveLength(1) // 포털 로그인은 활성, 위임만 비활성
   })
 
-  it('게이트웨이 위임이 켜져 있으면 마지막 발급과 거절을 보인다', async () => {
+  it('게이트웨이 위임이 활성이면 마지막 발급과 거절을 보인다', async () => {
     await show({
       ...BASE,
       delegation: {
@@ -107,7 +107,7 @@ describe('서버 화면 · HWAX 포털 로그인', () => {
     expect(await screen.findByText(/사용 중 3개/)).toBeInTheDocument()
     expect(screen.getByText('10.1.2.3/32')).toBeInTheDocument()
     expect(screen.getByText(/403 — 처음 보는 사람/)).toBeInTheDocument()
-    expect(screen.getAllByText('켜짐')).toHaveLength(2)
+    expect(screen.getAllByText('활성')).toHaveLength(2)
   })
 
   it('허용 주소를 못 읽으면 모두 거절이라고 말한다', async () => {

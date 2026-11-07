@@ -109,9 +109,7 @@ export default function WebhooksPage() {
                 >
                   {hook.name}
                 </button>
-                {!hook.is_active && (
-                  <span className="text-muted-foreground text-xs">사용 안 함</span>
-                )}
+                {!hook.is_active && <span className="text-muted-foreground text-xs">비활성</span>}
                 {/* 마지막 결과 — 죽어 있는 웹훅이 목록에서 보이게. */}
                 {hook.last_status && (
                   <span
@@ -175,7 +173,7 @@ export default function WebhooksPage() {
       <ConfirmDialog
         open={removing !== null}
         title={`「${removing?.name}」 을 삭제합니다`}
-        description="보낸 기록도 함께 사라집니다. 잠시 멈추려면 삭제하지 말고 「사용 안 함」 으로 두세요."
+        description="보낸 기록도 함께 사라집니다. 잠시 멈추려면 삭제하지 말고 「비활성」 으로 두세요."
         confirmLabel="삭제"
         destructive
         onConfirm={async () => {
@@ -453,7 +451,7 @@ function EditDialog({
               checked={active}
               onChange={(event) => setActive(event.target.checked)}
             />
-            사용
+            활성
           </label>
         </div>
         <DialogFooter>

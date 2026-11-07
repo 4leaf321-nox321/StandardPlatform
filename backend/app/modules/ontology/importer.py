@@ -1164,7 +1164,7 @@ def _warn_type_risks(db: Session, found: ObjectType, one: dict[str, Any], out: P
             or 0
         )
         out.warnings.append(
-            f"타입 {found.slug}: 사용 안 함으로 바꿉니다. 객체 {count}개는 남지만 "
+            f"타입 {found.slug}: 비활성으로 바꿉니다. 객체 {count}개는 남지만 "
             "메뉴와 만들기에서 빠집니다."
         )
     if one.get("key_policy") == "required" and found.key_policy != "required":

@@ -218,9 +218,9 @@ export function GroupEditDialog({ group, attached, groups = [], onClose, onChang
                 checked={isActive}
                 onChange={(event) => setIsActive(event.target.checked)}
               />
-              사용함
+              활성
               <span className="text-muted-foreground text-xs">
-                끄면 사이드바에서 이 묶음이 통째로 제외됩니다.
+                비활성이면 사이드바에서 이 묶음이 통째로 제외됩니다.
               </span>
             </label>
           </div>

@@ -136,7 +136,7 @@ def portal_callback(
     if not portal.enabled(settings):
         raise NotFound(
             code("AUTH", 9),
-            "포털 SSO 가 꺼져 있습니다 — 이 설치의 .env 에 PORTAL_JWKS_URL 이 없습니다.",
+            "포털 SSO 가 비활성입니다 — 이 설치의 .env 에 PORTAL_JWKS_URL 이 없습니다.",
         )
     base = settings.base_path
     try:
@@ -203,7 +203,7 @@ def portal_exchange(
     if not portal.enabled(settings):
         raise NotFound(
             code("AUTH", 9),
-            "포털 SSO 가 꺼져 있습니다 — 이 설치의 .env 에 PORTAL_JWKS_URL 이 없습니다.",
+            "포털 SSO 가 비활성입니다 — 이 설치의 .env 에 PORTAL_JWKS_URL 이 없습니다.",
         )
     try:
         user, access, expires_in, refresh_raw = portal.sign_in(

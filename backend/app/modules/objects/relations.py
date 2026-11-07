@@ -42,7 +42,7 @@ def relation_type(db: Session, slug: str) -> RelationType:
     if row is None:
         raise NotFound(code("OBJECTS", 20), f"관계 종류를 찾을 수 없습니다: {slug}")
     if not row.is_active:
-        raise Conflict(code("OBJECTS", 21), f"{row.label}은 지금 쓰지 않는 관계 종류입니다.")
+        raise Conflict(code("OBJECTS", 21), f"{row.label}은 비활성 관계 종류입니다.")
     return row
 
 

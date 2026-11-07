@@ -48,7 +48,7 @@ function mount() {
 }
 
 describe('경보 탭', () => {
-  it('실패 이유를 보이고, 지금 확인은 새것을 가리고, 끄면 다시 읽는다', async () => {
+  it('실패 이유를 보이고, 지금 확인은 새것을 가리고, 비활성화하면 다시 읽는다', async () => {
     metricsApi.alerts.mockResolvedValue([ALERT])
     metricsApi.checkAlert.mockResolvedValue({
       run_id: 'r1',
@@ -72,7 +72,7 @@ describe('경보 탭', () => {
     expect(screen.getAllByText('새것')).toHaveLength(1)
     expect(screen.getByText(/모델 2개를 봤습니다/)).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: '끄기' }))
+    await userEvent.click(screen.getByRole('button', { name: '비활성화' }))
     await waitFor(() =>
       expect(metricsApi.updateAlert).toHaveBeenCalledWith('cases', 'a1', { is_active: false }),
     )

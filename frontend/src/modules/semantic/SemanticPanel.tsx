@@ -266,8 +266,8 @@ export function SemanticPanel() {
 
       {data.state === 'off' && (
         <p className="text-muted-foreground text-sm">
-          이 설치는 뜻으로 찾기를 사용하지 않습니다(<code>EMBEDDING_BACKEND=off</code>) — 대상을
-          선택해도 계산하지 않습니다.
+          이 설치는 뜻으로 찾기가 비활성입니다(<code>EMBEDDING_BACKEND=off</code>) — 대상을 선택해도
+          계산하지 않습니다.
         </p>
       )}
       {data.state === 'problem' && (

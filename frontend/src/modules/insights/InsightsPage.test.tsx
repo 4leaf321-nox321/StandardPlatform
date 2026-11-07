@@ -110,7 +110,7 @@ describe('눈여겨볼 것', () => {
     )
   })
 
-  it('지표 상세의 탭에서 관리자는 그 지표의 훑기를 끈다', async () => {
+  it('지표 상세의 탭에서 관리자는 그 지표의 훑기를 비활성화한다', async () => {
     insightsApi.list.mockResolvedValue({ items: [], total: 0, scanned_at: null })
     insightsApi.setMetric.mockResolvedValue({ slug: 'm1', off: true })
     const onChanged = vi.fn()
@@ -124,7 +124,7 @@ describe('눈여겨볼 것', () => {
       </MemoryRouter>,
     )
     expect(await screen.findByText('이 지표에서 찾은 것이 없습니다.')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '훑기 끄기' }))
+    await userEvent.click(screen.getByRole('button', { name: '훑기 비활성화' }))
     await waitFor(() => expect(insightsApi.setMetric).toHaveBeenCalledWith('m1', true))
     expect(onChanged).toHaveBeenCalled()
   })

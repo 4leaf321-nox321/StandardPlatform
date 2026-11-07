@@ -454,14 +454,14 @@ def status(db: Session, settings: Settings) -> PortalStatusOut:
             )
         if not settings.trust_proxy:
             problems.append(
-                "TRUST_PROXY 가 꺼져 있습니다 — 포털이 https 로 받아도 앱은 http 로 보고 "
+                "TRUST_PROXY 가 비활성입니다 — 포털이 https 로 받아도 앱은 http 로 보고 "
                 "로그인 쿠키에 Secure 를 붙이지 않습니다(로그인은 됩니다)."
             )
         problems.extend(_mcp_problems(settings))
     elif settings.portal_launch_url.strip():
         problems.append(
-            "PORTAL_LAUNCH_URL 은 있는데 PORTAL_JWKS_URL 이 없습니다 — 포털 로그인이 꺼져 "
-            "있어 로그인 화면에 단추를 표시하지 않습니다."
+            "PORTAL_LAUNCH_URL 은 있는데 PORTAL_JWKS_URL 이 없습니다 — 포털 로그인이 "
+            "비활성이라 로그인 화면에 단추를 표시하지 않습니다."
         )
     return PortalStatusOut(
         enabled=on,

@@ -69,10 +69,9 @@ function Extensions() {
     <section className="space-y-3">
       <h2 className="text-base font-semibold">확장 모듈</h2>
       <p className="text-muted-foreground text-sm">
-        이 번들에 들어 있는 확장입니다. 끄면 그 확장의 <b>메뉴 그룹 · 화면 · API 가 바로</b>{' '}
-        사라지고{' '}
-        <b>자료는 남습니다</b> — 다시 켜면 그대로입니다. 켜고 끈 기록은 관리 › 감사 기록에서{' '}
-        <code>extension.toggle</code> 로 조회합니다.
+        이 번들에 들어 있는 확장입니다. 비활성화하면 그 확장의 <b>메뉴 그룹 · 화면 · API 가 바로</b>{' '}
+        사라지고 <b>자료는 남습니다</b> — 다시 활성화하면 그대로입니다. 활성화 · 비활성화 기록은
+        관리 › 감사 기록에서 <code>extension.toggle</code> 로 조회합니다.
       </p>
       <ErrorNotice error={failed ?? list.error} />
       {list.data?.length === 0 ? (
@@ -85,7 +84,7 @@ function Extensions() {
                 <p className="font-mono text-sm">{one.name}</p>
                 {one.description && <p className="text-sm">{one.description}</p>}
                 <p className="text-muted-foreground text-xs">
-                  {one.enabled ? '사용 중' : '미사용'}
+                  {one.enabled ? '활성' : '비활성'}
                   {one.pinned
                     ? one.updated_at
                       ? ` · 화면에서 지정 (${shownDateTime(one.updated_at)})`
@@ -99,7 +98,7 @@ function Extensions() {
                 disabled={busy === one.name}
                 onClick={() => void toggle(one)}
               >
-                {one.enabled ? '끄기' : '켜기'}
+                {one.enabled ? '비활성화' : '활성화'}
               </Button>
             </li>
           ))}
@@ -175,8 +174,8 @@ function ServerStatusTab() {
           「안 켜졌다」 로 읽는다. */}
       {missingExtensions(enabled).length > 0 && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          확장 <span className="font-mono">{missingExtensions(enabled).join(', ')}</span> 이 켜져
-          있지만 화면 쪽(<span className="font-mono">src/extensions</span>)에 짝이 없습니다.
+          확장 <span className="font-mono">{missingExtensions(enabled).join(', ')}</span> 이
+          활성이지만 화면 쪽(<span className="font-mono">src/extensions</span>)에 짝이 없습니다.
         </div>
       )}
 
@@ -223,7 +222,7 @@ function ServerStatusTab() {
           <dd className="font-mono text-sm">{one.version}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">켜진 확장</dt>
+          <dt className="text-muted-foreground text-xs">활성 확장</dt>
           <dd className="text-sm">
             {one.extensions.length === 0 ? (
               <span className="text-muted-foreground">없음</span>
@@ -270,7 +269,7 @@ function ServerStatusTab() {
                 </span>
               </>
             )}
-            {one.embedding.state === 'off' && <span className="text-muted-foreground">끔</span>}
+            {one.embedding.state === 'off' && <span className="text-muted-foreground">비활성</span>}
             {one.embedding.state === 'problem' && (
               <span className="text-amber-700 dark:text-amber-400">준비 안 됨</span>
             )}

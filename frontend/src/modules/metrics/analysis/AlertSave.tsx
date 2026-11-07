@@ -114,7 +114,7 @@ export function AlertSave({ metric, recipe, params, disabled }: AlertSaveProps) 
                   </p>
                 ))}
                 <p className="text-muted-foreground text-xs">
-                  내 경보는 이 지표의 「경보」 탭에서 끄고 켜거나 삭제합니다.
+                  내 경보는 이 지표의 「경보」 탭에서 활성화 · 비활성화하거나 삭제합니다.
                 </p>
               </div>
             ) : (

@@ -84,7 +84,7 @@ def embed(texts: list[str], *, seconds: float = BATCH_SECONDS) -> list[list[floa
         return []
     settings = get_settings()
     if settings.embedding_backend == "off":
-        raise Unavailable("뜻으로 찾기가 꺼져 있습니다(EMBEDDING_BACKEND=off)")
+        raise Unavailable("뜻으로 찾기가 비활성입니다(EMBEDDING_BACKEND=off)")
     url = settings.ollama_base_url.rstrip("/")
     try:
         with httpx.Client(timeout=seconds, transport=transport) as client:

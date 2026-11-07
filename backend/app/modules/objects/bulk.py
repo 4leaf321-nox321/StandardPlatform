@@ -3073,9 +3073,7 @@ def _plan_relation(
             raise InvalidValue(code("OBJECTS", 47), f"모르는 관계 종류: {slug}")
         kind = matches[0]
     if not kind.is_active:
-        raise InvalidValue(
-            code("OBJECTS", 47), f"{kind.label}은 지금 쓰지 않는 관계 종류입니다."
-        )
+        raise InvalidValue(code("OBJECTS", 47), f"{kind.label}은 비활성 관계 종류입니다.")
     managed.require_relation_editable(kind, source=source)
     period = _row_period(kind, row)
 

@@ -396,9 +396,9 @@ export function TypeEditDialog({
                     checked={isActive}
                     onChange={(event) => setIsActive(event.target.checked)}
                   />
-                  사용함
+                  활성
                   <span className="text-muted-foreground text-xs">
-                    끄면 메뉴와 생성에서 빠집니다. <b>자료는 그대로 남습니다.</b>
+                    비활성이면 메뉴와 생성에서 빠집니다. <b>자료는 그대로 남습니다.</b>
                   </span>
                 </label>
 

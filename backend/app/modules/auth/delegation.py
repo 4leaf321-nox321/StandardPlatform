@@ -183,7 +183,7 @@ _MEANING = {
     400: "누구의 토큰인지 알 수 없었다(이메일 머리 없음) 또는 client 모양이 틀렸다",
     401: "게이트웨이의 비밀이 HEAX_SSO_SECRET 과 다르다",
     403: "승인된 계정이 없다(처음 보는 사람 · 승인 대기 · 정지 · 삭제) 또는 허용 주소 밖",
-    404: "위임이 꺼져 있었다(HEAX_SSO_SECRET 없음)",
+    404: "위임이 비활성이었다(HEAX_SSO_SECRET 없음)",
 }
 
 
@@ -291,10 +291,10 @@ def _guard(request: Request, settings: Settings) -> None:
         _refuse(
             NotFound(
                 code("AUTH", 11),
-                "HWAX 게이트웨이 위임이 꺼져 있습니다 — 이 설치의 .env 에 HEAX_SSO_SECRET 이 "
+                "HWAX 게이트웨이 위임이 비활성입니다 — 이 설치의 .env 에 HEAX_SSO_SECRET 이 "
                 "없습니다.",
             ),
-            "꺼짐(HEAX_SSO_SECRET 없음)",
+            "비활성(HEAX_SSO_SECRET 없음)",
         )
     _check_origin(request, settings)
     _check_secret(request, settings)

@@ -2713,9 +2713,7 @@ def create_object(
 ) -> ObjectOut:
     object_type = _type(db, type_slug)
     if not object_type.is_active:
-        raise Forbidden(
-            code("OBJECTS", 13), f"{object_type.label}은 지금 쓰지 않는 타입입니다."
-        )
+        raise Forbidden(code("OBJECTS", 13), f"{object_type.label}은 비활성 타입입니다.")
     _not_system(object_type, "만들지")
     managed.require_objects_editable(object_type, what="만들지")
 

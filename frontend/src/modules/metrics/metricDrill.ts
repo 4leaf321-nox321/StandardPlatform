@@ -189,7 +189,7 @@ export function freshness(metric: {
   stale: boolean
   is_active: boolean
 }): { label: string; tone: 'bad' | 'warn' | 'neutral' } | null {
-  if (!metric.is_active) return { label: '사용 안 함', tone: 'neutral' }
+  if (!metric.is_active) return { label: '비활성', tone: 'neutral' }
   if (metric.broken) return { label: '정의 깨짐', tone: 'bad' }
   if (metric.last_status === 'failed') return { label: '계산 실패', tone: 'bad' }
   if (!metric.last_run_at) return { label: '아직 안 셈', tone: 'neutral' }

@@ -108,7 +108,7 @@ export default function OntologyGroupsPage() {
                       />
                       {group.label}
                       {!group.is_active && (
-                        <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
+                        <span className="text-muted-foreground ml-2 text-xs">비활성</span>
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{group.slug}</TableCell>

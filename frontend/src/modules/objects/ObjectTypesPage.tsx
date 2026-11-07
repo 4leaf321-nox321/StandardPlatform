@@ -56,7 +56,7 @@ function TypeRow({ type, depth = 0 }: { type: ObjectType; depth?: number }) {
       <span className="text-muted-foreground/70 truncate font-mono text-xs">{type.slug}</span>
       {!type.is_active && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
-          안 씀
+          비활성
         </Badge>
       )}
       {type.kind_class === 'system' && (
@@ -218,7 +218,7 @@ export default function ObjectTypesPage() {
                 <Section
                   key={top.slug}
                   title={top.label}
-                  hint={!top.is_active ? '안 씀' : undefined}
+                  hint={!top.is_active ? '비활성' : undefined}
                 >
                   {own.map((one) => (
                     <TypeRow key={one.slug} type={one} />
