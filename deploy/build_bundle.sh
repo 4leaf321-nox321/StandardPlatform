@@ -154,6 +154,10 @@ cp deploy/pg-tune.sh                 "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 cp deploy/쉬운-설치.md               "$STAGE/쉬운-설치.md"
+# 운영 .env 정리본과 그 점검 — 서버에서 `sudo ./env-check.sh` 로 그 서버의 설치 전부를 한 번에 본다(BOM · CRLF ·
+# 빈 필수 키 · 포트 겹침 · 주소 접두어). 문서가 저장소에만 있으면 정작 .env 를 고치는 자리(서버)에서 못 본다.
+cp deploy/운영-env-설정.md           "$STAGE/운영-env-설정.md"
+cp deploy/env-check.sh               "$STAGE/"
 # HWAX 포털 연동 요청서의 틀 — `deploy.sh hwax-request` 가 이 설치의 값으로 채운다(ADR 0028). 정본은 docs/ 에
 # 있고(포털 담당이 저장소에서도 읽는다) 번들에는 이름만 바꿔 담는다 — 없으면 서버에서 요청서를 못 만든다.
 cp "docs/[참고] HWAX포탈_연동_요청서.md" "$STAGE/HWAX-연동요청서.template.md"
