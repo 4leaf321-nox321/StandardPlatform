@@ -3363,7 +3363,8 @@ async def datasource_runs(ctx: Context, slug: str) -> Any:
     실패한 실행의 `error_kind` 는 받기가 실패한 종류다(ADR 0060) — `connect`(연결 오류 · 잠깐의
     거절: 쪽마다 세 번까지 물었고, 타이머가 정기 간격 대신 15 → 30 → 60분 뒤 다시 넣는다) ·
     `auth`(인증 거절 — 다시 해도 같아 사람이 인증을 고친다) · `source`(주소 · 응답 오류). 비었으면
-    대응 · 행 오류 쪽이다 — `errors` 를 읽는다."""
+    대응 · 행 오류 쪽이다 — `errors` 를 읽는다. **원천 칸 변화**(대응에 쓴 칸이 받은 행에 없음 ·
+    원천에 새 칸, ADR 0061)도 `errors` 에 한 줄씩 온다 — 거울 소스는 그때 적용을 멈춘다."""
     return await _get(ctx, f"/api/datasources/{slug}/runs")
 
 

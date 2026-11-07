@@ -35,7 +35,7 @@ from app.modules.audit.models import AuditEntry
 # **무덤의 규칙을 그대로 쓴다** — 끊긴 선을 끊는 길이 둘이 되면 한쪽에만 권한 검사가 남는다.
 from app.modules.bundles import tombstones as graves
 from app.modules.bundles.schemas import RelationTombstoneIn, TombstonesIn
-from app.modules.datasources import fetchers, odata, ra_reports, retry
+from app.modules.datasources import drift, fetchers, odata, ra_reports, retry
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.datasources.schemas import (
     CoreSuggestOut,
@@ -1089,6 +1089,17 @@ def _sync_body(
         errors.append(
             f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — `$filter` 로 나눠 동기화하세요."
         )
+    # **원천 칸 변화**(`drift`) — 대응에 쓴 칸이 받은 행 어디에도 없으면 거울은 적용을
+    # 멈추고(그 칸의 값을 모두 지우기 전에), 아니면 말만 한다. 원천에 새로 생긴 칸도 적는다.
+    shift = drift.of(
+        source,
+        external_key=mapping.external_key,
+        sources=[one.source for one in mapping.columns],
+        rows=alive,
+    )
+    blocking, shift_notes = drift.notes(shift, mirror=mirror, rows=len(alive))
+    errors.extend(blocking)
+    notes.extend(shift_notes)
     for index, one in enumerate(mapped, start=1):
         if one.error:
             plan_rows.append(
@@ -1266,6 +1277,7 @@ def _sync_body(
     # 것을 감춘다.
     if run.status == "ok":
         source.last_success_at = run.finished_at
+        drift.remember(source, shift)  # 다음 실행의 「새 칸」 의 기준
     audit.record(
         db,
         action="datasource.sync",
