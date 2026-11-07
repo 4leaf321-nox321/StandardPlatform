@@ -184,6 +184,10 @@ class DataSourceRun(Base):
     errors: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
     """행 오류(앞의 몇 개)와 연결 오류. 전부 담지 않는다 — 5,000줄을 표에 넣으면 아무도
     안 읽는다."""
+    error_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """받기가 실패한 종류(`retry.failure_kind`) — `connect`(연결 오류 · 잠깐의 거절, 짧게 다시
+    넣는다) · `auth`(인증 거절) · `source`(주소 · 응답 오류). 대응 · 행 오류 · 그 밖은
+    비운다."""
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )

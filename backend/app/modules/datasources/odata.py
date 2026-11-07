@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from app.modules.datasources import retry
 from app.shared.errors import AppError, code
 
 TIMEOUT_SECONDS = 60.0
@@ -136,7 +137,8 @@ def fetch(
             follow_redirects=True,
         ) as client:
             while next_url and out.pages < MAX_PAGES:
-                response = client.get(next_url, params=next_params)
+                # 잠깐의 연결 오류 · 503 은 그 쪽만 다시 묻는다(`retry`).
+                response = retry.get(client, next_url, params=next_params)
                 if response.status_code in (401, 403):
                     raise AppError(
                         code("DATASOURCES", 11),
@@ -150,6 +152,7 @@ def fetch(
                         f"OData 가 HTTP {response.status_code} 를 돌려줬습니다: "
                         f"{response.text[:300]}",
                         status=502,
+                        details={"upstream_status": response.status_code},
                     )
                 try:
                     body = response.json()

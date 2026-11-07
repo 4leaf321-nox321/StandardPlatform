@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 
 from app.config import get_settings
-from app.modules.datasources import odata
+from app.modules.datasources import odata, retry
 from app.modules.datasources.models import DataSource
 from app.modules.datasources.odata import Auth, Fetched
 from app.shared import tabular
@@ -174,7 +174,7 @@ def _core_pages(
                     params["since"] = since
                 if current:
                     params["cursor"] = current
-                response = client.get(url, params=params)
+                response = retry.get(client, url, params=params)
                 _raise_for_core(response)
                 body = _core_body(response, what)
                 if isinstance(body, dict) and body.get("reset"):
@@ -352,7 +352,12 @@ def _raise_for_core(response: httpx.Response) -> None:
             f"그 설치에 열려 있는 코어 타입이 아닙니다. 상대의 말: {said}",
             status=502,
         )
-    raise AppError(code("DATASOURCES", 12), f"HTTP {response.status_code}: {said}", status=502)
+    raise AppError(
+        code("DATASOURCES", 12),
+        f"HTTP {response.status_code}: {said}",
+        status=502,
+        details={"upstream_status": response.status_code},
+    )
 
 
 def core_catalog(
@@ -457,7 +462,7 @@ def fetch_rest(
                     params[size_param] = str(page_size)
                     if cursor and not cursor.startswith(("http://", "https://")):
                         params[cursor_param] = cursor
-                response = client.get(next_url, params=params or None)
+                response = retry.get(client, next_url, params=params or None)
                 if response.status_code in (401, 403):
                     raise AppError(
                         code("DATASOURCES", 11),
@@ -470,6 +475,7 @@ def fetch_rest(
                         code("DATASOURCES", 12),
                         f"HTTP {response.status_code}: {response.text[:300]}",
                         status=502,
+                        details={"upstream_status": response.status_code},
                     )
                 try:
                     body = response.json()
@@ -557,7 +563,7 @@ def _read_bytes(location: str, auth: Auth, transport: httpx.BaseTransport | None
                 auth=auth.basic(),
                 follow_redirects=True,
             ) as client:
-                response = client.get(location)
+                response = retry.get(client, location)
         except httpx.HTTPError as caught:
             raise AppError(
                 code("DATASOURCES", 13),
@@ -569,6 +575,7 @@ def _read_bytes(location: str, auth: Auth, transport: httpx.BaseTransport | None
                 code("DATASOURCES", 12),
                 f"HTTP {response.status_code}: {response.text[:300]}",
                 status=502,
+                details={"upstream_status": response.status_code},
             )
         return response.content
 

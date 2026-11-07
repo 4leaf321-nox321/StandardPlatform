@@ -56658,6 +56658,17 @@
             "type": "array",
             "title": "Errors"
           },
+          "error_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Kind"
+          },
           "started_at": {
             "type": "string",
             "format": "date-time",

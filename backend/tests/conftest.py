@@ -183,6 +183,17 @@ def _no_real_ollama() -> Iterator[None]:
     embedding.transport = None
 
 
+@pytest.fixture(autouse=True)
+def _retry_without_waiting(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """받기의 짧은 재시도(`datasources/retry.py`)는 **기다리지 않는다** — 연결 오류를 흉내 내는
+    시험마다 2 + 8초가 붙는다. 물러난 초는 돌려주는 목록에 쌓인다(보는 시험이 쓴다)."""
+    from app.modules.datasources import retry
+
+    waited: list[float] = []
+    monkeypatch.setattr(retry, "sleep", waited.append)
+    return waited
+
+
 @pytest.fixture
 def db() -> Iterator[Session]:
     session = SessionLocal()

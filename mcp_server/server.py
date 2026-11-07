@@ -3358,7 +3358,12 @@ async def datasource_runs(ctx: Context, slug: str) -> Any:
     """데이터 소스의 **최근 실행 기록** — 언제 · 누가(타이머) · 계획/적용 · 수(`counts`: 새로 ·
     고침 · 그대로 · 오류 · 바깥에서 사라져 「사용 안 함」 으로 돌린 것 `deprecated` · 관계는
     `relations_*`) · 오류 행. 「어젯밤 동기화가 왜 실패했나」 · 「얼마나 들어왔나」 는 여기서.
-    끝점을 못 찾아 **다음 동기화로 미룬 관계**는 `relations_waiting`. 시스템 관리자만."""
+    끝점을 못 찾아 **다음 동기화로 미룬 관계**는 `relations_waiting`. 시스템 관리자만.
+
+    실패한 실행의 `error_kind` 는 받기가 실패한 종류다(ADR 0060) — `connect`(연결 오류 · 잠깐의
+    거절: 쪽마다 세 번까지 물었고, 타이머가 정기 간격 대신 15 → 30 → 60분 뒤 다시 넣는다) ·
+    `auth`(인증 거절 — 다시 해도 같아 사람이 인증을 고친다) · `source`(주소 · 응답 오류). 비었으면
+    대응 · 행 오류 쪽이다 — `errors` 를 읽는다."""
     return await _get(ctx, f"/api/datasources/{slug}/runs")
 
 

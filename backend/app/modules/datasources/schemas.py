@@ -178,6 +178,10 @@ class RunOut(BaseModel):
     rows_seen: int
     counts: dict[str, int]
     errors: list[Any]
+    error_kind: str | None = None
+    """받기가 실패한 종류 — `connect`(연결 오류 · 잠깐의 거절 — 정기 간격보다 짧게 15 → 30 →
+    60분 뒤 다시 넣는다) · `auth`(인증 거절 — 비밀을 고쳐야 한다) · `source`(주소 · 응답 오류).
+    대응 · 행 오류는 비운다."""
     started_at: datetime
     finished_at: datetime | None
 

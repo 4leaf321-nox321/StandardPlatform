@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.datasources import odata
+from app.modules.datasources import odata, retry
 from app.modules.datasources.models import DataSource
 from app.modules.datasources.odata import Auth, Fetched
 from app.modules.objects import aliases, bulk
@@ -210,7 +210,11 @@ def _data(response: httpx.Response) -> Any:
             status=502,
         )
     if response.status_code >= 400:
-        raise _refuse(53, f"RA HTTP {response.status_code}: {response.text[:300]}", status=502)
+        refused = _refuse(
+            53, f"RA HTTP {response.status_code}: {response.text[:300]}", status=502
+        )
+        refused.details["upstream_status"] = response.status_code
+        raise refused
     try:
         body = response.json()
     except ValueError:
@@ -291,7 +295,7 @@ def fetch(
     try:
         with _client(auth, transport) as client:
             while out.pages < MAX_PAGES:
-                data = _data(client.get(url, params=params))
+                data = _data(retry.get(client, url, params=params))
                 items = data.get("items") if isinstance(data, dict) else None
                 if not isinstance(items, list):
                     raise _refuse(53, "RA 피드에 items 가 없습니다.", status=502)

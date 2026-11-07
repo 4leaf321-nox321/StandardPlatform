@@ -35,7 +35,7 @@ from app.modules.audit.models import AuditEntry
 # **무덤의 규칙을 그대로 쓴다** — 끊긴 선을 끊는 길이 둘이 되면 한쪽에만 권한 검사가 남는다.
 from app.modules.bundles import tombstones as graves
 from app.modules.bundles.schemas import RelationTombstoneIn, TombstonesIn
-from app.modules.datasources import fetchers, odata, ra_reports
+from app.modules.datasources import fetchers, odata, ra_reports, retry
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.datasources.schemas import (
     CoreSuggestOut,
@@ -803,11 +803,26 @@ def _sync_announced(
 ) -> SyncResult:
     before = source.last_status
     result = _sync(db, user, source, apply=apply)
-    _announce(db, source, before=before)
+    _announce(db, source, before=before, kind=result.run.error_kind)
     return result
 
 
-def _announce(db: Session, source: DataSource, *, before: str | None) -> None:
+#: 첫 실패 알림의 본문 — 받기가 실패한 종류마다(`retry.failure_kind`). 사람이 할 일이 다르다.
+FAILED_BODY = {
+    retry.CONNECT: "연결 오류입니다 — 정기 간격을 기다리지 않고 짧게(15분 · 30분 · 60분 "
+    "뒤) 다시 시도합니다. 계속 실패하면 상대 시스템의 상태를 확인하세요.",
+    retry.AUTH: "인증이 거절됐습니다 — 다시 시도해도 같으므로 소스 수정에서 인증 방식과 "
+    "비밀을 확인하세요.",
+}
+FAILED_BODY_DEFAULT = (
+    "자동 동기화가 멈춘 것은 아닙니다 — 다음 차례에 다시 시도합니다. "
+    "무엇이 막았는지는 소스 화면의 기록에 있습니다."
+)
+
+
+def _announce(
+    db: Session, source: DataSource, *, before: str | None, kind: str | None = None
+) -> None:
     """**상태가 바뀔 때만 알린다.**
 
     타이머가 5분마다 도니까 실패할 때마다 알리면 하루에 288개가 쌓이고, 그러면 사람은
@@ -824,8 +839,7 @@ def _announce(db: Session, source: DataSource, *, before: str | None) -> None:
             db,
             kind=notifications.DATASOURCE_FAILED,
             title=f"데이터 소스 「{source.name}」 동기화가 실패했습니다",
-            body="자동 동기화가 멈춘 것은 아닙니다 — 다음 차례에 다시 시도합니다. "
-            "무엇이 막았는지는 소스 화면의 기록에 있습니다.",
+            body=FAILED_BODY.get(kind or "", FAILED_BODY_DEFAULT),
             link="/admin/datasources",
         )
     elif after == "ok" and before == "failed":
@@ -985,7 +999,7 @@ def _sync_body(
         else:
             fetched = fetch()
     except AppError as caught:
-        return _fail(db, source, run, [caught.message])
+        return _fail_fetch(db, source, run, caught)
     since_used = str(resume.get("since") or "") if resume else source.since_mark
 
     if mapping.relations is not None:
@@ -1383,6 +1397,27 @@ RELATION_KINDS = ("sp_core",)
 EDGE_SKIP = (fetchers.CORE_DELETED,)
 
 
+def _fail_fetch(
+    db: Session, source: DataSource, run: DataSourceRun, caught: AppError
+) -> SyncResult:
+    """**받기가 실패했다** — 종류를 적고(`retry.failure_kind`), 연결 실패면 언제 다시 넣는지
+    한 줄 더 적는다(`due` 가 그때 넣는다)."""
+    run.error_kind = retry.failure_kind(caught)
+    errors = [caught.message]
+    if run.error_kind == retry.CONNECT:
+        wait = connect_retry_after(db, source, current=run)
+        if wait is not None:
+            errors.append(
+                f"잠깐의 연결 오류일 수 있어 약 {int(wait.total_seconds() // 60)}분 뒤 다시 "
+                "시도합니다(정기 실행 간격보다 짧게 — 연달아 실패하면 간격을 늘립니다)."
+            )
+    elif run.error_kind == retry.AUTH:
+        errors.append(
+            "인증이 거절됐습니다 — 다시 시도해도 같으므로 소스 수정에서 인증을 확인하세요."
+        )
+    return _fail(db, source, run, errors)
+
+
 def _fail(
     db: Session, source: DataSource, run: DataSourceRun, errors: list[str]
 ) -> SyncResult:
@@ -1424,7 +1459,7 @@ def _sync_ra(
             transport=transport,
         )
     except AppError as caught:
-        return _fail(db, source, run, [caught.message])
+        return _fail_fetch(db, source, run, caught)
 
     # 같은 보고서가 두 번 오면(겹쳐 읽기 · 쪽 경계) 뒤의 것 하나 — 한 계획에 같은 객체가 둘이면
     # 일괄 입력이 그 줄을 오류로 만든다.
@@ -2545,11 +2580,49 @@ def suggest_core_mapping(
 #: 다음 깸으로 밀린다 — 5분 소스가 실제로는 10분마다 돌았다(2026-10-08). 지표의 `DUE_GRACE`
 #: 와 같은 무늬다.
 DUE_GRACE = timedelta(minutes=5)
+#: 연결 실패(`retry.CONNECT`) 뒤 다시 넣는 간격 — 연달아 실패한 횟수마다(넘으면 마지막
+#: 값). 정기 간격보다 길면 정기 간격대로. 하루 간격 소스가 사내 API 의 야간 점검 몇 분으로
+#: 하루를 잃지 않게.
+CONNECT_RETRY = (timedelta(minutes=15), timedelta(minutes=30), timedelta(minutes=60))
+#: 연달아 실패한 횟수를 셀 때 거슬러 보는 실행 수.
+CONNECT_STREAK_LOOKBACK = 8
+
+
+def connect_retry_after(
+    db: Session, source: DataSource, *, current: DataSourceRun | None = None
+) -> timedelta | None:
+    """마지막 실행부터 거슬러 **연달아 연결 실패**였으면 다시 넣을 간격 — 아니면 None(정기
+    간격).
+
+    `current` 는 지금 적고 있는(아직 커밋 전인) 연결 실패 — 하나로 세고 기록에서는 뺀다. 정기
+    실행이 아닌 소스(간격 0) · 비활성 소스는 None — 사람이 돌리는 소스를 타이머가 대신 돌리지
+    않는다. 계획만 본 실행(`planned`)은 건너뛴다(시계를 안 옮긴다)."""
+    if not source.is_active or source.interval_minutes <= 0:
+        return None
+    stmt = (
+        select(DataSourceRun.status, DataSourceRun.error_kind)
+        .where(DataSourceRun.source_id == source.id, DataSourceRun.status != "planned")
+        .order_by(DataSourceRun.started_at.desc())
+        .limit(CONNECT_STREAK_LOOKBACK)
+    )
+    if current is not None:
+        stmt = stmt.where(DataSourceRun.id != current.id)
+    streak = 1 if current is not None else 0
+    for status, kind in db.execute(stmt).all():
+        if status != "failed" or kind != retry.CONNECT:
+            break
+        streak += 1
+    if streak == 0:
+        return None
+    wait = CONNECT_RETRY[min(streak, len(CONNECT_RETRY)) - 1]
+    every = timedelta(minutes=source.interval_minutes)
+    return wait if wait < every else None
 
 
 def due(db: Session, now: datetime | None = None) -> list[DataSource]:
     """타이머가 돌릴 차례인 소스 — 간격이 0 이 아니고 마지막 실행에서 그만큼(여유를 빼고)
-    지난 것."""
+    지난 것. 마지막이 **연결 실패**면 정기 간격 대신 `CONNECT_RETRY` 간격
+    (`connect_retry_after`)."""
     now = now or datetime.now(UTC)
     out: list[DataSource] = []
     for source in db.scalars(
@@ -2558,6 +2631,8 @@ def due(db: Session, now: datetime | None = None) -> list[DataSource]:
         )
     ):
         every = timedelta(minutes=source.interval_minutes)
+        if source.last_status == "failed":
+            every = connect_retry_after(db, source) or every
         if source.last_run_at is None or source.last_run_at + every - DUE_GRACE <= now:
             out.append(source)
     return out
