@@ -30992,6 +30992,13 @@
             },
             "type": "array",
             "title": "Next Steps"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/ValueMissOut"
+            },
+            "type": "array",
+            "title": "Values"
           }
         },
         "type": "object",
@@ -48138,6 +48145,17 @@
             "type": "string",
             "title": "Type Slug",
             "default": ""
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
           }
         },
         "type": "object",
@@ -48160,6 +48178,11 @@
             "maxItems": 500,
             "minItems": 1,
             "title": "Names"
+          },
+          "near": {
+            "type": "boolean",
+            "title": "Near",
+            "default": false
           }
         },
         "type": "object",
@@ -48226,6 +48249,13 @@
             "title": "Truncated",
             "default": false
           },
+          "near": {
+            "items": {
+              "$ref": "#/components/schemas/ResolveHit"
+            },
+            "type": "array",
+            "title": "Near"
+          },
           "name": {
             "type": "string",
             "title": "Name"
@@ -48271,6 +48301,13 @@
             "type": "boolean",
             "title": "Truncated",
             "default": false
+          },
+          "near": {
+            "items": {
+              "$ref": "#/components/schemas/ResolveHit"
+            },
+            "type": "array",
+            "title": "Near"
           }
         },
         "type": "object",
@@ -55161,6 +55198,43 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ValueMissOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "near": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Near"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Options"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "value"
+        ],
+        "title": "ValueMissOut"
       },
       "VisitsIn": {
         "properties": {

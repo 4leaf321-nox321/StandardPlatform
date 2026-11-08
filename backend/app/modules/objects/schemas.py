@@ -1137,10 +1137,13 @@ class ResolveHit(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     status: str
     matched_by: str
-    """무엇으로 맞았나 — `id` · `key` · `alias` · `label` · `contains`."""
+    """무엇으로 맞았나 — `id` · `key` · `alias` · `label` · `contains` · `near`(글자가 비슷한
+    짐작 — `ResolveOut.near` 에만)."""
     hint: str = ""
     type_slug: str = ""
     """어느 타입의 객체인가 — 인터페이스로 물으면 후보가 여러 타입에서 온다."""
+    score: float | None = None
+    """`near` 의 비슷함(pg_trgm, 0~1)."""
 
 
 class ResolveOut(BaseModel):
@@ -1153,12 +1156,19 @@ class ResolveOut(BaseModel):
     candidates: list[ResolveHit] = Field(default_factory=list)
     hint: str = ""
     truncated: bool = False
+    near: list[ResolveHit] = Field(default_factory=list)
+    """`none` 일 때만 — 축 타입에서 이름 · 식별자 · 별칭의 **글자가 비슷한 것**(최대 3, 비슷한
+    차례). **짐작이다** — `candidates` 가 아니므로 그대로 쓰지 않고 사람에게 보여 고르게
+    한다."""
 
 
 class ResolveManyIn(BaseModel):
     """이름 여럿을 **한 번에** — 한 줄에 한 번 물으면 왕복이 줄 수만큼 늘어난다."""
 
     names: list[str] = Field(min_length=1, max_length=500)
+    near: bool = False
+    """`none` 인 줄에 글자가 비슷한 짐작(`near`)도 — 기본은 끈다(줄마다 비슷함을 세면 느리다).
+    `none` 인 줄만 다시 물을 때 켠다."""
 
 
 class ResolveOneOut(ResolveOut):
@@ -1186,6 +1196,20 @@ class FilterEffectOut(BaseModel):
     `null` 은 0 이 아니라 **못 셌다**는 뜻이다."""
 
 
+class ValueMissOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    """조건 이름 — `filters[].name` 과 같다."""
+    label: str
+    value: str
+    """고를 값에 없는 값 — 건 그대로."""
+    near: list[str] = Field(default_factory=list)
+    """가까운 고를 값(최대 3) — **짐작이다**, 사람에게 확인한다."""
+    options: list[str] = Field(default_factory=list)
+    """그 칸의 고를 값(앞 20개)."""
+
+
 class DiagnosisOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1198,6 +1222,9 @@ class DiagnosisOut(BaseModel):
     hidden: int
     filters: list[FilterEffectOut] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
+    values: list[ValueMissOut] = Field(default_factory=list)
+    """**고를 값 밖의 값**으로 건 조건 — 「상태 = 양산중」 처럼 철자 · 띄어쓰기 · 다른 말로
+    0건이 된 것. 조건 때문에 0건일 때만 싣고, `message` 가 먼저 말한다."""
 
 
 # --- 비슷한 기록(ADR 0022) -------------------------------------------------------------

@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+import difflib
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
@@ -47,7 +48,7 @@ from app.modules.objects import aliases, system
 from app.modules.objects.models import NORMALIZED_KEY_SQL, ObjectAlias, ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.services import bigram_plan, containing_ids, word_patterns
-from app.modules.ontology.models import ObjectType
+from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import clean, compare_key
 
@@ -67,6 +68,8 @@ class Hit:
     hint: str = ""
     type_slug: str = ""
     """어느 타입의 객체인가 — 인터페이스로 물으면 후보가 여러 타입에서 온다."""
+    score: float | None = None
+    """`near` 의 비슷함(pg_trgm, 0~1) — 그 밖은 없다."""
 
 
 @dataclass
@@ -77,6 +80,9 @@ class Resolution:
     candidates: list[Hit] = field(default_factory=list)
     hint: str = ""
     truncated: bool = False
+    near: list[Hit] = field(default_factory=list)
+    """`none` 일 때만 — 글자가 비슷한 **짐작**(축 타입, `misses.similar`). 후보(`candidates`)가
+    아니다: 사람에게 보이고 고르게 한다."""
 
 
 def _hit(row: ObjectInstance, how: str, names: list[str], type_slug: str = "") -> Hit:
@@ -187,10 +193,14 @@ def _lowered(raw: str) -> str:
     return unicodedata.normalize("NFKC", clean(raw)).lower()
 
 
-def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> Resolution:
+def by_name(
+    db: Session, user: User, target: ObjectType | Scope, text: str, *, near: bool = True
+) -> Resolution:
     """이름 하나를 객체 하나로. **정해지지 않으면 정해지지 않았다고 말한다.**
 
-    인터페이스로 물으면 구현 타입 전부에서 찾는다."""
+    인터페이스로 물으면 구현 타입 전부에서 찾는다. 아무것도 안 맞으면(`none`) 축 타입에서
+    글자가 비슷한 것을 `near` 에 짐작으로 싣는다(`near=False` 면 안 찾는다 — 이름 여럿을 한
+    번에 풀 때의 기본)."""
     text = (text or "").strip()
     if not text:
         return Resolution(match="none", hint="찾을 이름이 비어 있습니다.")
@@ -272,11 +282,52 @@ def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> R
     if rows:
         return decide(rows, "contains", sure=False)
 
+    guessed = _near(db, user, scope, norm) if near else []
+    if guessed:
+        names = " · ".join(f"「{one.label}」" for one in guessed)
+        return Resolution(
+            match="none",
+            near=guessed,
+            hint=f"{scope.label}에 「{text}」 이(가) 없습니다. 글자가 비슷한 것: {names}"
+            "(`near`) — **짐작입니다.** 사람에게 보이고 맞다고 하면 그것을 쓰세요. 그 말을 "
+            "별칭으로 굳히면 다음부터 바로 찾습니다(alias_candidates · "
+            "alias_candidate_apply). 맞는 것이 없으면 오타인지, 아직 안 만든 것인지 묻습니다 "
+            "— **짐작해서 다른 것을 쓰지 마세요.**",
+        )
     return Resolution(
         match="none",
         hint=f"{scope.label}에 「{text}」 이(가) 없습니다. 오타인지, 아직 안 만든 "
         "것인지 사람에게 확인하세요 — **짐작해서 다른 것을 쓰지 마세요.**",
     )
+
+
+def _near(db: Session, user: User, scope: Scope, norm: str) -> list[Hit]:
+    """글자가 비슷한 것 — 축 타입에서만(기록 타입의 이름은 사람이 부르는 이름이 아니다)."""
+    from app.modules.objects import misses  # 순환을 피한다 — misses 가 이 모듈 곁에 선다
+
+    axes = [one for one in scope.types if one.usage == "axis"]
+    if not axes or not norm:
+        return []
+    found, _ = misses.similar(db, user, axes, norm)
+    said = {"alias": "별칭", "key": "식별자"}
+    return [
+        Hit(
+            id=one.id,
+            key=one.key,
+            label=one.label,
+            matched_by="near",
+            hint=f"{said.get(one.matched, '이름')} 「{_near_text(one)}」 이(가) 비슷함 — 짐작",
+            type_slug=one.type_slug,
+            score=one.score,
+        )
+        for one in found
+    ]
+
+
+def _near_text(one: Any) -> str:
+    if one.matched_text:
+        return str(one.matched_text)
+    return str(one.key if one.matched == "key" else one.label)
 
 
 # --- 빈 결과 진단 -------------------------------------------------------------
@@ -296,6 +347,67 @@ class FilterEffect:
 
 
 @dataclass
+class ValueMiss:
+    """고를 값(`enum`) 칸에 **그 칸의 고를 값에 없는 값**으로 건 조건 — 철자 · 띄어쓰기 · 다른
+    말로 0건이 된 것(AO 의 값 점검과 같은 몫). 자동으로 고치지 않는다."""
+
+    name: str
+    """조건 이름 — `FilterEffect.name` 과 같다(`f.status.eq#0` · `p.grade`)."""
+    label: str
+    """칸 이름(사람이 읽는)."""
+    value: str
+    near: list[str] = field(default_factory=list)
+    """가까운 고를 값 — 대소문자 · 띄어쓰기만 다른 것, 서로 품은 것, 글자가 비슷한 것 차례(최대
+    3). 비면 `options` 를 본다."""
+    options: list[str] = field(default_factory=list)
+    """그 칸의 고를 값(앞 20개)."""
+
+
+#: 가까운 고를 값 몇 개 · 고를 값을 몇 개까지 싣나.
+NEAR_OPTIONS = 3
+OPTIONS_SHOWN = 20
+
+
+def near_options(value: str, options: list[str]) -> list[str]:
+    """`value` 와 가까운 고를 값 — 같은 비교키(대소문자 · 띄어쓰기) → 서로 품음 → 글자가
+    비슷함."""
+    wanted = compare_key(value)
+    keyed = [(compare_key(one), one) for one in options]
+    out = [one for key, one in keyed if key == wanted]
+    out += [one for key, one in keyed if wanted and key and (wanted in key or key in wanted)]
+    out += difflib.get_close_matches(value.strip(), options, n=NEAR_OPTIONS, cutoff=0.5)
+    return list(dict.fromkeys(out))[:NEAR_OPTIONS]
+
+
+def value_misses(
+    defs: list[PropertyDef], checks: list[tuple[str, str, str, list[str]]]
+) -> list[ValueMiss]:
+    """(조건 이름, 칸, 연산, 값들) 중 고를 값 칸에 고를 값 밖의 값을 건 것. 같음 · 다름 · 그중
+    하나(`eq` · `ne` · `in`)만 본다 — 포함 · 시작은 일부 글자라 고를 값과 견주지 않는다."""
+    by_key = {one.key: one for one in defs}
+    out: list[ValueMiss] = []
+    for name, key, op, values in checks:
+        found = by_key.get(key)
+        if found is None or found.data_type != "enum" or op not in ("eq", "ne", "in"):
+            continue
+        options = [str(one) for one in (found.enum_options or [])]
+        if not options:
+            continue
+        for value in values:
+            if value.strip() and value not in options:
+                out.append(
+                    ValueMiss(
+                        name=name,
+                        label=found.label,
+                        value=value,
+                        near=near_options(value, options),
+                        options=options[:OPTIONS_SHOWN],
+                    )
+                )
+    return out
+
+
+@dataclass
 class Diagnosis:
     total: int
     reason: str
@@ -307,6 +419,20 @@ class Diagnosis:
     """있지만 내 부서 밖이라 안 보이는 수."""
     filters: list[FilterEffect] = field(default_factory=list)
     next_steps: list[str] = field(default_factory=list)
+    values: list[ValueMiss] = field(default_factory=list)
+    """고를 값 밖의 값으로 건 조건(`value_misses`) — 0건의 가장 흔한 까닭이라 먼저 말한다."""
+
+
+def _value_said(misses: list[ValueMiss]) -> str:
+    one = misses[0]
+    near = (
+        f"가까운 값: {' · '.join(f'「{v}」' for v in one.near)}"
+        if one.near
+        else f"고를 값: {' · '.join(one.options[:8])}"
+    )
+    more = f"(그 밖에 {len(misses) - 1}개 더)" if len(misses) > 1 else ""
+    head = f"「{one.label}」 의 「{one.value}」 은(는) 그 칸의 고를 값에 없습니다"
+    return f"{head} — {near}{more}. "
 
 
 def diagnose(
@@ -319,10 +445,12 @@ def diagnose(
     without: Any,
     unknown: Any,
     count: Any,
+    values: list[ValueMiss] | None = None,
 ) -> Diagnosis:
     """0건이 **왜** 0건인지. `without(name)` 은 그 조건만 뺀 질의, `unknown(name)` 은
     그 칸이 비어 있어 빠진 수, `count(stmt)` 는 세기다 — 목록과 **같은 거르기**를
-    쓰려고 부르는 쪽이 넘긴다(따로 적으면 진단이 목록과 어긋난다)."""
+    쓰려고 부르는 쪽이 넘긴다(따로 적으면 진단이 목록과 어긋난다). `values` 는 고를 값 밖의
+    값으로 건 조건 — 조건 때문에 0건이면 그것부터 말한다."""
     scope = as_scope(db, target)
     label = scope.label
     if scope.object_type is not None and system.is_system(scope.object_type):
@@ -402,6 +530,7 @@ def diagnose(
             hidden=hidden,
         )
 
+    misses = values or []
     top = effects[0]
     tail = ""
     if top.unknown:
@@ -412,12 +541,22 @@ def diagnose(
     return Diagnosis(
         total=0,
         reason="filters",
-        message=f"{label}에 보이는 것은 {visible_total}건인데 조건이 좁아 "
+        message=(_value_said(misses) if misses else "")
+        + f"{label}에 보이는 것은 {visible_total}건인데 조건이 좁아 "
         f"0건이 됐습니다. 「{top.label}」 하나만 빼면 {top.remaining}건입니다.{tail}",
         type_total=visible_total,
         hidden=hidden,
         filters=effects,
+        values=misses,
         next_steps=[
+            *(
+                [
+                    "고를 값에 없는 값을 고쳐 다시 묻는다 — `values[].near` 는 짐작이니 "
+                    "사람에게 확인하고, 그 칸의 고를 값은 object_fields 로 본다."
+                ]
+                if misses
+                else []
+            ),
             f"「{top.label}」 을(를) 빼고 다시 묻는다.",
             "칸 이름이 맞는지 object_fields 로 확인한다 — 값이 비어 있는 칸일 수 있다.",
             # 글자가 안 맞아 0건일 수 있다 — 같은 말을 뜻으로 찾는 길이 있다(ADR 0052).

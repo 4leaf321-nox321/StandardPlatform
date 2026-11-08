@@ -2489,7 +2489,9 @@ def resolve_names(
     """
     scope = _scope(db, type_slug)
     items = [
-        ResolveOneOut(name=one, **resolve.by_name(db, user, scope, one).__dict__)
+        ResolveOneOut(
+            name=one, **resolve.by_name(db, user, scope, one, near=payload.near).__dict__
+        )
         for one in payload.names
     ]
     counts: dict[str, int] = {"exact": 0, "candidates": 0, "none": 0}
@@ -2567,6 +2569,20 @@ def diagnose_list(
         if projected is not None
         else count_of(db, build(None))
     )
+    # 고를 값 칸에 고를 값 밖의 값을 건 조건 — 제외 · 같은 관계 묶음 안의 것은 묶음째 본다.
+    checks = [
+        (key, key[2:], "eq", [value])
+        for key, value in request.query_params.items()
+        if key.startswith("p.")
+    ] + [
+        (
+            _condition_name(one, index),
+            one.field,
+            one.op,
+            conditions.split_values(one.value) if one.op == "in" else [one.value],
+        )
+        for index, one in enumerate(conditions.parse(request.query_params))
+    ]
     found = resolve.diagnose(
         db,
         user,
@@ -2576,6 +2592,7 @@ def diagnose_list(
         without=build,
         unknown=unknown,
         count=lambda stmt: count_of(db, stmt),
+        values=resolve.value_misses(defs, checks),
     )
     return DiagnosisOut.model_validate(found)
 

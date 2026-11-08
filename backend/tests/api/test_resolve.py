@@ -218,3 +218,109 @@ def test_이름_여럿을_한_번에_푼다(client: TestClient, admin: Signed) -
     ]
     assert body["items"][1]["object"]["matched_by"] == "alias"
     assert body["counts"] == {"exact": 2, "candidates": 1, "none": 1}
+
+
+# --- 0건 · 없음에 붙는 단서 — 고를 값 점검 · 참조 칸의 이름 · 글자가 비슷한 짐작 ---------
+
+
+def test_없는_이름에는_글자가_비슷한_것을_짐작으로_싣는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """`none` 은 그대로 — 후보(`candidates`)가 아니라 짐작(`near`)이다. 사람이 고른다."""
+    tool = _make_type(client, admin, label="툴")
+    fluent = _make_object(client, admin, tool, label="Ansys Fluent")
+    _make_object(client, admin, tool, label="Abaqus")
+
+    got = _resolve(client, admin, tool, "Ansys Fluet")
+    assert got["match"] == "none" and got["object"] is None and got["candidates"] == []
+    first = got["near"][0]
+    assert first["id"] == fluent["id"] and first["matched_by"] == "near"
+    assert 0 < first["score"] <= 1 and "짐작" in first["hint"]
+    assert (
+        "「Ansys Fluent」" in got["hint"] and "짐작해서 다른 것을 쓰지 마세요" in got["hint"]
+    )
+    assert _resolve(client, admin, tool, "전혀다른말")["near"] == []
+
+    url = f"/api/objects/{tool}/resolve-many"
+    many = client.post(url, json={"names": ["Ansys Fluet", "Abaqus"]}, headers=admin.headers)
+    assert [one["near"] for one in many.json()["items"]] == [[], []]  # 여럿은 기본으로 안 본다
+    lit = client.post(
+        url, json={"names": ["Ansys Fluet", "Abaqus"], "near": True}, headers=admin.headers
+    ).json()["items"]
+    assert lit[0]["near"][0]["id"] == fluent["id"]
+    assert lit[1]["match"] == "exact" and lit[1]["near"] == []  # 찾은 줄에는 짐작이 없다
+
+
+def test_기록_타입의_이름에는_짐작을_싣지_않는다(client: TestClient, admin: Signed) -> None:
+    log = _make_type(client, admin, label="서비스 건", usage="log")
+    _make_object(client, admin, log, label="Ansys Fluent")
+    got = _resolve(client, admin, log, "Ansys Fluet")
+    assert got["match"] == "none" and got["near"] == []
+
+
+def test_고를_값에_없는_값으로_0건이면_가까운_값을_말한다(
+    client: TestClient, admin: Signed
+) -> None:
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="stage",
+        label="단계",
+        data_type="enum",
+        enum_options=["개발", "양산", "단종"],
+    )
+    _make_object(client, admin, part, label="볼트", properties={"stage": "양산"})
+
+    got = _diagnose(client, admin, part, {"f.stage.eq": "양산중"})
+    assert got["reason"] == "filters"
+    (miss,) = got["values"]
+    assert miss["label"] == "단계" and miss["value"] == "양산중" and miss["near"] == ["양산"]
+    assert miss["options"] == ["개발", "양산", "단종"]
+    assert got["message"].startswith(
+        "「단계」 의 「양산중」 은(는) 그 칸의 고를 값에 없습니다"
+    )
+    assert "고를 값에 없는 값" in got["next_steps"][0]
+
+    # 하나 중 하나(`in`) · `p.` 도 본다. 고를 값 안의 값은 말하지 않는다.
+    some = _diagnose(client, admin, part, {"f.stage.in": "개발|량산"})
+    assert [one["value"] for one in some["values"]] == ["량산"]
+    plain = _diagnose(client, admin, part, {"p.stage": "Dan종"})
+    assert [one["value"] for one in plain["values"]] == ["Dan종"]
+    assert _diagnose(client, admin, part, {"f.stage.eq": "단종"})["values"] == []
+
+
+def test_참조_칸에_이름을_넣으면_id_가_아니라고_거절한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """예전에는 「아무것도 안 가리킴」 으로 읽어 같음은 0건 · 다름은 전부였다 — AI 가 그 0건을
+    「없다」 로 옮겼다."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="vendor",
+        label="공급사",
+        data_type="object_ref",
+        ref_type_slug=vendor,
+    )
+    made = _make_object(client, admin, vendor, label="Ansys")
+    _make_object(client, admin, part, label="볼트", properties={"vendor": made["id"]})
+
+    for params in ({"f.vendor.eq": "Ansys"}, {"f.vendor.in": f"{made['id']}|Ansys"}):
+        refused = client.get(f"/api/objects/{part}", params=params, headers=admin.headers)
+        assert refused.status_code == 422, refused.text
+        said = refused.json()["error"]["message"]
+        assert said.startswith("공급사: 「Ansys」 은(는) 객체 id 가 아닙니다")
+        assert f"/api/objects/{vendor}/resolve" in said and "object_resolve" in said
+    ok = client.get(
+        f"/api/objects/{part}", params={"f.vendor.eq": made["id"]}, headers=admin.headers
+    )
+    assert ok.status_code == 200 and ok.json()["total"] == 1
+    blank = client.get(
+        f"/api/objects/{part}", params={"f.vendor.empty": ""}, headers=admin.headers
+    )
+    assert blank.status_code == 200 and blank.json()["total"] == 0

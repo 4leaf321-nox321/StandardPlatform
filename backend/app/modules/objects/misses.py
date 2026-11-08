@@ -468,6 +468,14 @@ def suggestions(db: Session, user: User, row: SearchMiss) -> tuple[list[Suggesti
     axes = [one for one in types if one.usage == "axis"]
     if not axes:
         return [], "기록 타입이라 제안하지 않습니다 — 별칭은 이름으로 부르는 축에 붙습니다."
+    return similar(db, user, axes, row.norm)
+
+
+def similar(
+    db: Session, user: User, axes: list[ObjectType], norm: str
+) -> tuple[list[Suggestion], str]:
+    """`axes` 타입에서 이름 · 식별자 · 별칭이 `norm`(`compare_key`) 과 비슷한 것(pg_trgm) —
+    별칭 후보의 「이것 아닐까」 와 이름 풀이가 없을 때의 `near` 가 함께 쓴다. **짐작이다.**"""
     ids = [one.id for one in axes]
     size = int(
         db.scalar(
@@ -482,7 +490,6 @@ def suggestions(db: Session, user: User, row: SearchMiss) -> tuple[list[Suggesti
             f"찾을 객체가 {size:,}건이라 제안을 건너뛰었습니다 — 타입을 정해 찾거나 "
             "객체를 직접 고르세요."
         )
-    norm = row.norm
     seen = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
     alive = (ObjectInstance.type_id.in_(ids), ObjectInstance.deleted_at.is_(None), seen)
     label_score = func.greatest(

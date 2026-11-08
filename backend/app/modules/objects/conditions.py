@@ -281,6 +281,7 @@ def clause(
         )
 
     if data_type == "object_ref":
+        _refuse_names(raw, op, label, definition)
         if op in OPS_TREE:
             assert definition is not None
             roots = _ids(_values(raw))
@@ -440,6 +441,27 @@ def _ref_clause(
         return linked.where(graph.any_of(ObjectRef.dst_id, subtree)).exists()
     hit = linked.where(ObjectRef.dst_id.in_(wanted)).exists()
     return ~hit if op == "ne" else hit
+
+
+def _refuse_names(raw: str, op: str, label: str, definition: PropertyDef | None) -> None:
+    """**참조 칸은 id 로 거른다** — 이름을 넣으면 거절하고 이름 풀이를 먼저 하라고 말한다.
+
+    예전에는 id 모양이 아닌 값을 조용히 「아무것도 안 가리킴」 으로 읽어, 같음은 0건 · 다름은
+    전부가 됐다 — AI 가 「모델 = S26」 으로 묻고 0건을 「없다」 로 옮겼다(AO 와 견준 조사 —
+    2026-11-08). 빈 값은 그대로 둔다(화면이 지운 칸)."""
+    if op in ("empty", "notempty"):
+        return
+    values = _values(raw) if op in ("in", "under") else [raw]
+    named = [one.strip() for one in values if one.strip() and not _ids([one])]
+    if not named:
+        return
+    target = (definition.ref_type_slug if definition else None) or "<그 타입>"
+    raise InvalidValue(
+        code("OBJECTS", 152),
+        f"{label}: 「{named[0]}」 은(는) 객체 id 가 아닙니다 — 참조 칸은 가리키는 객체의 "
+        f"id 로 거릅니다. 이름이면 이름 풀이로 id 를 먼저 찾으세요(MCP `object_resolve` · "
+        f"`GET /api/objects/{target}/resolve?name=…`).",
+    )
 
 
 def _ids(raw: list[str]) -> list[uuid.UUID]:

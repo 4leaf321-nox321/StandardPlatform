@@ -1528,6 +1528,8 @@ async def object_resolve(ctx: Context, type_slug: str, name: str) -> Any:
       - `exact`      → `object.id` 를 그대로 쓴다.
       - `candidates` → **쓰지 마라.** 후보를 사람에게 보여 주고 어느 것인지 묻는다.
       - `none`       → 없다. 오타인지 아직 안 만든 것인지 사람에게 묻는다. 짐작하지 마라.
+                       축 타입이면 글자가 비슷한 것이 `near` 에 온다(최대 3) — **짐작이다**:
+                       「『…』 를 말씀하신 건가요?」 로 사람에게 확인한 뒤에만 쓴다.
 
     식별자 → 별칭 → 이름 → 포함 차례로 맞춘다. 별칭이 있으므로 「앤시스」 로 물어도
     「Ansys」 가 나온다. **포함으로 하나만 걸려도 `exact` 가 아니다** — 포함은 짐작이다.
@@ -1538,7 +1540,9 @@ async def object_resolve(ctx: Context, type_slug: str, name: str) -> Any:
 
 
 @tool()
-async def objects_resolve_many(ctx: Context, type_slug: str, names: list[str]) -> Any:
+async def objects_resolve_many(
+    ctx: Context, type_slug: str, names: list[str], near: bool = False
+) -> Any:
     """이름 **여럿을 한 번에** 푼다 — 판정 규칙은 `object_resolve` 와 같다.
 
     한 줄에 한 번 물으면 이천 줄짜리 원천에 왕복이 이천 번이다. **넣기 전에** 이것으로
@@ -1548,8 +1552,12 @@ async def objects_resolve_many(ctx: Context, type_slug: str, names: list[str]) -
     답은 **보낸 차례대로** 오고 줄마다 물은 이름(`name`)이 붙는다. `counts` 가 몇 개가
     `exact` · `candidates` · `none` 인지 한 줄로 말한다. 한 번에 500개까지.
 
-    `candidates` 는 **쓰지 마라** — 어느 것인지 사람에게 묻는다. `none` 도 짐작하지 마라."""
-    return await _post(ctx, f"/api/objects/{type_slug}/resolve-many", {"names": names})
+    `candidates` 는 **쓰지 마라** — 어느 것인지 사람에게 묻는다. `none` 도 짐작하지 마라.
+    `near=True` 면 `none` 인 줄에 글자가 비슷한 짐작(`near`)을 싣는다 — 줄마다 비슷함을 세어
+    느리니 `none` 인 줄만 다시 물을 때 켠다."""
+    return await _post(
+        ctx, f"/api/objects/{type_slug}/resolve-many", {"names": names, "near": near}
+    )
 
 
 @tool()
