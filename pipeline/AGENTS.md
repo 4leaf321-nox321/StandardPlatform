@@ -128,6 +128,9 @@ runs/2026-09-13-sim-tools/
 - 칸 이름은 **속성 키**(`ontology_schema` 의 `properties[].key`). 고정 칸은 `key` · `label` ·
   `description` · `status` · `aliases` · `valid_from_year` · `valid_to_year`.
 - 참조 칸은 상대의 **식별자**로 적는다(없으면 별칭 · 이름으로 풀리지만, 겹치면 거절된다).
+- **원천마다 다른 코드 · 이름은 `aliases` 로 함께 싣는다**(말의 자리, ADR 0063 — SP 의 별칭이 정본). 대응 파일의
+  `dictionaries` · `map` 은 변환의 입력일 뿐이라, 객체를 가리키는 짝을 거기에만 두면 이름 풀이 · 검색 · 다른 설치가
+  그 말을 모른다. 규칙 · AI 가 정한 짝은 확인 전 별칭으로 — 사람이 검수한다.
 - 여러 값 칸은 배열. 값을 비우려면 `null`. **안 적은 칸은 안 건드린다.**
 - **`_` 로 시작하는 칸은 플랫폼에 안 간다** — `_source`(필수에 가깝다) · `_confidence` · `_note`.
 - `workspace_slug` 가 없으면 전역으로 들어가고, 전역은 시스템 관리자만 넣는다.
