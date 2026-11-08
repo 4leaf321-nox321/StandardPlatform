@@ -190,12 +190,23 @@ sudo ./deploy.sh update
 기대하는 단계가 통째로 안 돌고, 안 돌았다는 사실은 아무 데도 안 적힌다. 번들
 안에서 실행하면 저절로 그렇게 된다.
 
-직전 이미지는 `app.sif.prev` 로 남는다. 롤백:
+**서비스를 내리기 전에 세 가지를 본다** — 여기서 멈추면 서비스는 그대로 돈다.
+
+1. 판이 내려가지 않나 — 깔린 이미지의 판보다 이 번들이 옛 판이면 멈춘다(옛 번들 폴더에서 친 것). 정말 내리려면
+   `sudo ALLOW_DOWNGRADE=1 APP_SLUG=<slug> ./deploy.sh update`.
+2. 새 이미지를 설치 폴더 옆(`app.sif.new`)에 놓는다 — 디스크가 차면 여기서 멈춘다. 서비스가 내려가 있는 동안에는
+   옮기기만 한다.
+3. 새 이미지가 지금 DB 를 아나(`alembic current`) — DB 가 이 번들보다 앞선 판이면 멈춘다.
+
+**내린 뒤에 실패하면**(마이그레이션 오류 등) 직전 이미지로 되돌리고 다시 켠다 — 마이그레이션은 한 트랜잭션이라 실패했으면
+DB 는 그대로다. 같은 판을 다시 칠 때는 `app.sif.prev` 를 덮지 않는다(연달아 두 번 쳐도 그 앞 판이 남는다).
+
+직전 이미지는 `app.sif.prev` 로 남는다. 갱신은 끝났는데 새 판에 문제가 있어 손으로 되돌릴 때:
 
 ```bash
-sudo systemctl stop <slug>
+sudo systemctl stop <slug> <slug>-worker
 sudo mv ~/apps/<slug>/app.sif.prev ~/apps/<slug>/app.sif
-sudo systemctl start <slug>
+sudo systemctl start <slug> <slug>-worker
 ```
 
 **파일만 되돌아간다 — 마이그레이션은 취소되지 않는다.** 파괴적 마이그레이션

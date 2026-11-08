@@ -1098,3 +1098,206 @@ def test_임베딩_꾸러미는_deploy_sh_의_Ollama_판을_쓴다() -> None:
         check=True,
     ).stdout.strip()
     assert picked and f'OLLAMA_VERSION="${{OLLAMA_VERSION:-{picked}}}"' in deploy
+
+
+# --- update 의 안전장치 — 내리기 전에 보고, 내린 뒤 실패하면 되돌린다 --------------------
+
+
+def _update_world(
+    tmp_path: Path,
+    *,
+    installed: str,
+    bundle: str,
+    db_known: bool = True,
+    allow_downgrade: bool = False,
+    prev: str | None = None,
+    tail: str = "update_preflight\necho PREFLIGHT_OK\n",
+) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
+    """deploy.sh 의 update 조각을 가짜 apptainer · systemctl 로 돌린다. SIF 는 `version=` 한
+    줄을 든 글 파일이다 — 가짜 apptainer 가 그 줄을 BUILD_INFO 로 읽고, `unknown_db` 가 든
+    이미지는 `alembic current` 에서 「Can't locate revision」 으로 실패한다."""
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    constants = [line for line in text.splitlines() if re.match(r"^UPDATE_[A-Z_]+=", line)]
+    names = (
+        "err",
+        "info",
+        "warn",
+        "in_container",
+        "installed_version",
+        "is_downgrade",
+        "update_preflight",
+        "swap_sif",
+        "update_rollback",
+        "health_check",
+    )
+    pieces = [_piece(text, name) for name in names]
+    bin_dir, tools, install_dir, here = (
+        tmp_path / n for n in ("bin", "tools", "inst", "here")
+    )
+    for one in (bin_dir, tools, install_dir, here):
+        one.mkdir()
+    for tool in (
+        "sed",
+        "grep",
+        "tr",
+        "chmod",
+        "cat",
+        "sort",
+        "tail",
+        "install",
+        "mv",
+        "rm",
+        "seq",
+    ):
+        found = shutil.which(tool)
+        assert found, f"{tool} 이 없습니다"
+        (tools / tool).symlink_to(found)
+    log = tmp_path / "calls.log"
+    _stub(
+        bin_dir / "apptainer",
+        f"""shift
+while [ "$1" = "--bind" ]; do shift 2; done
+sif="$1"; shift
+echo "apptainer $(basename "$sif") $*" >> "{log}"
+case "$*" in
+  *BUILD_INFO*) sed -n 's|^version=||p' "$sif" ;;
+  *alembic*) if grep -q unknown_db "$sif"; then
+      echo "FAILED: Can't locate revision identified by '0099_future'" >&2; exit 255; fi
+    echo "0098 (head)" ;;
+esac
+""",
+    )
+    _stub(bin_dir / "systemctl", f'echo "systemctl $*" >> "{log}"\n')
+    _stub(bin_dir / "curl", 'echo \'{"status":"ok"}\'\n')
+    _stub(bin_dir / "sleep", "exit 0\n")
+    (install_dir / "app.sif").write_text(f"version={installed}\n", encoding="utf-8")
+    if prev is not None:
+        (install_dir / "app.sif.prev").write_text(f"version={prev}\n", encoding="utf-8")
+    (here / "app.sif").write_text(
+        f"version={bundle}\n" + ("" if db_known else "unknown_db\n"), encoding="utf-8"
+    )
+    env = {
+        "PATH": f"{bin_dir}:{tools}",
+        "INSTALL_DIR": str(install_dir),
+        "HERE": str(here),
+        "VERSION": bundle,
+        "OPERATOR": os.environ.get("USER") or "nobody",
+        "APP_SLUG": "plmhub",
+        "APP_PORT": "8040",
+        "ENV_FILE": str(tmp_path / ".env"),
+        "FILESTORE_HOST_DIR": str(tmp_path),
+        "LOG_HOST_DIR": str(tmp_path),
+        "BACKUP_HOST_DIR": "",
+        "SERVICE_NAME": "plmhub",
+        "WORKER_SERVICE_NAME": "plmhub-worker",
+        **({"ALLOW_DOWNGRADE": "1"} if allow_downgrade else {}),
+    }
+    script = (
+        'set -euo pipefail\nas_op() { "$@"; }\n'
+        + "\n".join([*constants, *pieces])
+        + "\n"
+        + tail
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return done, calls, install_dir
+
+
+def _version_of(path: Path) -> str:
+    return path.read_text(encoding="utf-8").splitlines()[0].removeprefix("version=")
+
+
+@_no_bash
+@pytest.mark.parametrize(
+    ("now", "bundle", "down"),
+    [
+        ("v0.4.75", "v0.4.74", True),
+        ("v0.4.75", "v0.4.75", False),  # 다시 깐다
+        ("v0.4.74", "v0.4.75", False),
+        ("v0.4.9", "v0.4.10", False),  # 글자 차례가 아니라 판 차례
+        ("", "v0.4.75", False),  # 모르면 막지 않는다
+    ],
+)
+def test_판이_내려가나는_판_차례로_본다(now: str, bundle: str, down: bool) -> None:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    script = f'{_piece(text, "is_downgrade")}\nis_downgrade "{now}" "{bundle}"\n'
+    done = subprocess.run([shutil.which("bash") or "bash", "-c", script], timeout=10)
+    assert (done.returncode == 0) is down
+
+
+@_no_bash
+def test_옛_번들로_치면_서비스를_내리기_전에_멈춘다(tmp_path: Path) -> None:
+    done, calls, inst = _update_world(tmp_path, installed="v0.4.75", bundle="v0.4.74")
+    assert (
+        done.returncode != 0
+        and "판이 내려갑니다: 지금 v0.4.75 → 이 번들 v0.4.74" in done.stderr
+    )
+    assert not any(one.startswith("systemctl") for one in calls)  # 서비스는 그대로
+    assert not (inst / "app.sif.new").exists()
+
+
+@_no_bash
+def test_ALLOW_DOWNGRADE_면_내리되_DB_를_모르면_멈춘다(tmp_path: Path) -> None:
+    (tmp_path / "ok").mkdir()
+    done, _, inst = _update_world(
+        tmp_path / "ok", installed="v0.4.75", bundle="v0.4.74", allow_downgrade=True
+    )
+    assert done.returncode == 0 and "PREFLIGHT_OK" in done.stdout, done.stderr
+    assert _version_of(inst / "app.sif.new") == "v0.4.74"
+
+    (tmp_path / "ahead").mkdir()
+    done, calls, inst = _update_world(
+        tmp_path / "ahead",
+        installed="v0.4.75",
+        bundle="v0.4.74",
+        allow_downgrade=True,
+        db_known=False,
+    )
+    assert done.returncode != 0 and "지금 DB 를 열 수 없습니다" in done.stderr
+    assert "Can't locate revision" in done.stderr and "서비스는 그대로" in done.stderr
+    assert not (inst / "app.sif.new").exists() and _version_of(inst / "app.sif") == "v0.4.75"
+    assert not any(one.startswith("systemctl") for one in calls)
+
+
+@_no_bash
+def test_내린_뒤에_실패하면_직전_판으로_되돌리고_다시_켠다(tmp_path: Path) -> None:
+    tail = (
+        "update_preflight\n"
+        "UPDATE_DOWN=1\ntrap update_rollback EXIT\n"
+        "swap_sif\n"
+        "false  # 마이그레이션이 실패했다\n"
+    )
+    done, calls, inst = _update_world(
+        tmp_path, installed="v0.4.74", bundle="v0.4.75", tail=tail
+    )
+    assert done.returncode != 0
+    assert "직전 판(v0.4.74)으로 되돌리고 다시 켭니다" in done.stderr
+    assert _version_of(inst / "app.sif") == "v0.4.74"
+    assert not (inst / "app.sif.new").exists()
+    assert "systemctl start plmhub" in calls and "systemctl start plmhub-worker" in calls
+
+
+@_no_bash
+def test_같은_판을_다시_깔면_직전_판_보관을_덮지_않는다(tmp_path: Path) -> None:
+    tail = "update_preflight\nswap_sif\n"
+    done, _, inst = _update_world(
+        tmp_path, installed="v0.4.75", bundle="v0.4.75", prev="v0.4.74", tail=tail
+    )
+    assert done.returncode == 0, done.stderr
+    assert _version_of(inst / "app.sif.prev") == "v0.4.74"  # 그 앞 판이 남는다
+    assert _version_of(inst / "app.sif") == "v0.4.75" and not (inst / "app.sif.new").exists()
+
+
+def test_update_는_내리기_전에_보고_내린_뒤에만_되돌리기를_건다() -> None:
+    body = _piece((DEPLOY / "deploy.sh").read_text(encoding="utf-8"), "cmd_update")
+    stop = body.index('systemctl stop "$SERVICE_NAME"')
+    assert body.index("update_preflight") < stop < body.index("trap update_rollback EXIT")
+    assert body.index("trap update_rollback EXIT") < body.index("swap_sif")
+    assert body.index("trap - EXIT") > body.index('systemctl start "$SERVICE_NAME"')
+    assert "place_sif" not in body  # 새 SIF 는 내리기 전에 옆에 놓는다

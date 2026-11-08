@@ -563,7 +563,8 @@ place_sif() {
 }
 
 # 컨테이너 안에서 한 번 실행. **웹 서비스와 같은 SIF·같은 .env 를 쓴다** —
-# 다른 파이썬으로 마이그레이션을 돌리면 그 둘이 다른 스키마를 볼 수 있다.
+# 다른 파이썬으로 마이그레이션을 돌리면 그 둘이 다른 스키마를 볼 수 있다. `SIF=<경로>` 를 주면
+# 그 이미지로(update 가 갈아 끼우기 전에 새 이미지로 DB 를 미리 본다).
 in_container() {
     local backup_bind=()
     [[ -n "$BACKUP_HOST_DIR" ]] && backup_bind=(--bind "$BACKUP_HOST_DIR:/data/backup")
@@ -572,12 +573,84 @@ in_container() {
         --bind "$FILESTORE_HOST_DIR:/data/filestore" \
         --bind "$LOG_HOST_DIR:/data/logs" \
         ${backup_bind[@]+"${backup_bind[@]}"} \
-        "$INSTALL_DIR/app.sif" "$@"
+        "${SIF:-$INSTALL_DIR/app.sif}" "$@"
 }
 
 run_migrations() {
     info "마이그레이션 적용"
     in_container sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python -m alembic upgrade head'
+}
+
+# ───────────────────────── update 의 안전장치 ─────────────────────────
+# update 는 서비스를 내린 뒤 SIF 를 갈고 마이그레이션한다. 예전에는 그 사이에서 실패하면(옛 번들 폴더에서
+# 쳐 DB 가 더 앞섬 · 디스크가 참) **서비스가 내려간 채** 멈췄고, 옛 번들에서 치면 DB 구조가 같을 때
+# 「갱신 완료」 라며 조용히 판이 내려갔다(2026-11-08 점검). 그래서
+#   1) 내리기 **전에** — 지금 깔린 판을 읽어 판이 내려가면 멈추고(ALLOW_DOWNGRADE=1 이면 통과), 새 SIF 를
+#      옆(app.sif.new)에 놓고, 그 이미지가 지금 DB 의 리비전을 아는지 본다. 여기서 실패하면 서비스는
+#      그대로 돈다.
+#   2) 내린 **뒤에** 실패하면 — 직전 SIF 로 되돌리고 다시 켠다(`update_rollback`). 마이그레이션은 한
+#      트랜잭션이라 실패했으면 DB 는 그대로다.
+UPDATE_DOWN=0          # 서비스를 내렸고 아직 다시 켜지 않았다
+UPDATE_FROM=""         # 지금 깔린 판(update_preflight 가 읽는다)
+UPDATE_PREV_MOVED=0    # 직전 SIF 를 app.sif.prev 로 옮겼다
+
+# 지금 깔린 판 — 깔린 SIF 가 들고 있는 BUILD_INFO(`/api/health` 의 version 과 같다). 앱이 꺼져 있어도 읽는다.
+installed_version() {
+    [[ -f "$INSTALL_DIR/app.sif" ]] || return 0
+    as_op apptainer exec "$INSTALL_DIR/app.sif" sed -n 's|^version=||p' /opt/app/BUILD_INFO.txt \
+        2>/dev/null | tail -n1 || true
+}
+
+# 판이 내려가나 — $1 지금 판, $2 번들 판(`sort -V`). 같으면 다시 까는 것이고, 모르면 막지 않는다.
+is_downgrade() {
+    [[ -n "$1" && -n "$2" && "$1" != "$2" ]] || return 1
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]
+}
+
+update_preflight() {
+    UPDATE_FROM="$(installed_version)"
+    if is_downgrade "$UPDATE_FROM" "$VERSION"; then
+        [[ "${ALLOW_DOWNGRADE:-0}" == "1" ]] || err "판이 내려갑니다: 지금 $UPDATE_FROM → 이 번들 $VERSION — 옛 번들 폴더에서 친 것 아닌가요? 서비스는 그대로 돌고 있습니다. 정말 내리려면: sudo ALLOW_DOWNGRADE=1 APP_SLUG=$APP_SLUG ./deploy.sh update (DB 는 내려가지 않는다 — 그사이 DB 구조가 바뀌었으면 아래 확인에서 멈춘다)"
+        warn "판을 내립니다: $UPDATE_FROM → $VERSION (ALLOW_DOWNGRADE=1)"
+    fi
+    [[ -f "$HERE/app.sif" ]] || err "app.sif 가 $HERE 에 없습니다 (릴리스 번들에서 실행하세요)"
+    info "새 SIF 를 옆에 놓기 → $INSTALL_DIR/app.sif.new (서비스는 돌고 있다)"
+    install -o "$OPERATOR" -g "$OPERATOR" -m 644 "$HERE/app.sif" "$INSTALL_DIR/app.sif.new"
+    info "새 판($VERSION)이 지금 DB 를 아는지 확인"
+    local said
+    if ! said="$(SIF="$INSTALL_DIR/app.sif.new" in_container sh -c \
+        'cd /opt/app/backend && /opt/app/venv/bin/python -m alembic current' 2>&1)"; then
+        rm -f "$INSTALL_DIR/app.sif.new"
+        err "이 번들($VERSION)로는 지금 DB 를 열 수 없습니다 — 서비스는 그대로 돌고 있습니다. DB 가 이 번들보다 앞선 판으로 올라가 있으면 그 판의 번들 폴더에서 치세요. 마지막 줄: $(printf '%s\n' "$said" | tail -n1)"
+    fi
+}
+
+# 직전 SIF 를 남기고 새 SIF 로 간다. **같은 판을 다시 까는 것이면 app.sif.prev 를 덮지 않는다** —
+# 연달아 두 번 쳐도 그 앞 판으로 되돌릴 자리가 남는다.
+swap_sif() {
+    if [[ -f "$INSTALL_DIR/app.sif" && ( -z "$UPDATE_FROM" || "$UPDATE_FROM" != "$VERSION" ) ]]; then
+        info "직전 SIF 보관 → app.sif.prev"
+        mv -f "$INSTALL_DIR/app.sif" "$INSTALL_DIR/app.sif.prev"
+        UPDATE_PREV_MOVED=1
+    fi
+    mv -f "$INSTALL_DIR/app.sif.new" "$INSTALL_DIR/app.sif"
+}
+
+# 서비스를 내린 뒤 실패하면(EXIT 덫) — 직전 SIF 로 되돌리고 다시 켠다. 성공한 뒤에는 아무것도 안 한다.
+update_rollback() {
+    local code=$?
+    [[ $UPDATE_DOWN -eq 1 && $code -ne 0 ]] || return 0
+    UPDATE_DOWN=0
+    warn "갱신이 서비스를 내린 뒤 실패했습니다 — 직전 판${UPDATE_FROM:+($UPDATE_FROM)}으로 되돌리고 다시 켭니다"
+    if [[ $UPDATE_PREV_MOVED -eq 1 && -f "$INSTALL_DIR/app.sif.prev" ]]; then
+        mv -f "$INSTALL_DIR/app.sif.prev" "$INSTALL_DIR/app.sif"
+    fi
+    rm -f "$INSTALL_DIR/app.sif.new"
+    systemctl start "$SERVICE_NAME" || warn "$SERVICE_NAME 을 다시 켜지 못했습니다 — journalctl -u $SERVICE_NAME -n 50"
+    systemctl start "$WORKER_SERVICE_NAME" 2>/dev/null || true
+    health_check >/dev/null || true
+    warn "되돌렸습니다. 마이그레이션은 한 트랜잭션이라 실패했으면 DB 는 그대로입니다 — 위의 오류를 고친 뒤 다시 update 하세요."
+    exit "$code"
 }
 
 # **임시 파일 상한을 앱이 요청마다 걸 수 있게 한다**(ADR 0048). 정렬 · 해시가 디스크로 넘어간 임시 파일에
@@ -1141,19 +1214,22 @@ cmd_update() {
     # **내리기 전에** — 패키지를 받는 동안(처음 한 번) 서비스가 서 있다. 못 갖추면 여기서 멈춘다(옛 판이
     # 그대로 돈다) — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
     require_vector
+    # **내리기 전에** — 판이 내려가지 않나 · 새 SIF 를 옆에 놓고 · 그 이미지가 지금 DB 를 아나. 여기서
+    # 멈추면 서비스는 그대로 돈다(위의 「update 의 안전장치」).
+    update_preflight
 
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
     # 워커도 함께 — 옛 코드가 새 마이그레이션 위에서 작업을 집으면 안 된다. 하던 작업은
     # 끝까지 기다린다(TimeoutStopSec). 못 끝낸 것은 다른 워커가 되살린다.
     systemctl stop "$WORKER_SERVICE_NAME" 2>/dev/null || true
+    # 여기부터 다시 켜기 전까지 실패하면 직전 SIF 로 되돌리고 다시 켠다.
+    UPDATE_DOWN=1
+    trap update_rollback EXIT
 
-    if [[ -f "$INSTALL_DIR/app.sif" ]]; then
-        # **직전 이미지를 남긴다.** 롤백은 이 파일을 되돌리는 것뿐이다.
-        info "직전 SIF 보관 → app.sif.prev"
-        mv "$INSTALL_DIR/app.sif" "$INSTALL_DIR/app.sif.prev"
-    fi
-    place_sif
+    # **직전 이미지를 남긴다.** 롤백은 이 파일을 되돌리는 것뿐이다. 새 SIF 는 이미 옆에 있어 옮기기만
+    # 한다 — 서비스가 내려가 있는 동안 1~3GB 를 복사하지 않는다.
+    swap_sif
     run_migrations
     # 앱이 뜨기 전에 — 앱은 기동 뒤 처음 읽을 때 한 번 걸어 보고 그 답을 기억한다.
     grant_temp_limit
@@ -1161,6 +1237,8 @@ cmd_update() {
     render_service_unit
 
     systemctl start "$SERVICE_NAME"
+    UPDATE_DOWN=0
+    trap - EXIT
     health_check || true
 
     setup_worker
