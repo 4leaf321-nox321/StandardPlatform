@@ -375,7 +375,8 @@ def near_options(value: str, options: list[str]) -> list[str]:
     keyed = [(compare_key(one), one) for one in options]
     out = [one for key, one in keyed if key == wanted]
     out += [one for key, one in keyed if wanted and key and (wanted in key or key in wanted)]
-    out += difflib.get_close_matches(value.strip(), options, n=NEAR_OPTIONS, cutoff=0.5)
+    # 0.6 — 두 글자 말이 한 글자만 겹쳐도(「교환」 · 「환불」 = 0.5) 붙지 않게.
+    out += difflib.get_close_matches(value.strip(), options, n=NEAR_OPTIONS, cutoff=0.6)
     return list(dict.fromkeys(out))[:NEAR_OPTIONS]
 
 
