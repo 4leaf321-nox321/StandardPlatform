@@ -87,6 +87,8 @@ def test_배포_스크립트가_번들에_함께_담긴다() -> None:
         "HWAX-연동요청서.template.md",
         # PostgreSQL 서버 설정 맞추기 — `deploy.sh pg-tune` 이 부른다(ADR 0031).
         "pg-tune.sh",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
     ):
         assert name in text, f"{name} 이 번들에 안 담깁니다 (build_bundle.sh)"
 

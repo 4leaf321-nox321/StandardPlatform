@@ -38,10 +38,10 @@
 
 | 무엇 | 공개 주소(포털 경유) | 우리 서버에서 |
 | --- | --- | --- |
-| 화면 | `https://hwax.sec.samsung.net/<id>/` | `http://<A>:<앱 포트>/` (접두어 없이 와도 화면이 붙여 옮긴다) |
-| API | `https://hwax.sec.samsung.net/<id>/api/…` | `:<앱 포트>/api/…` |
-| 포털 로그인 콜백 | `https://hwax.sec.samsung.net/<id>/api/auth/portal-callback` | `:<앱 포트>/api/auth/portal-callback` |
-| Claude(MCP) | 포털 게이트웨이 `https://hwax.sec.samsung.net/mcp-gw/mcp`(포털 개인 토큰) — 도구 이름에 `<id>_` | 게이트웨이가 `http://<A>:<MCP 포트>/mcp` 를 부른다 |
+| 화면 | `https://<포털 호스트>/<id>/` | `http://<A>:<앱 포트>/` (접두어 없이 와도 화면이 붙여 옮긴다) |
+| API | `https://<포털 호스트>/<id>/api/…` | `:<앱 포트>/api/…` |
+| 포털 로그인 콜백 | `https://<포털 호스트>/<id>/api/auth/portal-callback` | `:<앱 포트>/api/auth/portal-callback` |
+| Claude(MCP) | 포털 게이트웨이 `https://<포털 호스트>/mcp-gw/mcp`(포털 개인 토큰) — 도구 이름에 `<id>_` | 게이트웨이가 `http://<A>:<MCP 포트>/mcp` 를 부른다 |
 | 사람별 위임 발급 | — (포털 nginx 를 안 거친다) | 게이트웨이가 `http://<A>:<앱 포트>/api/auth/sso` 를 직접 |
 | 포털 JWKS(우리가 받는다) | — | `http://<포털>:8088/.well-known/jwks.json`(사내망 http 권장) |
 
@@ -74,16 +74,16 @@
 | 설정(`.env`) | 값 | 비우면 |
 | --- | --- | --- |
 | `PORTAL_JWKS_URL` | `http://<포털>:8088/.well-known/jwks.json` | **포털 로그인 꺼짐** — 콜백이 404 JSON |
-| `PORTAL_LAUNCH_URL` | `https://hwax.sec.samsung.net/launch/<id>` | 로그인 화면에 「HWAX 포털로 로그인」 단추가 없다 |
+| `PORTAL_LAUNCH_URL` | `https://<포털 호스트>/launch/<id>` | 로그인 화면에 「HWAX 포털로 로그인」 단추가 없다 |
 | `PORTAL_AUDIENCE` | 포털 타일의 `audience` | `APP_SLUG` |
-| `PORTAL_ISSUER` | 포털의 `JWT_ISSUER` | `https://hwax.sec.samsung.net`(포털 기본값) |
+| `PORTAL_ISSUER` | 포털의 `JWT_ISSUER` | 안 적으면 `PORTAL_LAUNCH_URL`(없으면 `PUBLIC_URL`)의 앞부분 `https://<포털 호스트>` — 포털의 기본값과 같다 |
 | `PUBLIC_PATH` | `/<id>` | 로그인 뒤 돌아갈 곳이 포털 첫 화면이 된다(서버 화면이 경고) |
 | `TRUST_PROXY` | `true` | 포털이 https 여도 쿠키에 Secure 가 안 붙는다(로그인은 된다) |
 | `MCP_PUBLIC_URL` | `http://<A>:<MCP 포트>/mcp` | 화면이 `https://<포털>/<id>/mcp`(없는 길)를 짐작한다 |
 
 **직접 접속한 사람** — 앱 주소(`http://<A>:<앱 포트>/`)로 들어와도 로그인 화면의 「HWAX 포털로 로그인」 이 포털의
 `/launch/<id>` 로 보낸다. 포털이 그 사람으로 토큰을 만들어 포털 주소의 콜백에 보내므로, 로그인 뒤에는 포털 주소
-(`https://hwax.sec.samsung.net/<id>/`) 위에 있다.
+(`https://<포털 호스트>/<id>/`) 위에 있다.
 
 **포털 안에서 바로 들어온 사람**(북마크 · 링크 — Report Archive 와 같은 길) — 화면이 포털 로그인 쿠키(`hwax_csrf`)를 보면
 포털의 표준 launch(`POST /systems/<id>/launch`, 포털 세션 · `X-CSRF-Token`)로 토큰을 받아 `POST /api/auth/portal-exchange`

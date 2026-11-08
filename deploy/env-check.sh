@@ -83,6 +83,10 @@ check() {  # $1=.env  $2=설치 기록의 slug(직접 준 파일이면 빈 값)
         on "$(get "$f" TRUST_PROXY)" || say 경고 "포털 뒤인데 TRUST_PROXY 가 꺼졌다 — 쿠키에 Secure 가 안 붙는다"
         [[ -n "$url" ]] || say 경고 "포털 뒤인데 PUBLIC_URL 이 없다 — 링크가 PORTAL_LAUNCH_URL 의 호스트 짐작에 기댄다"
         [[ -n "$(get "$f" MCP_PUBLIC_URL)" ]] || say 경고 "포털 뒤인데 MCP_PUBLIC_URL 이 없다 — 화면이 없는 길(<포털>/<id>/mcp)을 안내한다"
+        # 발급자(iss)는 코드에 사내 주소를 두지 않아(v0.4.75) PORTAL_ISSUER → PORTAL_LAUNCH_URL → PUBLIC_URL 의 앞부분으로 읽는다.
+        if [[ -z "$(get "$f" PORTAL_ISSUER)$(get "$f" PORTAL_LAUNCH_URL)$url" ]]; then
+            say 오류 "포털 로그인이 켜졌는데 PORTAL_ISSUER · PORTAL_LAUNCH_URL · PUBLIC_URL 이 모두 없다 — 발급자(iss)를 못 정해 포털 로그인이 전부 「확인 실패」 다. PORTAL_LAUNCH_URL=https://<포털 호스트>/launch/<id> 를 적는다"
+        fi
     fi
     v="$(get "$f" HEAX_SSO_SECRET)"
     [[ -z "$v" || ${#v} -ge 32 ]] || say 경고 "HEAX_SSO_SECRET 이 ${#v}자 — 32자 이상(openssl rand -hex 32)"

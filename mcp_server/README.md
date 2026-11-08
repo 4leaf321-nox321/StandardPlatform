@@ -59,7 +59,7 @@ claude mcp list        # standardplatform: http://<host>:8042/mcp (HTTP) - ✔ C
 ## HWAX 게이트웨이를 거칠 때 (ADR 0028)
 
 HWAX 포털에 붙은 설치에서는 사람들의 Claude 가 **포털의 게이트웨이**
-(`https://hwax.sec.samsung.net/mcp-gw/mcp`, 포털 개인 토큰)에 붙고, 게이트웨이가 이 서버를
+(`https://<포털 호스트>/mcp-gw/mcp`, 포털 개인 토큰)에 붙고, 게이트웨이가 이 서버를
 `http://<서버>:<MCP 포트>/mcp` 로 부른다 — Report Archive 와 같은 길이다. 포털 nginx 에 `/<id>/mcp`
 경로는 없다. 사람이 이 설치의 토큰을 발급해 붙여 넣을 일도 없다:
 

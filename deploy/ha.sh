@@ -23,7 +23,7 @@
 #     /data 의 자기 폴더. 설정은 /etc/platform-instances/<slug>.conf (deploy.sh 가 쓴다).
 #
 # 처음 한 번 env 로 주면 파일에 남아 다음 배포가 기억한다(MCP 설정과 같은 방식):
-#   sudo HA_ROLE=master PEER_IP=<B> PUBLIC_HOST=hwax.sec.samsung.net DATA_DIR=/data/<slug> ./deploy.sh prepare
+#   sudo HA_ROLE=master PEER_IP=<B> PUBLIC_HOST=<포털 호스트> DATA_DIR=/data/<slug> ./deploy.sh prepare
 
 # ETC 를 주면 /etc 대신 그 아래에 쓴다 — 'deploy.sh render' 가 root 없이 결과를 보여 주는 길.
 ETC="${ETC:-}"

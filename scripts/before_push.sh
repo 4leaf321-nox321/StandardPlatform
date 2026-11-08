@@ -54,6 +54,22 @@ check_private_docs() {
   ! git -C "$REPO" ls-files | grep -q '사내'
 }
 
+check_private_strings() {
+  # **사내 호스트 · IP · 계정을 추적 파일에 다시 넣지 않는다**(저장소는 공개 — 2026-11-08 에 걷어 냈다).
+  # 목록은 저장소 밖 `docs/사내/금지-문자열.txt`(한 줄에 하나, `#` 은 주석) — 목록 자체가 사내 정보라
+  # 공개 저장소에 둘 수 없다. 없으면 건너뛴다(다른 PC).
+  local list="$REPO/docs/사내/금지-문자열.txt"
+  [ -f "$list" ] || { echo "목록 없음 — 건너뜀($list)"; return 0; }
+  local patterns
+  patterns="$(grep -v '^[[:space:]]*\(#\|$\)' "$list")" || return 0
+  local hits
+  hits="$(git -C "$REPO" -c core.quotePath=false grep -n -I -F -e "$patterns" -- . 2>/dev/null)" || true
+  if [ -n "$hits" ]; then
+    printf '사내 문자열이 추적 파일에 있습니다 — 자리 표시(<포털 호스트> · <A> 등)로 바꾸세요:\n%s\n' "$hits"
+    return 1
+  fi
+}
+
 check_emptied_files() {
   # **비우고 다시 쓰는 스크립트가 파일을 지운 적이 있다**(`쉬운-설치.md` 154줄,
   # `package-lock.json` 10,503줄이 빈 채로 밀렸다). 내용이 있던 파일이 0바이트가
@@ -73,6 +89,7 @@ check_emptied_files() {
 
 say "0. 저장소 규칙"
 step "사내 문서가 추적되지 않는다" check_private_docs
+step "사내 호스트 · IP · 계정이 추적 파일에 없다" check_private_strings
 step "내용이 있던 파일이 비지 않았다" check_emptied_files
 
 # ── 1. 백엔드 ───────────────────────────────────────────────────────────

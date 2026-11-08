@@ -1,0 +1,31 @@
+Standard Platform
+Copyright (c) 2026 Standard Platform 저작권자 (the Standard Platform authors). All rights reserved.
+
+[한국어]
+
+이 저장소의 소스 코드 · 문서 · 설정 · 그 밖의 모든 자료(이하 「본 소프트웨어」)의 저작권은 저작권자에게
+있습니다.
+
+1. 저작권자의 사전 서면 허락 없이 본 소프트웨어의 전부 또는 일부를 사용 · 복제 · 수정 · 배포 · 게시 ·
+   판매 · 대여 · 재허락하거나, 2차적 저작물을 만들거나, 다른 소프트웨어 · 서비스에 넣어 쓰는 것을
+   금합니다.
+2. 저장소가 공개되어 있다는 사실은 사용 · 복제를 허락한다는 뜻이 아닙니다. GitHub 이용약관이 허락하는
+   범위(웹에서 보기 · 포크 기능)를 넘는 어떤 권리도 주지 않습니다.
+3. 본 소프트웨어는 「있는 그대로」 제공되며, 명시적이든 묵시적이든 어떤 보증도 하지 않습니다.
+   저작권자는 본 소프트웨어의 사용으로 생긴 어떤 손해에도 책임을 지지 않습니다.
+4. 본 소프트웨어가 쓰는 제3자 구성 요소(라이브러리 · 글꼴 · 모델 등)는 각자의 라이선스를 따르며, 이
+   문서는 그 구성 요소에 적용되지 않습니다.
+
+[English]
+
+All rights reserved. No license or permission is granted to use, copy, modify, merge, publish,
+distribute, sublicense, sell, or create derivative works of this software, in whole or in part,
+without the prior written permission of the copyright holder. The public visibility of this
+repository does not grant any rights beyond those required by the GitHub Terms of Service (viewing
+and forking on GitHub).
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT
+SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Third-party components used by this software remain under their own licenses.

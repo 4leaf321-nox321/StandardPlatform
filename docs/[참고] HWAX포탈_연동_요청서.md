@@ -41,7 +41,7 @@
 
 | | |
 | --- | --- |
-| 공개 주소 | `https://hwax.sec.samsung.net/{{ID}}/` |
+| 공개 주소 | `https://<포털 호스트>/{{ID}}/` |
 | 서버 | 서버쌍 **A(주) · B(대기)** — 둘 다 앱이 떠 있고 DB 는 주에서 대기로 복제된다. 같은 서버쌍에 다른 인스턴스가 함께 뜰 수 있다(포트가 다르다). **내부 주소는 담당에게 따로** |
 | 앱 | `:{{APP_PORT}}` — 한 프로세스가 화면 + API(`/api/…`). 포털 nginx 는 **접두어를 벗겨** 넘긴다(끝 `/`) — 우리 `PUBLIC_PATH=/{{ID}}` 가 화면 · 쿠키 · 돌아갈 곳을 그 아래로 맞춘다 |
 | 포털 로그인 콜백 | `/{{ID}}/api/auth/portal-callback` — POST, 폼 필드 `token`(포털 기본 `handoff_param`) |
@@ -106,9 +106,9 @@ RA 는 이 줄을 1e 가 `RA_HOST` 로 유도한다. 인스턴스가 여럿이�
     sort_order: 70
 ```
 
-토큰은 포털 기본 그대로다 — `iss` = `JWT_ISSUER`(기본 `https://hwax.sec.samsung.net`) · `aud` · `scope: "launch"` · 90초 · `jti` ·
+토큰은 포털 기본 그대로다 — `iss` = `JWT_ISSUER`(기본 `https://<포털 호스트>`) · `aud` · `scope: "launch"` · 90초 · `jti` ·
 머리의 `kid`. 포털의 `JWT_ISSUER` 를 기본값에서 바꾼 박스라면 그 값을 알려 달라(우리 `PORTAL_ISSUER`). 우리 로그인 화면의
-「HWAX 포털로 로그인」 은 `https://hwax.sec.samsung.net/launch/{{ID}}` 로 보낸다 — 포털 쪽에 따로 할 일은 없다.
+「HWAX 포털로 로그인」 은 `https://<포털 호스트>/launch/{{ID}}` 로 보낸다 — 포털 쪽에 따로 할 일은 없다.
 
 **포털 안에서 바로 들어온 사람의 자동 로그인**(RA 와 같다) — 북마크 · 링크로 `/{{ID}}/` 에 바로 오면 우리 화면이 포털의
 표준 launch(`POST /systems/{{ID}}/launch`, 포털 세션 · `X-CSRF-Token`)를 불러 토큰을 받고 우리 `/api/auth/portal-exchange`
@@ -122,7 +122,7 @@ A · B 가 포털의 공개 키를 받아 갈 주소 — **우리 서버에서 �
 
 ## 5. MCP — 게이트웨이 백엔드와 사람별 위임(RA 와 같게)
 
-사람들의 Claude 는 **포털 게이트웨이**(`https://hwax.sec.samsung.net/mcp-gw/mcp`, 포털 개인 토큰)에만 붙는다. 게이트웨이가
+사람들의 Claude 는 **포털 게이트웨이**(`https://<포털 호스트>/mcp-gw/mcp`, 포털 개인 토큰)에만 붙는다. 게이트웨이가
 우리 MCP 를 부르고, 사람마다 우리 `POST /api/auth/sso` 로 **그 사람 명의의 토큰**을 받아 싣는다 — 우리 쪽 권한 · 부서 ·
 감사가 그 사람으로 걸린다. 사람이 우리 토큰을 발급해 포털에 붙여 넣는 일(포털 「연결」)은 없다.
 

@@ -712,6 +712,28 @@ def test_진단은_시스템_관리자만_보고_공개_키가_닿는지_말한�
     assert any("MCP_PUBLIC_URL" in one for one in body["problems"])
 
 
+def test_발급자를_못_정하면_로그인을_거절하고_진단이_말한다(
+    browser: TestClient,
+    fake_portal: FakePortal,
+    client: TestClient,
+    admin: Signed,
+    db: Session,
+    workspace: Workspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """사내 주소를 코드에 두지 않으므로 `PORTAL_ISSUER` · `PORTAL_LAUNCH_URL` · `PUBLIC_URL` 이
+    다 없으면 발급자를 모른다 — 「iss 가 빈 토큰만 받는다」 로 조용히 튕기지 않고 그렇다고
+    말한다."""
+    for key in ("PORTAL_ISSUER", "PORTAL_LAUNCH_URL", "PUBLIC_URL"):
+        monkeypatch.setenv(key, "")
+    get_settings.cache_clear()
+    user = _person(db, workspace)
+    assert _reason(_arrive(browser, fake_portal.mint(user.email))) == portal.INVALID
+    body = client.get("/api/auth/portal-status", headers=admin.headers).json()
+    assert body["issuer"] == ""
+    assert any(one.startswith("발급자(iss)를 정하지 못했습니다") for one in body["problems"])
+
+
 def test_진단은_꺼진_것도_말한다(client: TestClient, admin: Signed, portal_off: None) -> None:
     body = client.get("/api/auth/portal-status", headers=admin.headers).json()
     assert (body["enabled"], body["reachable"], body["kids"]) == (False, None, [])
@@ -747,11 +769,21 @@ def test_로그인_화면의_단추_주소는_받을_준비가_됐을_때만_심
         get_settings.cache_clear()
 
 
-def test_비워_둔_발급자와_audience_는_기본값으로_읽는다() -> None:
+def test_비워_둔_발급자와_audience_는_포털_주소와_slug_로_읽는다() -> None:
     """`PORTAL_ISSUER=` 한 줄이 「iss 가 빈 토큰만 받는다」 가 되면 모든 포털 로그인이 확인
-    실패로 튕긴다 — 빈 값은 안 적은 것과 같다. audience 는 slug 다(포털 id = slug 가 권장)."""
-    from app.config import DEFAULT_PORTAL_ISSUER, Settings
+    실패로 튕긴다 — 빈 값은 안 적은 것과 같다. 포털의 기본 iss 는 포털 자기 주소라
+    `PORTAL_LAUNCH_URL`(없으면 `PUBLIC_URL`)의 앞부분으로 읽는다 — 사내 주소를 코드에 두지
+    않는다. audience 는 slug 다(포털 id = slug 가 권장)."""
+    from app.config import Settings
 
-    got = Settings(portal_issuer="  ", portal_audience="")
-    assert got.portal_issuer == DEFAULT_PORTAL_ISSUER
+    got = Settings(
+        portal_issuer="  ",
+        portal_audience="",
+        portal_launch_url="https://portal.example.com/launch/sp",
+    )
+    assert got.portal_issuer == "https://portal.example.com"
     assert got.portal_audience == got.app_slug
+    by_public = Settings(portal_issuer="", public_url="https://portal.example.com:8443/sp/")
+    assert by_public.portal_issuer == "https://portal.example.com:8443"
+    assert Settings(portal_issuer="https://iss.example").portal_issuer == "https://iss.example"
+    assert Settings(portal_issuer="", portal_launch_url="", public_url="").portal_issuer == ""

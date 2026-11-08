@@ -303,7 +303,8 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     거기서 멈춘다."""
     etc = tmp_path / "etc"
     env = {**os.environ, "OPERATOR": "ops", "ETC": str(etc), "SELF_IP": "10.0.0.1"}
-    answers = "A\nplmhub\nPLM 기준정보\n8050\nsample\n10.0.0.2\n\n\n"
+    # 호스트명은 기본값이 없다 — 사내 주소를 저장소에 두지 않는다(ADR 0064).
+    answers = "A\nplmhub\nPLM 기준정보\n8050\nsample\n10.0.0.2\nportal.example.com\n\n"
     out = subprocess.run(
         ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],
         cwd=bundle,
@@ -326,7 +327,7 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     assert "주(A) 10.0.0.1 — 상대 B 10.0.0.2" in out
     assert "db-primary" in out and "B 에 넘길 파일" in out
     # 대기는 이름 · 포트를 다시 묻지 않는다 — A 의 .env 를 그대로 받는다.
-    answers_b = "B\nplmhub\n10.0.0.1\n\n\nops\n\n"
+    answers_b = "B\nplmhub\n10.0.0.1\nportal.example.com\n\nops\n\n"
     out_b = subprocess.run(
         ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],
         cwd=bundle,
@@ -338,6 +339,16 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     ).stdout
     assert "이름 · 포트 · 확장은 A 의 설정을 그대로" in out_b
     assert "대기(B) 10.0.0.2 — 주 A 10.0.0.1" in out_b and "db-standby" in out_b
+    # 호스트명을 비우면 계획 전에 멈춘다 — 예전에는 사내 포털 호스트가 기본값이었다.
+    blank = subprocess.run(
+        ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],
+        cwd=bundle,
+        env=env,
+        input="A\nplmhub\nPLM 기준정보\n8050\nsample\n10.0.0.2\n\n\n",
+        capture_output=True,
+        text=True,
+    )
+    assert blank.returncode != 0 and "호스트명이 필요합니다" in blank.stderr
     # 이상한 slug 는 계획 전에 막는다.
     bad = subprocess.run(
         ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],

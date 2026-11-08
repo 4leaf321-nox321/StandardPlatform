@@ -247,6 +247,11 @@ def verify(token: str, settings: Settings) -> dict[str, Any]:
     kid = header.get("kid")
     if not isinstance(kid, str) or not kid:
         raise PortalLoginError(INVALID, "토큰 머리에 kid 가 없다")
+    if not settings.portal_issuer.strip():
+        raise PortalLoginError(
+            INVALID,
+            "발급자(iss)를 정하지 못했다 — PORTAL_ISSUER 또는 PORTAL_LAUNCH_URL 을 적는다",
+        )
     key = jwks.key_for(settings.portal_jwks_url.strip(), kid)
     try:
         claims: dict[str, Any] = jwt.decode(
@@ -451,6 +456,13 @@ def status(db: Session, settings: Settings) -> PortalStatusOut:
             problems.append(
                 f"접두어({base})와 PORTAL_AUDIENCE({settings.portal_audience})가 다릅니다 "
                 "— 포털 타일의 id · audience 와 맞는지 확인하세요(보통 셋이 같다)."
+            )
+        if not settings.portal_issuer.strip():
+            problems.append(
+                "발급자(iss)를 정하지 못했습니다 — .env 에 PORTAL_LAUNCH_URL(포털의 "
+                "/launch/<id> 주소)이나 PORTAL_ISSUER(포털의 JWT_ISSUER, 보통 "
+                "https://<포털 호스트>)를 적으세요. 그 전까지 포털 로그인은 모두 「확인 "
+                "실패」 입니다."
             )
         if not settings.trust_proxy:
             problems.append(

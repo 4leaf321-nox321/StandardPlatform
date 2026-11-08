@@ -31,24 +31,24 @@ def test_적은_공개_주소가_먼저다() -> None:
     """사람이 적은 정본이면 다른 것을 안 본다 — 끝의 `/` 만 뗀다."""
     got = screen_base(
         _settings(
-            PUBLIC_URL="https://hwax.sec.samsung.net/sp/",
+            PUBLIC_URL="https://portal.example.com/sp/",
             PUBLIC_PATH="/sp",
             PORTAL_LAUNCH_URL="https://elsewhere.example.com/launch/sp",
         )
     )
-    assert got == "https://hwax.sec.samsung.net/sp"
+    assert got == "https://portal.example.com/sp"
 
 
 def test_포털_뒤면_포털의_호스트에_접두어() -> None:
     """포털은 `/<id>/` 를 벗겨 넘긴다 — 사람이 여는 화면은 포털 호스트의 그 접두어 아래다."""
     got = screen_base(
         _settings(
-            PORTAL_LAUNCH_URL="https://hwax.sec.samsung.net/launch/sp",
+            PORTAL_LAUNCH_URL="https://portal.example.com/launch/sp",
             PUBLIC_PATH="sp/",
             MCP_PUBLIC_URL="https://other.example.com:8443/sp/mcp",
         )
     )
-    assert got == "https://hwax.sec.samsung.net/sp"
+    assert got == "https://portal.example.com/sp"
 
 
 def test_MCP_공개_주소가_앱_주소면_그_앞에_접두어() -> None:

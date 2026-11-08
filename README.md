@@ -10,6 +10,9 @@
 
 개발 규칙은 [AGENTS.md](AGENTS.md) 가 정본이다.
 
+**라이선스 — 무단 사용 금지**([LICENSE](LICENSE)). 저장소는 공개지만 사용 · 복제 · 배포를 허락하지 않는다.
+쓰는 제3자 구성 요소는 각자의 라이선스를 따른다([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+
 ---
 
 ## 지금 되는 것

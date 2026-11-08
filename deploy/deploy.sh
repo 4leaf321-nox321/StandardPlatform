@@ -548,7 +548,7 @@ cmd_hwax_request() {
     if [[ -z "$(env_file_get PORTAL_JWKS_URL)" ]]; then
         echo
         info "포털 담당에게 JWKS 주소(요청서 4-2)를 받으면:"
-        echo "    sudo APP_SLUG=$APP_SLUG PORTAL_JWKS_URL=<받은 주소> PORTAL_LAUNCH_URL=https://hwax.sec.samsung.net/launch/$APP_SLUG ./deploy.sh update"
+        echo "    sudo APP_SLUG=$APP_SLUG PORTAL_JWKS_URL=<받은 주소> PORTAL_LAUNCH_URL=https://<포털 호스트>/launch/$APP_SLUG ./deploy.sh update"
     fi
     local path; path="$(env_file_get PUBLIC_PATH)"
     if [[ -n "$path" && "$path" != "/$APP_SLUG" ]]; then
@@ -1414,7 +1414,9 @@ cmd_setup() {
     if [[ -n "$HA_ROLE" ]]; then
         ask PEER_IP "상대 서버의 IP ($( [[ "$HA_ROLE" == master ]] && echo 'B' || echo 'A' ))" "$PEER_IP"
         [[ -n "$PEER_IP" ]] || err "상대 서버 IP 가 필요합니다."
-        ask PUBLIC_HOST "사용자가 브라우저에 치는 호스트명" "${PUBLIC_HOST:-hwax.sec.samsung.net}"
+        # 사내 주소는 저장소에 두지 않는다(공개) — 처음 한 번 묻고 이중화 기록($HA_CONF)이 기억한다.
+        ask PUBLIC_HOST "사용자가 브라우저에 치는 호스트명(포털 호스트)" "${PUBLIC_HOST:-}"
+        [[ -n "$PUBLIC_HOST" ]] || err "호스트명이 필요합니다 — 사용자가 브라우저에 치는 포털 호스트를 적으세요."
         ask DATA_DIR "공용 스토리지 폴더 (예: /data/$APP_SLUG — 아직 없으면 그냥 Enter)" "$DATA_DIR"
         if [[ -z "$DATA_DIR" && "$HA_ROLE" == backup ]]; then
             ask peer_account "A 서버의 계정 이름 — .env 와 복제 비밀번호를 거기서 받아옵니다" "$OPERATOR"

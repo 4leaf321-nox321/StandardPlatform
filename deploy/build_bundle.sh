@@ -126,6 +126,10 @@ if [[ "${USE_SUDO_APPTAINER:-0}" == "1" ]]; then
     APPTAINER_BUILD=(sudo apptainer build --force)
 fi
 "${APPTAINER_BUILD[@]}" "$STAGE/app.sif" deploy/apptainer.def
+# **이미지 안의 OS 패키지 목록** — GPL · LGPL 부품(bash · coreutils · glibc …)의 판과 소스 위치를 대려고
+# 번들에 함께 넣는다(THIRD_PARTY_NOTICES.md). 릴리스는 공개로 나간다.
+apptainer exec "$STAGE/app.sif" dpkg-query -W -f '${Package}\t${Version}\n' > "$STAGE/os-packages.txt" \
+    || echo "경고: 이미지의 OS 패키지 목록을 뽑지 못했습니다" >&2
 
 # ── 3. 스크립트·문서·BUILD_INFO ───────────────────────────────────────────────
 echo
@@ -158,6 +162,9 @@ cp deploy/쉬운-설치.md               "$STAGE/쉬운-설치.md"
 # 빈 필수 키 · 포트 겹침 · 주소 접두어). 문서가 저장소에만 있으면 정작 .env 를 고치는 자리(서버)에서 못 본다.
 cp deploy/운영-env-설정.md           "$STAGE/운영-env-설정.md"
 cp deploy/env-check.sh               "$STAGE/"
+# 라이선스(무단 사용 금지) — 번들만 받은 서버에서도 쓸 수 있는 범위가 보이게.
+cp LICENSE                           "$STAGE/LICENSE"
+cp THIRD_PARTY_NOTICES.md            "$STAGE/THIRD_PARTY_NOTICES.md"
 # HWAX 포털 연동 요청서의 틀 — `deploy.sh hwax-request` 가 이 설치의 값으로 채운다(ADR 0028). 정본은 docs/ 에
 # 있고(포털 담당이 저장소에서도 읽는다) 번들에는 이름만 바꿔 담는다 — 없으면 서버에서 요청서를 못 만든다.
 cp "docs/[참고] HWAX포탈_연동_요청서.md" "$STAGE/HWAX-연동요청서.template.md"

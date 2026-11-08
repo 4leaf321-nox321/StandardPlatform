@@ -12,6 +12,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,8 +22,17 @@ from app.branding import DEFAULT_APP_NAME, DEFAULT_APP_SLUG, DEFAULT_APP_TAGLINE
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = BACKEND_DIR.parent
 
-#: HWAX 포털의 `JWT_ISSUER` 기본값 — launch 토큰의 `iss`(ADR 0028).
-DEFAULT_PORTAL_ISSUER = "https://hwax.sec.samsung.net"
+
+def url_origin(url: str) -> str:
+    """`https://portal.example.com/launch/sp` → `https://portal.example.com`. http · https 의
+    호스트가 없거나 못 읽으면 빈 값."""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return ""
+    if parts.scheme in ("http", "https") and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return ""
 
 
 class Settings(BaseSettings):
@@ -71,7 +81,7 @@ class Settings(BaseSettings):
     port: int = 8040
     public_path: str = ""
     """브라우저가 보는 **주소 접두어** — 여러 플랫폼이 한 호스트명에 경로로 붙을 때
-    (`https://hwax.sec.samsung.net/<slug>/` 이면 `/<slug>`). 비우면 루트(`/`).
+    (`https://<포털 호스트>/<slug>/` 이면 `/<slug>`). 비우면 루트(`/`).
 
     앞의 nginx 가 접두어를 **떼고** 앱에 넘긴다(`location /<slug>/ { proxy_pass http://…/; }`).
     앱은 여전히 `/api` · `/assets` 로 받지만, 화면이 부를 주소 · 리프레시 쿠키의 path ·
@@ -79,7 +89,7 @@ class Settings(BaseSettings):
     앞뒤 슬래시는 정리한다: `plm/` → `/plm`."""
     public_url: str = ""
     """사람이 브라우저로 여는 **화면의 바탕 주소** — 접두어까지
-    (`https://hwax.sec.samsung.net/<id>`). 비우면 짐작한다(`app/shared/public_url.py`): 포털
+    (`https://<포털 호스트>/<id>`). 비우면 짐작한다(`app/shared/public_url.py`): 포털
     로그인 주소(`PORTAL_LAUNCH_URL`)의 호스트 + 접두어, 그다음 `MCP_PUBLIC_URL` 이
     `<앱 주소>/mcp` 꼴이면 그 앞 + 접두어.
 
@@ -388,12 +398,15 @@ class Settings(BaseSettings):
     """launch 토큰의 `aud` — 포털 타일의 `audience`. 비우면 `app_slug`. 포털의 id 를 slug 와
     다르게 지었을 때만 적는다(다르면 서명이 맞아도 「다른 앱에 낸 토큰」 으로 거절한다)."""
     portal_issuer: str = ""
-    """launch 토큰의 `iss` — 포털의 `JWT_ISSUER`. 비우면 포털의
-    기본값(`DEFAULT_PORTAL_ISSUER`). 빈 값을 기본으로 읽는 까닭: `PORTAL_ISSUER=` 한 줄이 「iss
-    가 빈 토큰만 받는다」 가 되어 모든 포털 로그인이 「확인 실패」 로 튕긴다."""
+    """launch 토큰의 `iss` — 포털의 `JWT_ISSUER`. 비우면 포털의 기본(포털 자기 주소)을 따라
+    `PORTAL_LAUNCH_URL`(없으면 `PUBLIC_URL`)의 앞부분(`https://<포털 호스트>`)으로 읽는다 —
+    사내 주소를 코드에 두지 않는다(저장소는 공개, 2026-11-08). 둘 다 없으면 비고, 포털 로그인은
+    「발급자를 정하지 못했다」 로 거절된다(서버 화면이 말한다). 빈 값을 안 적은 것으로 읽는
+    까닭: `PORTAL_ISSUER=` 한 줄이 「iss 가 빈 토큰만 받는다」 가 되면 모든 포털 로그인이
+    튕긴다."""
     portal_launch_url: str = ""
     """로그인 화면의 「HWAX 포털로 로그인」 이 보낼 주소 — 포털의 `/launch/<id>`
-    (`https://hwax.sec.samsung.net/launch/<id>`). 비우면 그 단추가 안 뜬다. 포털이 그 사람으로
+    (`https://<포털 호스트>/launch/<id>`). 비우면 그 단추가 안 뜬다. 포털이 그 사람으로
     토큰을 만들어 위 콜백에 보내 준다 — 앱에 직접(`http://<서버>:8040/`) 들어온 사람도
     같은 길."""
 
@@ -432,7 +445,9 @@ class Settings(BaseSettings):
         if not self.portal_audience.strip():
             self.portal_audience = self.app_slug
         if not self.portal_issuer.strip():
-            self.portal_issuer = DEFAULT_PORTAL_ISSUER
+            self.portal_issuer = url_origin(self.portal_launch_url) or url_origin(
+                self.public_url
+            )
         return self
 
     @property

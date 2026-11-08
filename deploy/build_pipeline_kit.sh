@@ -54,6 +54,8 @@ mkdir -p "$STAGE/guide" "$STAGE/wheels"
 cp pipeline/sp_*.py pipeline/AGENTS.md pipeline/CLAUDE.md pipeline/GEMINI.md \
    pipeline/README.md pipeline/requirements.txt pipeline/install.cmd pipeline/check.cmd "$STAGE/"
 cp -r pipeline/templates pipeline/core "$STAGE/"
+# 라이선스(무단 사용 금지) — 키트는 사용자 PC 에 풀린다.
+cp LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
 # 모델링 규약의 정본은 플랫폼 MCP 의 가이드다 — **복사해 넣되 고치지 않는다.**
 # sp_mcp 의 pipeline_guide("modeling") 가 이것을 읽는다.
 cp mcp_server/guide/GUIDE.md "$STAGE/guide/"

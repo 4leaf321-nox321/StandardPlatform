@@ -166,7 +166,7 @@ TRUST_PROXY=true
 PUBLIC_URL=https://<포털 호스트>/<id>
 PORTAL_JWKS_URL=<포털 JWKS 주소>
 PORTAL_LAUNCH_URL=https://<포털 호스트>/launch/<id>
-# PORTAL_AUDIENCE · PORTAL_ISSUER 는 적지 않는다 — 기본(APP_SLUG · 포털의 기본 iss)이 맞다. 포털 id 를 slug 와 다르게 지었을 때만
+# PORTAL_AUDIENCE · PORTAL_ISSUER 는 적지 않는다 — 기본(APP_SLUG · PORTAL_LAUNCH_URL 의 앞부분 = 포털의 기본 iss)이 맞다. 포털 id 를 slug 와 다르게 지었을 때만
 HEAX_SSO_SECRET=<hwax-request 가 만든 64자 — 손으로 짓지 않는다>
 HEAX_SSO_ALLOWED_IPS=<포털 박스 주소>
 MCP_PUBLIC_URL=http://<이 서버 IP>:<MCP 포트>/mcp
@@ -274,7 +274,7 @@ Claude 에서 목록 하나를 물어 답의 `url` 이 그 값으로 시작하�
 | `PORTAL_JWKS_URL` | 빈 값 | 포털의 공개 키 주소 — 포털 담당에게서 받는다. **비우면 포털 로그인이 꺼진다** | 비면 콜백이 404 JSON(포털 진단표의 「SSO 꺼짐」). 이 서버에서 안 닿으면 로그인 화면에 「공개 키를 받지 못해」 | `config.py portal_jwks_url` · `portal.py status` |
 | `PORTAL_LAUNCH_URL` | 빈 값 | 로그인 화면의 「HWAX 포털로 로그인」 이 가는 곳(`https://<포털 호스트>/launch/<id>`). `PUBLIC_URL` 짐작의 2번이기도 하다 | 비면 단추가 없다. JWKS 없이 이것만 있으면 단추를 안 그린다 | `main.py` 의 `app-portal-launch` |
 | `PORTAL_AUDIENCE` | 빈 값(→ `APP_SLUG`) | 토큰의 `aud` — 포털 id 를 slug 와 다르게 지었을 때만 | 다르면 서명이 맞아도 「확인 실패」. 서버 화면이 접두어와 다르다고 말한다 | `config.py portal_audience` |
-| `PORTAL_ISSUER` | 빈 값(→ 포털 기본 iss) | 포털 `JWT_ISSUER` 를 바꿔 쓰는 박스만 | `PORTAL_ISSUER=` 빈 줄은 기본으로 읽는다(그 함정은 막아 두었다) | `config.py portal_issuer` |
+| `PORTAL_ISSUER` | 빈 값(→ `PORTAL_LAUNCH_URL`, 없으면 `PUBLIC_URL` 의 앞부분 `https://<포털 호스트>` — 포털의 기본 iss 가 포털 자기 주소다. 둘 다 없으면 포털 로그인이 「확인 실패」 이고 서버 화면이 말한다) | 포털 `JWT_ISSUER` 를 바꿔 쓰는 박스만 | `PORTAL_ISSUER=` 빈 줄은 기본으로 읽는다(그 함정은 막아 두었다) | `config.py portal_issuer` |
 
 ### 2.6 위임 인증 — 게이트웨이의 사람별 토큰 (ADR 0028)
 
