@@ -22,7 +22,9 @@
            --client "Claude Desktop" --data synthetic
 
    문항마다 ✓/✗ 와 까닭, 갈래별 · 전체 정답률. `--record` 는 한 줄을 덧붙인다 — 판 · GUIDE ·
-   도구 목록 · 질문 셋의 지문과 함께라 **같은 지문끼리만** 견준다.
+   도구 목록 · 질문 셋의 지문과 함께라 **같은 지문끼리만** 견준다. `--trace` 는 문항 id 가 붙은
+   도구 자취(`{"q", "tool"}` 줄)로 **꼭 불러야 할 도구**(`must_call` — 목록 안의 목록은 「그중
+   하나」)를 불렀나를 따로 본다(정답률에는 안 섞는다).
 
 **CI 에 넣지 않는다**(AI 의 답은 같은 물음에도 흔들린다) — 추세를 보는 자다. 합성 자료(`--data
 synthetic`)의 정답률은 「고친 뒤 깨졌나」 를 보는 수이지 성과가 아니다.
@@ -377,20 +379,54 @@ def read_answers(path: Path) -> dict[str, str]:
     return out
 
 
-def report(items: list[dict[str, Any]], results: dict[str, Verdict]) -> str:
+def must_called(item: dict[str, Any], tools: list[str]) -> list[str]:
+    """`must_call` 중 안 부른 것 — 목록 안의 목록은 「그중 하나」."""
+    missed: list[str] = []
+    for need in item.get("must_call") or []:
+        options = need if isinstance(need, list) else [need]
+        if not any(one in tools for one in options):
+            missed.append(" 또는 ".join(options))
+    return missed
+
+
+def read_trace(path: Path) -> dict[str, list[str]]:
+    """문항 id 가 붙은 자취 — 문항마다 부른 도구를 부른 차례대로."""
+    out: dict[str, list[str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            if row.get("q"):
+                out.setdefault(str(row["q"]), []).append(str(row.get("tool")))
+    return out
+
+
+def report(
+    items: list[dict[str, Any]],
+    results: dict[str, Verdict],
+    trace: dict[str, list[str]] | None = None,
+) -> str:
     lines: list[str] = []
     kinds: dict[str, list[bool]] = {}
+    calls: list[bool] = []
     for one in items:
         if one["id"] not in results:
             continue
         ok, why = results[one["id"]]
         kinds.setdefault(one["kind"], []).append(ok)
         lines.append(f"{'✓' if ok else '✗'} {one['id']} [{one['kind']}] {one['q']}\n    {why}")
+        if trace is not None:
+            tools = trace.get(one["id"], [])
+            missed = must_called(one, tools)
+            calls.append(not missed)
+            said = "필수 도구 ✓" if not missed else f"필수 도구 빠짐: {', '.join(missed)}"
+            lines.append(f"    {said} · 도구 {len(tools)}회")
     done = [ok for ok, _ in results.values()]
     lines.append("")
     lines.append("갈래별: " + " · ".join(f"{k} {sum(v)}/{len(v)}" for k, v in kinds.items()))
     if done:
         lines.append(f"전체 {sum(done)}/{len(done)} ({sum(done) / len(done):.0%})")
+    if calls:
+        lines.append(f"필수 도구를 부른 문항 {sum(calls)}/{len(calls)}")
     return "\n".join(lines)
 
 
@@ -410,13 +446,25 @@ async def grade(args: argparse.Namespace) -> int:
             continue
         out = await run_gold(server, ctx, one)
         results[one["id"]] = judge(one, out, answer_json(answers[one["id"]]))
-    print(report(items, results))
+    trace = read_trace(args.trace) if args.trace else None
+    print(report(items, results, trace))
     if args.record:
         row = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
             **await fingerprint(server, ctx, args.client, args.data),
             "score": [sum(ok for ok, _ in results.values()), len(results)],
             "items": {key: ok for key, (ok, _) in results.items()},
+            **(
+                {
+                    "must_call": {
+                        one["id"]: not must_called(one, trace.get(one["id"], []))
+                        for one in items
+                        if one["id"] in results
+                    }
+                }
+                if trace is not None
+                else {}
+            ),
         }
         with args.record.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -432,6 +480,9 @@ def main(argv: list[str]) -> int:
     graded.add_argument("--record", type=Path, default=None, help="결과 한 줄을 덧붙일 JSONL")
     graded.add_argument("--client", default="", help="AI 클라이언트(Claude Desktop · 포털 …)")
     graded.add_argument("--data", choices=("synthetic", "real"), default="synthetic")
+    graded.add_argument(
+        "--trace", type=Path, default=None, help='문항 id 가 붙은 도구 자취({"q", "tool"} 줄)'
+    )
     args = parser.parse_args(argv)
     if args.command == "prompts":
         print(prompts(load()))

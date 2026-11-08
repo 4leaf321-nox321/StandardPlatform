@@ -37,8 +37,9 @@ def test_정답_호출의_도구와_인자가_지금_도구와_맞는다() -> No
         params = set(inspect.signature(tool).parameters) - {"ctx"}
         unknown = set(one["gold"]["args"]) - params
         assert not unknown, f"{one['id']}: {one['gold']['tool']} 이 모르는 인자 {unknown}"
-        for name in one["must_call"]:
-            assert hasattr(server, name), f"{one['id']}: must_call 의 없는 도구 {name}"
+        for need in one["must_call"]:
+            for name in need if isinstance(need, list) else [need]:
+                assert hasattr(server, name), f"{one['id']}: must_call 의 없는 도구 {name}"
 
 
 # --- 채점 규칙(`eval/golden.py`) — 서버 없이 ------------------------------------------------
@@ -131,3 +132,10 @@ def test_세기는_칸마다_수가_같아야_맞다() -> None:
     assert golden.judge(item, out, {"groups": {"대한민국": 10, "미국": 7, "인도": 3}})[0]
     assert not golden.judge(item, out, {"groups": {"대한민국": 10, "미국": 8}})[0]
     assert not golden.judge(item, {"error": "x"}, {"groups": {}})[0]
+
+
+def test_필수_도구는_목록_안의_목록이면_그중_하나다() -> None:
+    item = {"must_call": ["object_resolve", ["metric_query", "metric_analyze"]]}
+    assert golden.must_called(item, ["object_resolve", "metric_analyze"]) == []
+    assert golden.must_called(item, ["metric_query"]) == ["object_resolve"]
+    assert golden.must_called(item, ["object_resolve"]) == ["metric_query 또는 metric_analyze"]
