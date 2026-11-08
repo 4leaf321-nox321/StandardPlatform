@@ -2863,7 +2863,10 @@ def freshness(db: Session, type_ids: Sequence[uuid.UUID]) -> list[Freshness]:
                 DataSource.options,  # 끊은 자리(`resumable`) — 작은 칸
             )
         )
-        .order_by(DataSource.name, DataSource.slug)
+        # 정렬 규칙을 박는다 — DB 기본 규칙(설치 때 정해진 로캘)에 맡기면 en_US 같은 glibc
+        # 로캘은 한글 음절을 1차 비교에서 빼서, 「다 끔 682f64」 가 「가 PLM 682f64」 보다 앞에
+        # 선다(숫자가 영문보다 앞이라). C 는 글자 번호 차례 — 한글 음절은 가나다 차례다.
+        .order_by(DataSource.name.collate("C"), DataSource.slug)
     ).all()
     now = datetime.now(UTC)
     return [
