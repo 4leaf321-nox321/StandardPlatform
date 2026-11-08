@@ -1421,6 +1421,7 @@ def test_전후_비교는_적용일_앞뒤의_닫힌_부분군을_견주고_낀_
     early = _analysis(client, admin, monthly["slug"], "cutin", at="2027-02-01", **model)
     assert early["decision"] == "too_early" and early["after"]["subgroups"] == 0
     assert "no_after" in {one["code"] for one in early["caveats"]}
+    assert "sparse" not in {one["code"] for one in found["caveats"]}  # 600 · 420건 — 적지 않다
 
     bad = client.get(
         f"/api/metrics/{monthly['slug']}/analysis/cutin",
@@ -1430,6 +1431,30 @@ def test_전후_비교는_적용일_앞뒤의_닫힌_부분군을_견주고_낀_
     assert bad.status_code == 422
     listed = next(one for one in monthly["analyses"] if one["recipe"] == "cutin")
     assert listed["ok"] is True and listed["label"] == "전후 비교"
+
+
+def test_전후_비교가_건수가_적어_아직_이르면_그_까닭을_말한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """달마다 2만 대에 3건 · 2건 — 줄었는지 가리기에 건수가 적다. 「아직 이르다」 만 주면 AI 가
+    다른 길을 헤맨다(F5 힌지 — 창이 짧아 4 · 5건, 2026-11-08 정답 셋 시험) — 건수가 적다고,
+    무엇을 넓히면 되는지 말한다."""
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
+    watermark = datetime(2027, 3, 15, tzinfo=UTC)
+    _plant_months(w, sales, monthly, [3] * 6 + [2] * 6 + [2, 2], 20000.0, watermark)
+    found = _analysis(
+        client,
+        admin,
+        monthly["slug"],
+        "cutin",
+        at="2026-07-01",
+        **{"d.base_model": w["s_base"]},
+    )
+    assert found["decision"] == "too_early"
+    (sparse,) = [one for one in found["caveats"] if one["code"] == "sparse"]
+    assert sparse["message"].startswith("앞 18건 · 뒤 14건으로 건수가 적어 판단이 이릅니다.")
+    assert sparse["level"] == "warn" and sparse["count"] == 14
 
 
 def test_부분군의_줄은_대수가_있는_끝쪽의_0건까지_잇는다(

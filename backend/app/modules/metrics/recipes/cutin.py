@@ -69,6 +69,8 @@ POWER = 0.8
 TREND_MIN = 4
 #: φ 를 재려면 자유도가 이만큼은 있어야 한다.
 DISPERSION_MIN_DF = 3
+#: 「아직 이르다」 에서 앞 · 뒤 건수가 이만큼 안 되면 건수가 적은 까닭(창)을 말한다.
+SPARSE_COUNT = 30
 
 Decision = Literal["reduced", "increased", "no_difference", "too_early"]
 Side = Literal["before", "after", "skipped", "boundary"]
@@ -299,6 +301,23 @@ def run(
             f"적용일 뒤 부분군 {open_after}개는 아직 열려 있어 넣지 않았습니다.",
             level="info",
             count=open_after,
+        )
+    c_before, c_after = int(sum(c for c, _ in before)), int(sum(c for c, _ in after))
+    if decision == "too_early" and before and after and min(c_before, c_after) < SPARSE_COUNT:
+        # 건수가 적어 판단을 못 하는 것 — 늦게 나오는 고장(마모 · 힌지 · 배터리)은 짧은 창에
+        # 거의 안 잡힌다. 창을 늘리면 결론이 설 수 있다(F5 힌지: 3개월 4 · 5건 → 12개월 254 ·
+        # 65건, 2026-11-08 정답 셋 시험).
+        hint = (
+            f"코호트마다 출고 뒤 {window}기간 안의 건수만 셉니다 — 늦게 나오는 고장(마모 · "
+            "힌지 · 배터리)이면 창(window)을 늘려 다시 봅니다(예: 12). 창을 늘리면 뒤쪽의 "
+            "닫힌 부분군은 줄어듭니다."
+            if found.axis == "cohort"
+            else "적용 뒤 기간이 더 지나거나, 거르기를 넓히면 건수가 늡니다."
+        )
+        caveats.add(
+            "sparse",
+            f"앞 {c_before}건 · 뒤 {c_after}건으로 건수가 적어 판단이 이릅니다. {hint}",
+            count=min(c_before, c_after),
         )
     if "boundary" in sides:
         caveats.add(

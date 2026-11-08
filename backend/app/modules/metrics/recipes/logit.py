@@ -374,7 +374,7 @@ def run(
     found: Fitted | None = None
     if total_yes > 0 and total_no > 0:
         found = fit(groups, len(factors), min_count)
-        out_factors = _factors(found, factors, dims, labels, compact)
+        out_factors = _factors(found, factors, dims, labels, compact, min_count)
         if found.aliased:
             caveats.add(
                 "aliased",
@@ -467,6 +467,7 @@ def _factors(
     dims: list[spec_module.Dim],
     labels: dict[str, dict[str, str]],
     compact: bool,
+    min_count: int = MIN_COUNT,
 ) -> list[LogitFactorOut]:
     out: list[LogitFactorOut] = []
     for f, (name, dim) in enumerate(zip(names, dims, strict=True)):
@@ -498,7 +499,14 @@ def _factors(
                         if found.covariance is not None
                         else math.inf
                     )
-                    unstable = abs(coefficient) > UNSTABLE or not math.isfinite(variance)
+                    # 기록이 `min_count` 안 되는 수준(드문 값을 모은 「그 밖」 이 합쳐도 적을
+                    # 때)은 계수가 작아 보여도 흔들린다 — 7건짜리 「그 밖」 이 오즈비 5.19 로
+                    # 1위에 섰다(2026-11-08 정답 셋 시험).
+                    unstable = (
+                        abs(coefficient) > UNSTABLE
+                        or not math.isfinite(variance)
+                        or yes + no < min_count
+                    )
                     if not unstable:
                         odds = math.exp(coefficient)
                         spread = Z95 * math.sqrt(max(variance, 0.0))

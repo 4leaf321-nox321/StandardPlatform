@@ -83,3 +83,26 @@ def test_AUC_는_점수가_가르는_정도() -> None:
     # 짝 6개: 3>2 x2, 3>1 x2, 1 vs 2 진다 x1, 1 vs 1 비김 x1 → (4 + 0.5) / 6.
     assert found == pytest.approx(4.5 / 6)
     assert logit.auc([0, 0], [1, 1], [1.0, 2.0]) is None
+
+
+def test_기록이_최소_건수_안_되는_수준은_불안정이고_오즈비를_싣지_않는다() -> None:
+    """드문 값을 모은 「그 밖」 이 합쳐도 적으면(7건) 계수가 작아 보여도 흔들린다 — 오즈비
+    5.19 로 1위에 서 AI 가 「가장 많은 처리」 로 옮길 뻔했다(2026-11-08 정답 셋 시험)."""
+    from types import SimpleNamespace
+
+    groups = [
+        logit.Group(("부품 교체",), 400, 5600),
+        logit.Group(("점검 후 반환",), 400, 2600),
+        logit.Group(("드문 1",), 2, 2),
+        logit.Group(("드문 2",), 1, 2),
+    ]
+    found = logit.fit(groups, 1, min_count=30)
+    dim = SimpleNamespace(axis=SimpleNamespace(label="처리"))
+    (factor,) = logit._factors(found, ["handling"], [dim], {}, False, 30)  # type: ignore[list-item]
+    by_label = {one.label: one for one in factor.levels}
+    other = by_label[logit.OTHER_LABEL]
+    assert (
+        other.count == 7 and other.unstable and other.odds_ratio is None and other.ci is None
+    )
+    kept = by_label["점검 후 반환"]
+    assert not kept.unstable and kept.odds_ratio is not None and kept.odds_ratio > 1
