@@ -3,7 +3,7 @@
   "private": true,
   "license": "UNLICENSED",
   "//": "이 version 이 곧 릴리스 번호다. 백엔드가 /api/health 로 이 값을 돌려준다.",
-  "version": "0.4.76",
+  "version": "0.4.77",
   "type": "module",
   "scripts": {
     "dev": "vite",
