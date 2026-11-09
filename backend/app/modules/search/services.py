@@ -115,17 +115,34 @@ class Result:
     """섞어 볼 때 줄에 안 섞은 기록의 수 — 그 타입으로 좁히면 나온다."""
 
 
-def _where(db: Session, user: User, q: str) -> tuple[Any, ...]:
-    """수 · 줄이 함께 쓰는 조건 — 둘이 따로 만들면 「3건」 이라 해 놓고 두 줄을 보인다.
-
-    띄어 쓴 낱말은 한 칸에 **모두 든 것**이다(`search_words`, ADR 0057). `%` 와 `_` 는 글자
-    그대로다 — 사람이 친 그대로 `LIKE` 에 넣으면 「50%」 가 「50 뒤에 아무거나」 로 읽힌다."""
+def _seen(user: User) -> tuple[Any, ...]:
+    """수 · 줄이 함께 거는 객체 조건 — 지우지 않았고 볼 수 있는 것. 둘이 따로 만들면
+    「3건」 이라 해 놓고 두 줄을 보인다."""
     return (
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+    )
+
+
+def _where(db: Session, user: User, q: str, narrow: Any = None) -> tuple[Any, ...]:
+    """줄의 조건 — 볼 수 있는 것 가운데 그 말이 든 것(`narrow` 면 그 타입만).
+
+    띄어 쓴 낱말은 한 칸에 **모두 든 것**이다(`search_words`, ADR 0057). `%` 와 `_` 는 글자
+    그대로다 — 사람이 친 그대로 `LIKE` 에 넣으면 「50%」 가 「50 뒤에 아무거나」 로 읽힌다.
+
+    **타입 조건(`narrow`)은 모으는 쪽에도 건다** — 섞어 찾을 때 기록을 빼는 조건이 바깥에만
+    있으면, 걸린 기록을 다 모은 뒤 하나씩 짚어 버린다(「SM-X」 는 기록 20만 건 → 2초,
+    2,000만 건 실측 DB). 같은 줄에 같은 조건이라 답은 같다. 별칭 쪽은 안 건다 — 대개 몇
+    줄이고, 바깥이 다시 거른다."""
+    narrowed = () if narrow is None else (narrow,)
+    return (
+        *_seen(user),
+        *narrowed,
         # 이름 · 식별자 · 별칭을 따로 묻고 합친다 — 한 OR 로 묶으면 trigram 인덱스를 못 탄다.
         ObjectInstance.id.in_(
-            containing_ids(word_patterns(q), escape="\\", bigrams=bigram_plan(db, q))
+            containing_ids(
+                word_patterns(q), type_clause=narrow, escape="\\", bigrams=bigram_plan(db, q)
+            )
         ),
     )
 
@@ -171,13 +188,19 @@ def _aliases_of(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Objec
 
 
 def counts(db: Session, user: User, q: str) -> list[TypeCount]:
-    """타입마다 몇 건. **0 건인 타입은 안 넣는다** — 빈 줄이 늘어서면 있는 쪽이 묻힌다."""
+    """타입마다 몇 건. **0 건인 타입은 안 넣는다** — 빈 줄이 늘어서면 있는 쪽이 묻힌다.
+
+    (id, 타입) 쌍을 **모으는 길에서** 센다(`containing_ids(with_type=True)`) — 걸린 것을 id 로
+    다시 짚어 타입을 읽으면 걸린 줄마다 객체를 한 번 더 읽는다. 조건은 줄과 같다(`_seen`)."""
     types = {row.id: row for row in db.scalars(select(ObjectType))}
-    rows = db.execute(
-        select(ObjectInstance.type_id, func.count())
-        .where(*_where(db, user, q))
-        .group_by(ObjectInstance.type_id)
-    )
+    pairs = containing_ids(
+        word_patterns(q),
+        escape="\\",
+        bigrams=bigram_plan(db, q),
+        with_type=True,
+        extra=_seen(user),
+    ).subquery()
+    rows = db.execute(select(pairs.c.type_id, func.count()).group_by(pairs.c.type_id))
     out: list[TypeCount] = []
     for type_id, count in rows:
         object_type = types.get(type_id)
@@ -287,15 +310,16 @@ def search(
             found.hits = [_hit_of(target, ref, q) for ref in refs]
             return found
 
-    where = _where(db, user, q)
+    narrow: Any = None
     if target is not None:
-        where = (*where, ObjectInstance.type_id == target.id)
+        narrow = ObjectInstance.type_id == target.id
     elif among is not None:
-        where = (*where, ObjectInstance.type_id.in_([types[one].id for one in among]))
+        narrow = ObjectInstance.type_id.in_([types[one].id for one in among])
     else:
         logs = [one.id for one in types.values() if one.usage == "log"]
         if logs:
-            where = (*where, ObjectInstance.type_id.not_in(logs))
+            narrow = ObjectInstance.type_id.not_in(logs)
+    where = _where(db, user, q, narrow)
     narrowed = [target] if target is not None else [types[one] for one in among or ()]
     if any(one.usage == "log" for one in narrowed):
         # 기록으로 좁혔다 — 걸린 줄이 수백만일 수 있어 이름 순 그대로(모듈 설명).

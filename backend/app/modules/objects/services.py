@@ -392,6 +392,8 @@ def containing_ids(
     fields: tuple[str, ...] = ("label", "key"),
     escape: str | None = None,
     bigrams: dict[str, list[str]] | None = None,
+    with_type: bool = False,
+    extra: tuple[Any, ...] = (),
 ) -> Any:
     """「이 글자가 들어간 것」 의 id — 이름 · 식별자 · 속성 칸 · 별칭을 **따로 묻고
     합친다**(UNION).
@@ -407,10 +409,19 @@ def containing_ids(
     탄다.
 
     `bigrams`(`bigram_plan`)가 있으면 두 글자 조각 인덱스를 함께 건다 — trigram 은 세
-    글자부터라 「소음」 은 표 전체를 읽었다."""
+    글자부터라 「소음」 은 표 전체를 읽었다.
+
+    `with_type` 이면 (id, 타입 id) 쌍이다 — 타입마다 몇 건인지를 **모으는 길에서** 센다
+    (통합 검색의 `counts`). 걸린 것을 id 로 다시 짚어 타입을 읽으면 걸린 줄마다 객체를 한 번
+    더 읽는다 — 「SM-X」 에 판매 · 생산 기록 20만 건이 걸리자 그것만 2초였다(2,000만 건 실측
+    DB). `extra` 는 객체에 거는 조건(지움 · 볼 수 있는 범위)을 모으는 쪽에 함께 건다 — 별칭
+    쪽은 객체를 이어 건다. 둘 다 안 주면 예전과 같다."""
     plan = bigrams or {}
     likes = [patterns] if isinstance(patterns, str) else list(patterns)
-    where = () if type_clause is None else (type_clause,)
+    where = (*(() if type_clause is None else (type_clause,)), *extra)
+    columns: tuple[Any, ...] = (
+        (ObjectInstance.id, ObjectInstance.type_id) if with_type else (ObjectInstance.id,)
+    )
     parts: list[Any] = []
     for field in fields:
         if field == "label":
@@ -425,14 +436,23 @@ def containing_ids(
         else:
             continue
         parts.append(
-            select(ObjectInstance.id).where(
+            select(*columns).where(
                 *where, *indexed, *(column.ilike(one, escape=escape) for one in likes)
             )
         )
     # 별칭에도 걸린다 — 「앤시스」 로 찾아도 「Ansys」 가 나와야 새로 만들지 않는다.
     alias_where = () if alias_type_clause is None else (alias_type_clause,)
+    alias_part = select(ObjectAlias.object_id)
+    if with_type or extra:
+        # 타입 · 객체 조건은 객체에 있다 — 별칭에 걸린 것만 이어 읽는다(대개 몇 줄이다).
+        alias_part = (
+            select(ObjectAlias.object_id, *([ObjectInstance.type_id] if with_type else []))
+            .select_from(ObjectAlias)
+            .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
+        )
+        alias_where = (*alias_where, *extra)
     parts.append(
-        select(ObjectAlias.object_id).where(
+        alias_part.where(
             *alias_where,
             *_bigram(ObjectAlias.value, plan.get("alias")),
             *(ObjectAlias.value.ilike(one, escape=escape) for one in likes),
