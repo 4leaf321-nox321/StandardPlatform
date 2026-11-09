@@ -6,7 +6,7 @@
 #
 # 산출물: release/<slug>-<버전>.tar.gz
 #   app.sif · deploy.sh · ha.sh · pg-ha.sh · pg-tune.sh · backup.sh · restore.sh · *.template · .env.example
-#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ · pgvector_debs/ (폐쇄망용)
+#   · BUILD_INFO · README.md · CHANGES.md(판 기록) · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ · pgvector_debs/ (폐쇄망용)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
 # 그다음 배포가 돌아야 한다 — 빠뜨리면 첫 배포에 저장소를 클론하는 수밖에 없고,
@@ -165,6 +165,16 @@ cp deploy/env-check.sh               "$STAGE/"
 # 라이선스(무단 사용 금지) — 번들만 받은 서버에서도 쓸 수 있는 범위가 보이게.
 cp LICENSE                           "$STAGE/LICENSE"
 cp THIRD_PARTY_NOTICES.md            "$STAGE/THIRD_PARTY_NOTICES.md"
+# **판 기록** — 앞 릴리스 이후 바뀐 것 · DB 마이그레이션(데이터를 지우는 것 표시) · 새 .env 값 · 되돌리기.
+# 운영자가 갱신 **전에** 「이번 판은 DB 가 바뀌나 · 되돌릴 수 있나」 를 볼 자리다. 릴리스 본문도 이 글이다.
+# 앞 릴리스는 RELEASE_SINCE(릴리스 워크플로가 게시된 마지막 릴리스를 넘긴다), 없으면 이 커밋 앞의 마지막
+# 태그 — 얕은 체크아웃이라 그것도 없으면 「모른다」 고 적는다(update 가 갱신할 때 지금 DB 기준으로 센다).
+since="${RELEASE_SINCE:-$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)}"
+if ! python3 backend/scripts/release_notes.py notes --since "$since" --version "$VERSION" \
+        > "$STAGE/CHANGES.md"; then
+    echo "경고: 판 기록을 만들지 못했습니다(앞 릴리스 ${since:-모름}) — 빈 기록을 넣습니다" >&2
+    python3 backend/scripts/release_notes.py notes --since "" --version "$VERSION" > "$STAGE/CHANGES.md"
+fi
 # HWAX 포털 연동 요청서의 틀 — `deploy.sh hwax-request` 가 이 설치의 값으로 채운다(ADR 0028). 정본은 docs/ 에
 # 있고(포털 담당이 저장소에서도 읽는다) 번들에는 이름만 바꿔 담는다 — 없으면 서버에서 요청서를 못 만든다.
 cp "docs/[참고] HWAX포탈_연동_요청서.md" "$STAGE/HWAX-연동요청서.template.md"

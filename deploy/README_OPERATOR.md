@@ -36,7 +36,7 @@ ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
 #  app.service.template  worker.service.template  mcp.service.template  sync.service.template  sync.timer.template
 #  metrics.service.template  metrics.timer.template  backup.service.template  backup.timer.template
-#  .env.example  BUILD_INFO  README.md  쉬운-설치.md  HWAX-연동요청서.template.md(9절 — hwax-request 가 채운다)
+#  .env.example  BUILD_INFO  README.md  CHANGES.md(판 기록)  쉬운-설치.md  HWAX-연동요청서.template.md(9절 — hwax-request 가 채운다)
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
 #  pgvector_debs/   (폐쇄망용 pgvector .deb — 뜻으로 찾기의 확장, 5d-3)
@@ -180,23 +180,33 @@ sudo journalctl -u <slug> -f
 
 ```bash
 # 새 번들을 풀고 그 안에서
+cat CHANGES.md          # 판 기록 — 먼저 읽는다
 sudo ./deploy.sh update
 ```
 
+**먼저 번들의 `CHANGES.md`(판 기록)를 읽는다** — 앞 릴리스 이후 바뀐 것, DB 마이그레이션(⚠ 는 데이터를
+지우는 것), 새로 생긴 `.env` 값, 되돌리기가 되는지. 릴리스 본문도 같은 글이다. 서버가 판을 건너뛰어 왔으면
+(예: v0.4.70 → v0.4.76) 그 사이 판의 것은 각 릴리스의 기록에 있고, update 가 **지금 DB 기준으로** 다시 센다(아래 4).
+
 **서비스를 내리기 전에** pgvector 확장부터 갖추고, 앱이 다시 뜬 뒤 끝에 임베딩 모델을 확인한다(5d-3 — 처음이면
-깔고 받는다). 둘 다 못 갖춰도 갱신은 끝난다 — 경고를 찍고 서버 화면이 말한다. 스크립트로 돌려도 묻는 것이 없다.
+깔고 받는다). 둘 다 못 갖춰도 갱신은 끝난다 — 경고를 찍고 서버 화면이 말한다. 스크립트로 돌려도 묻는 것이 없다 — **데이터를
+지우는 마이그레이션이 있을 때만** 묻는다(아래 4).
 
 **스크립트도 새 번들의 것을 쓴다** — 옛 `deploy.sh` 로 새 SIF 를 깔면 그 릴리스가
 기대하는 단계가 통째로 안 돌고, 안 돌았다는 사실은 아무 데도 안 적힌다. 번들
 안에서 실행하면 저절로 그렇게 된다.
 
-**서비스를 내리기 전에 세 가지를 본다** — 여기서 멈추면 서비스는 그대로 돈다.
+**서비스를 내리기 전에 네 가지를 본다** — 여기서 멈추면 서비스는 그대로 돈다.
 
 1. 판이 내려가지 않나 — 깔린 이미지의 판보다 이 번들이 옛 판이면 멈춘다(옛 번들 폴더에서 친 것). 정말 내리려면
    `sudo ALLOW_DOWNGRADE=1 APP_SLUG=<slug> ./deploy.sh update`.
 2. 새 이미지를 설치 폴더 옆(`app.sif.new`)에 놓는다 — 디스크가 차면 여기서 멈춘다. 서비스가 내려가 있는 동안에는
    옮기기만 한다.
 3. 새 이미지가 지금 DB 를 아나(`alembic current`) — DB 가 이 번들보다 앞선 판이면 멈춘다.
+4. 이번 갱신의 DB 마이그레이션 — **지금 DB 부터** 끝까지를 세어 보인다(「DB 마이그레이션 n개(지금 … 부터)」, 없으면
+   「없음」). 데이터를 지우는 것(⚠ 표 · 칸 지우기)이 있으면 최근 백업(`<BACKUP_DIR>/db/db-<시각>.dump`)을 보이고
+   「계속할까요? [y/N]」 을 묻는다 — 터미널이 아니면 묻지 못해 멈춘다. 백업을 확인했고 묻지 않고 가려면
+   `sudo CONFIRM_DROPS=1 APP_SLUG=<slug> ./deploy.sh update`. 셀 수 없으면(옛 이미지 등) 경고만 찍고 간다.
 
 **내린 뒤에 실패하면**(마이그레이션 오류 등) 직전 이미지로 되돌리고 다시 켠다 — 마이그레이션은 한 트랜잭션이라 실패했으면
 DB 는 그대로다. 같은 판을 다시 칠 때는 `app.sif.prev` 를 덮지 않는다(연달아 두 번 쳐도 그 앞 판이 남는다).
@@ -210,7 +220,8 @@ sudo systemctl start <slug> <slug>-worker
 ```
 
 **파일만 되돌아간다 — 마이그레이션은 취소되지 않는다.** 파괴적 마이그레이션
-(컬럼 삭제·이름 변경)을 적용했다면 DB 는 백업에서 따로 복구해야 한다.
+(컬럼 삭제·이름 변경)을 적용했다면 DB 는 백업에서 따로 복구해야 한다. 이번 판이 그런 판인지는 `CHANGES.md`
+의 「갱신 전에 볼 것」 과 update 의 「DB 마이그레이션」 줄이 말한다.
 
 ---
 
@@ -826,7 +837,7 @@ sudo ./deploy.sh update            # B 앱 중지 → SIF 교체 → 마이그�
 sudo ./deploy.sh update
 ```
 
-한 대씩 하므로 **서비스는 끊기지 않는다** — 메인 서버의 nginx 가 멈춘 쪽을 빼고 보낸다(`max_fails=3`). 마이그레이션은 어느 서버에서 돌려도 주 DB 로 가고 두 번째는 할 일이 없다. 파괴적 마이그레이션(컬럼 삭제)은 옛 SIF 가 아직 도는 몇 분 동안 오류를 낼 수 있다 — 그런 릴리스는 두 대를 빠르게 잇달아 한다. 앱 포트 · MCP 포트 · slug 가 바뀌지 않는 한 메인 서버의 조각은 그대로다. **단 v0.4.48 에서 조각에
+한 대씩 하므로 **서비스는 끊기지 않는다** — 메인 서버의 nginx 가 멈춘 쪽을 빼고 보낸다(`max_fails=3`). 마이그레이션은 어느 서버에서 돌려도 주 DB 로 가고 두 번째는 할 일이 없다. 파괴적 마이그레이션(컬럼 삭제)은 옛 SIF 가 아직 도는 몇 분 동안 오류를 낼 수 있다 — 그런 릴리스는 두 대를 빠르게 잇달아 한다(그런 릴리스인지는 `CHANGES.md` 의 ⚠ 와 B 의 update 가 묻는 것으로 안다 — A 에서는 이미 적용돼 「없음」 으로 나온다). 앱 포트 · MCP 포트 · slug 가 바뀌지 않는 한 메인 서버의 조각은 그대로다. **단 v0.4.48 에서 조각에
 `location /<slug>/assets/` 가 더해졌다** — 한 대씩 올리는 동안 두 서버의 판이 달라, 화면 조각을 옛 판 서버에
 물으면 404 가 나던 것을 다른 서버에서 받게 한다. 그 판으로 처음 올릴 때 새 `main-server-nginx.conf` 를 메인
 서버 쪽에 한 번 다시 넘긴다.

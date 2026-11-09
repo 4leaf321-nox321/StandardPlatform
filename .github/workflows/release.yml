@@ -80,7 +80,11 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      # **이력 전부를 받는다** — 판 기록(`CHANGES.md`)이 앞 릴리스 이후의 커밋 · 새 마이그레이션을 읽는다.
+      # 기본(한 커밋 · 태그 없음)이면 「앞 릴리스를 몰라」 로 빈다.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -94,6 +98,19 @@ jobs:
 
       # 설치를 한 자리에서 정한다 — ci 와 release 가 같은 것을 쓴다.
       - uses: ./.github/actions/apptainer
+
+      # **게시된 마지막 릴리스**가 판 기록의 출발점이다 — 태그가 아니라 릴리스다. CI 가 떨어져 게시하지
+      # 못한 태그(v0.4.75)도 있어, 「앞 태그」 로 세면 그 판의 변경이 기록에서 빠진다.
+      - name: 앞 릴리스 찾기
+        id: since
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev=$(gh release list --limit 30 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft | not) | .tagName][0] // ""')
+          echo "앞 릴리스: ${prev:-없음}"
+          echo "since=$prev" >> "$GITHUB_OUTPUT"
 
       # **사용자 PC 에 옮기는 정제 도구 묶음**도 같은 태그로 낸다. **번들보다 먼저** 만든다 —
       # 번들 빌드가 이것을 그대로 이미지에 넣어(서버가 「내 정보」 에서 내려준다), 릴리스에
@@ -130,6 +147,7 @@ jobs:
       - name: 번들 빌드
         env:
           USE_SUDO_APPTAINER: '1'
+          RELEASE_SINCE: ${{ steps.since.outputs.since }}
         run: ./deploy/build_bundle.sh "${GITHUB_REF_NAME}"
 
       # 나가기 전에 **번들이 자기 발로 서는지** 본다. 여기서 빠진 파일은 서버에서
@@ -142,7 +160,7 @@ jobs:
           for f in app.sif deploy.sh ha.sh pg-ha.sh backup.sh restore.sh \
                    app.service.template worker.service.template sync.service.template backup.service.template \
                    metrics.service.template metrics.timer.template \
-                   backup.timer.template .env.example BUILD_INFO README.md 쉬운-설치.md; do
+                   backup.timer.template .env.example BUILD_INFO README.md CHANGES.md 쉬운-설치.md; do
             grep -qx "$f" /tmp/have.txt || { echo "번들에 $f 가 없습니다"; exit 1; }
           done
           # 폐쇄망 서버가 깔 .deb — 빌드는 받지 못하면 경고만 하고 지나가므로 **여기서** 멈춘다.
@@ -194,8 +212,12 @@ jobs:
 
           # **절차를 여기 옮겨 적지 않는다.** 정본은 번들 안의 README 다. 두 벌이
           # 되면 한쪽만 고쳐지고, 그때부터 사람마다 다른 순서를 밟는다. 여기 적는
-          # 것은 **이 릴리스에서만 다른 것**(주소와 파일 이름)뿐이다.
+          # 것은 **이 릴리스에서만 다른 것** — 판 기록(번들의 `CHANGES.md` 그대로)과 주소 · 파일 이름이다.
+          changes=$(find release -mindepth 2 -maxdepth 2 -name CHANGES.md ! -path '*/sp-pipeline-*' | head -1)
+          [ -s "$changes" ] || { echo "판 기록(CHANGES.md)이 없습니다"; exit 1; }
           {
+            cat "$changes"
+            printf '\n## 받기 · 깔기\n\n'
             printf '설치 절차의 정본은 번들 안의 `README.md` 입니다.\n\n'
             printf '```bash\n'
             printf '# 저장소를 받는 PC 에서 (Windows PowerShell 도 같다)\n'

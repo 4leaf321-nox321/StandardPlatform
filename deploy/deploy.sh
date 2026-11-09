@@ -590,6 +590,8 @@ run_migrations() {
 #      그대로 돈다.
 #   2) 내린 **뒤에** 실패하면 — 직전 SIF 로 되돌리고 다시 켠다(`update_rollback`). 마이그레이션은 한
 #      트랜잭션이라 실패했으면 DB 는 그대로다.
+#   3) 내리기 **전에** — 이번 갱신의 마이그레이션을 **지금 DB 부터** 세어 보이고(서버는 판을 건너뛰어 온다),
+#      데이터를 지우는 것이 있으면 최근 백업을 보이고 묻는다(`update_migration_notice`).
 UPDATE_DOWN=0          # 서비스를 내렸고 아직 다시 켜지 않았다
 UPDATE_FROM=""         # 지금 깔린 판(update_preflight 가 읽는다)
 UPDATE_PREV_MOVED=0    # 직전 SIF 를 app.sif.prev 로 옮겼다
@@ -623,6 +625,63 @@ update_preflight() {
         rm -f "$INSTALL_DIR/app.sif.new"
         err "이 번들($VERSION)로는 지금 DB 를 열 수 없습니다 — 서비스는 그대로 돌고 있습니다. DB 가 이 번들보다 앞선 판으로 올라가 있으면 그 판의 번들 폴더에서 치세요. 마지막 줄: $(printf '%s\n' "$said" | tail -n1)"
     fi
+    update_migration_notice "$(printf '%s\n' "$said" | grep -oE '^[0-9]{4}_[A-Za-z0-9_]+' | tail -n1 || true)"
+}
+
+# 최근 DB 백업 — `backup.sh` 의 덤프(`<BACKUP_DIR>/db/db-<시각>.dump`). 모르면 그렇다고 말한다.
+latest_backup() {
+    local dir="${BACKUP_HOST_DIR:-}" last=""
+    if [[ -z "$dir" || ! -d "$dir/db" ]]; then
+        echo "백업 폴더를 모릅니다(.env 의 BACKUP_DIR) — 먼저 sudo ./backup.sh"
+        return 0
+    fi
+    last="$(find "$dir/db" -maxdepth 1 -name 'db-*.dump' -printf '%f\n' 2>/dev/null | sort | tail -n1 || true)"
+    if [[ -n "$last" ]]; then echo "$dir/db/$last"; else echo "없습니다 — 먼저 sudo ./backup.sh"; fi
+}
+
+# **이번 갱신이 DB 를 어떻게 바꾸나** — 새 이미지 안의 `release_notes.py pending` 이 지금 DB 리비전($1)부터
+# 끝까지를 센다. 번들의 CHANGES.md 는 앞 릴리스와 견준 것이라 판을 건너뛴 서버에는 모자란다. 데이터를 지우는
+# 마이그레이션(표 · 칸 지우기)이 있으면 되돌려도 그 값은 안 돌아오므로, 최근 백업을 보이고 **서비스를 내리기
+# 전에** 묻는다 — 터미널이 아니면 CONFIRM_DROPS=1 일 때만 지나간다. 셀 수 없으면 막지 않는다.
+update_migration_notice() {
+    local current="$1" said="" first="" count drops
+    if [[ -z "$current" ]]; then
+        warn "지금 DB 의 리비전을 읽지 못해 이번 갱신의 마이그레이션을 세지 않습니다"
+        return 0
+    fi
+    if ! said="$(SIF="$INSTALL_DIR/app.sif.new" in_container /opt/app/venv/bin/python \
+        /opt/app/backend/scripts/release_notes.py pending --from "$current" 2>&1)"; then
+        warn "이번 갱신의 마이그레이션을 세지 못했습니다 — 그대로 갑니다: $(printf '%s\n' "$said" | tail -n1)"
+        return 0
+    fi
+    # 셈 줄을 **찾는다** — apptainer 의 경고가 앞에 섞일 수 있다(stderr 도 함께 받으므로).
+    first="$(printf '%s\n' "$said" | grep -m1 -E '^pending=[0-9]+ drops=[0-9]+$' || true)"
+    if [[ ! "$first" =~ ^pending=([0-9]+)\ drops=([0-9]+)$ ]]; then
+        warn "이번 갱신의 마이그레이션을 읽지 못했습니다 — 그대로 갑니다: $(printf '%s\n' "$said" | tail -n1)"
+        return 0
+    fi
+    count="${BASH_REMATCH[1]}"
+    drops="${BASH_REMATCH[2]}"
+    if (( count == 0 )); then
+        info "DB 마이그레이션: 없음 — 이번 갱신은 DB 구조를 안 바꿉니다(지금 $current)"
+        return 0
+    fi
+    info "DB 마이그레이션 ${count}개(지금 $current 부터) — 다시 켜기 전에 적용합니다. 그 뒤 앞 판 이미지로 되돌려도 DB 는 새 구조 그대로입니다:"
+    printf '%s\n' "$said" | sed -n '/^pending=/,$p' | sed -n '2,$p'
+    (( drops == 0 )) && return 0
+    warn "데이터를 지우는 마이그레이션이 ${drops}개 있습니다(위의 ⚠) — 되돌려도 지운 값은 돌아오지 않습니다. 이중화면 두 대를 잇달아 올리세요(README 8.2)."
+    warn "최근 백업: $(latest_backup)"
+    if [[ "${CONFIRM_DROPS:-0}" == "1" ]]; then
+        warn "CONFIRM_DROPS=1 — 묻지 않고 갑니다"
+        return 0
+    fi
+    if [[ -t 0 ]]; then
+        local answer=""
+        read -r -p "백업을 확인했고 계속합니다 — 서비스를 내리고 적용할까요? [y/N] " answer || true
+        [[ "$answer" == "y" || "$answer" == "Y" ]] && return 0
+    fi
+    rm -f "$INSTALL_DIR/app.sif.new"
+    err "갱신을 멈췄습니다 — 서비스는 그대로 돌고 있습니다. 백업을 확인한 뒤 다시 치세요. 묻지 않고 가려면: sudo CONFIRM_DROPS=1 APP_SLUG=$APP_SLUG ./deploy.sh update"
 }
 
 # 직전 SIF 를 남기고 새 SIF 로 간다. **같은 판을 다시 까는 것이면 app.sif.prev 를 덮지 않는다** —

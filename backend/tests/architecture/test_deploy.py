@@ -1114,10 +1114,13 @@ def _update_world(
     allow_downgrade: bool = False,
     prev: str | None = None,
     tail: str = "update_preflight\necho PREFLIGHT_OK\n",
+    pending: str = "pending=0 drops=0",
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
     """deploy.sh 의 update 조각을 가짜 apptainer · systemctl 로 돌린다. SIF 는 `version=` 한
     줄을 든 글 파일이다 — 가짜 apptainer 가 그 줄을 BUILD_INFO 로 읽고, `unknown_db` 가 든
-    이미지는 `alembic current` 에서 「Can't locate revision」 으로 실패한다."""
+    이미지는 `alembic current` 에서 「Can't locate revision」 으로 실패한다. 새 이미지 안의
+    `release_notes.py pending` 은 `pending` 을 그대로 답한다(이번 갱신의 마이그레이션)."""
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     constants = [line for line in text.splitlines() if re.match(r"^UPDATE_[A-Z_]+=", line)]
     names = (
@@ -1128,6 +1131,8 @@ def _update_world(
         "installed_version",
         "is_downgrade",
         "update_preflight",
+        "latest_backup",
+        "update_migration_notice",
         "swap_sif",
         "update_rollback",
         "health_check",
@@ -1150,11 +1155,13 @@ def _update_world(
         "mv",
         "rm",
         "seq",
+        "find",
     ):
         found = shutil.which(tool)
         assert found, f"{tool} 이 없습니다"
         (tools / tool).symlink_to(found)
     log = tmp_path / "calls.log"
+    (tmp_path / "pending.txt").write_text(pending + "\n", encoding="utf-8")
     _stub(
         bin_dir / "apptainer",
         f"""shift
@@ -1165,7 +1172,8 @@ case "$*" in
   *BUILD_INFO*) sed -n 's|^version=||p' "$sif" ;;
   *alembic*) if grep -q unknown_db "$sif"; then
       echo "FAILED: Can't locate revision identified by '0099_future'" >&2; exit 255; fi
-    echo "0098 (head)" ;;
+    echo "0098_datasource_run_error_kind (head)" ;;
+  *release_notes*) cat "{tmp_path / "pending.txt"}" ;;
 esac
 """,
     )
@@ -1193,6 +1201,7 @@ esac
         "SERVICE_NAME": "plmhub",
         "WORKER_SERVICE_NAME": "plmhub-worker",
         **({"ALLOW_DOWNGRADE": "1"} if allow_downgrade else {}),
+        **(extra_env or {}),
     }
     script = (
         'set -euo pipefail\nas_op() { "$@"; }\n'
@@ -1294,6 +1303,93 @@ def test_같은_판을_다시_깔면_직전_판_보관을_덮지_않는다(tmp_p
     assert done.returncode == 0, done.stderr
     assert _version_of(inst / "app.sif.prev") == "v0.4.74"  # 그 앞 판이 남는다
     assert _version_of(inst / "app.sif") == "v0.4.75" and not (inst / "app.sif.new").exists()
+
+
+DROPPING = (
+    "pending=2 drops=1\n"
+    "  0099_drop_note — 메모 칸을 지운다\n"
+    "    ⚠ 칸 지우기 parts.note\n"
+    "  0100_add_rank — 순위 칸"
+)
+
+
+@_no_bash
+def test_데이터를_지우는_마이그레이션이_있으면_내리기_전에_백업을_보이고_멈춘다(
+    tmp_path: Path,
+) -> None:
+    """되돌려도 지운 값은 안 돌아온다 — 터미널이 아니면(여기) 묻지 못하므로 멈추고, 서비스는
+    그대로 돈다. **지금 DB 부터** 센 것이다(새 이미지에 지금 리비전을 넘긴다)."""
+    backups = tmp_path / "backup"
+    (backups / "db").mkdir(parents=True)
+    (backups / "db" / "db-20261108-030000.dump").write_text("", encoding="utf-8")
+    (backups / "db" / "db-20261109-030000.dump").write_text("", encoding="utf-8")
+    done, calls, inst = _update_world(
+        tmp_path,
+        installed="v0.4.76",
+        bundle="v0.4.77",
+        pending=DROPPING,
+        extra_env={"BACKUP_HOST_DIR": str(backups)},
+    )
+    assert done.returncode != 0
+    assert "DB 마이그레이션 2개(지금 0098_datasource_run_error_kind 부터)" in done.stdout
+    assert "⚠ 칸 지우기 parts.note" in done.stdout
+    assert "데이터를 지우는 마이그레이션이 1개" in done.stderr
+    assert f"최근 백업: {backups}/db/db-20261109-030000.dump" in done.stderr
+    assert "갱신을 멈췄습니다 — 서비스는 그대로" in done.stderr
+    assert "CONFIRM_DROPS=1" in done.stderr
+    assert not any(one.startswith("systemctl") for one in calls)
+    assert not (inst / "app.sif.new").exists() and _version_of(inst / "app.sif") == "v0.4.76"
+    asked = "release_notes.py pending --from 0098_datasource_run_error_kind"
+    assert any(asked in one for one in calls), calls
+
+
+@_no_bash
+def test_CONFIRM_DROPS_면_묻지_않고_가고_지우는_것이_없으면_세기만_한다(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "confirm").mkdir()
+    done, _, inst = _update_world(
+        tmp_path / "confirm",
+        installed="v0.4.76",
+        bundle="v0.4.77",
+        pending=DROPPING,
+        extra_env={"CONFIRM_DROPS": "1"},
+    )
+    assert done.returncode == 0 and "PREFLIGHT_OK" in done.stdout, done.stderr
+    assert "최근 백업: 백업 폴더를 모릅니다" in done.stderr
+    assert "묻지 않고 갑니다" in done.stderr
+    assert (inst / "app.sif.new").exists()
+
+    (tmp_path / "adds").mkdir()
+    done, _, _ = _update_world(
+        tmp_path / "adds",
+        installed="v0.4.76",
+        bundle="v0.4.77",
+        pending="pending=1 drops=0\n  0099_add_rank — 순위 칸",
+    )
+    assert done.returncode == 0 and "PREFLIGHT_OK" in done.stdout, done.stderr
+    assert "DB 마이그레이션 1개" in done.stdout and "0099_add_rank — 순위 칸" in done.stdout
+    assert "데이터를 지우는" not in done.stderr
+
+    (tmp_path / "none").mkdir()
+    done, _, _ = _update_world(tmp_path / "none", installed="v0.4.76", bundle="v0.4.77")
+    assert done.returncode == 0 and "DB 마이그레이션: 없음" in done.stdout, done.stderr
+
+
+def test_릴리스_본문은_번들의_판_기록이고_게시된_마지막_릴리스부터_센다() -> None:
+    """판 기록(`CHANGES.md`)이 번들과 릴리스 본문에 같은 글로 간다. 출발점은 **게시된** 마지막
+    릴리스다 — CI 가 떨어져 게시하지 못한 태그(v0.4.75)를 앞 판으로 세면 그 판의 변경이 빠진다.
+    이력이 없으면(얕은 체크아웃) 「앞 릴리스를 몰라」 로 비므로 이력 전부를 받는다."""
+    release = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    jobs = re.split(r"\n  (?=[\w-]+:\s*\n)", release)
+    build = next(job for job in jobs if "./deploy/build_bundle.sh" in job)
+    assert "fetch-depth: 0" in build
+    assert "gh release list" in build and "select(.isDraft | not)" in build
+    assert "RELEASE_SINCE: ${{ steps.since.outputs.since }}" in build
+    assert 'cat "$changes"' in build and " CHANGES.md " in build
+    builder = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
+    assert 'release_notes.py notes --since "$since"' in builder
+    assert '"$STAGE/CHANGES.md"' in builder
 
 
 def test_update_는_내리기_전에_보고_내린_뒤에만_되돌리기를_건다() -> None:
