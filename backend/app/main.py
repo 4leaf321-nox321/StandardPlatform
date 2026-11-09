@@ -22,8 +22,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app import api_docs, version
 from app import extensions as ext_loader
-from app import version
 from app.config import Settings, get_settings
 from app.database import SessionLocal, engine, get_db
 from app.logging_setup import setup_logging
@@ -511,7 +511,10 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=f"{settings.app_name} API",
         version=version.current(),
-        docs_url=f"{API_PREFIX}/docs",
+        # 문서 화면은 기본값을 끄고 직접 붙인다(`api_docs`) — 기본값은 화면 파일을 CDN 에서
+        # 받아 폐쇄망에서 흰 화면이었고, ReDoc 은 `/api` 밖이라 nginx 뒤에서 닿지도 않았다.
+        docs_url=None,
+        redoc_url=None,
         openapi_url=f"{API_PREFIX}/openapi.json",
         # 앞의 nginx 가 `/<slug>` 를 떼고 넘기므로 문서 · 리다이렉트가 만드는 주소에 접두어를
         # 다시 붙여야 한다 — root_path 가 그 자리다.
@@ -541,8 +544,9 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     _register_extensions()
     app.include_router(_api_router(settings))
+    api_docs.mount(app, f"{API_PREFIX}/docs")
 
-    # SPA catch-all 은 반드시 API 라우터 뒤에 등록한다.
+    # SPA catch-all 은 반드시 API 라우터 · 문서 화면 뒤에 등록한다.
     _mount_spa(app, settings)
 
     # **DB 가 코드보다 뒤처져 있으면 여기서 말한다.** 안 그러면 사람은 화면의 500

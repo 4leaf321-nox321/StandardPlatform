@@ -10,6 +10,7 @@ Standard Platform 자체는 [LICENSE](LICENSE)(무단 사용 금지)를 따른�
 | 구성 요소 | 라이선스(대부분) | 전문 · 목록이 있는 자리 |
 | --- | --- | --- |
 | 화면 번들(React · Radix · TanStack · d3 · plotly.js · lucide · Geist 글꼴 …, 약 190개) | MIT · ISC · Apache-2.0 · BSD · 0BSD, 글꼴은 SIL OFL-1.1 | 빌드가 만드는 `frontend/dist/THIRD_PARTY_NOTICES.txt`(이미지 안 `/opt/app/frontend/dist/`) — 번들에 실제로 든 패키지마다 이름 · 판 · 전문 |
+| API 문서 화면(`/api/docs`)의 Swagger UI 5.33.3 — 폐쇄망에서도 뜨게 서버가 직접 준다 | Apache-2.0, 스크립트에 묶인 것은 MIT 등 | `backend/app/static/swagger-ui/` 의 `LICENSE` · `NOTICE` · `swagger-ui-bundle.js.LICENSE.txt`(이미지 안 `/opt/app/backend/app/static/swagger-ui/`) |
 | 백엔드 파이썬(FastAPI · SQLAlchemy · pydantic · numpy · scipy · rdflib · psycopg …, 약 46개) | MIT · BSD · Apache-2.0 · PSF, psycopg 는 LGPL-3.0, certifi 는 MPL-2.0 | 이미지 안 venv 의 `*.dist-info/licenses/` — 휠이 전문을 함께 싣는다 |
 | MCP 서버 · 정제 키트의 파이썬 휠(mcp · httpx · openpyxl …) | MIT · BSD · Apache-2.0 · PSF, certifi 는 MPL-2.0 | 각 휠의 `*.dist-info/licenses/` · 키트의 내장 CPython 은 PSF-2.0 |
 | 이미지(SIF)의 OS 패키지(Ubuntu 24.04 · python3.12 · libpq5 …) | GPL · LGPL · MIT 등 패키지마다 | 릴리스 번들의 `os-packages.txt`(패키지 · 판) — 각 패키지의 `/usr/share/doc/<패키지>/copyright` |
