@@ -47,7 +47,12 @@ from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import NORMALIZED_KEY_SQL, ObjectAlias, ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
-from app.modules.objects.services import bigram_plan, containing_ids, word_patterns
+from app.modules.objects.services import (
+    bigram_plan,
+    containing_ids,
+    relevance_order,
+    word_patterns,
+)
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import clean, compare_key
@@ -272,10 +277,17 @@ def by_name(
         escape="\\",
         bigrams=bigram_plan(db, text),
     )
+    # 후보는 통합 검색과 같은 차례다(`relevance_order`) — 그 말로 시작하는 것 · 짧은 이름이
+    # 앞에 서야 상한(20개) 안에 든다. 가나다 순이면 「볼트」 의 「볼트 M8」 이 「가공 볼트 …」
+    # 들에 밀려 빠질 수 있다. 기록 타입이면 이름 순 그대로 — 걸린 줄이 수백만일 수 있다.
+    if any(one.usage == "log" for one in scope.types):
+        order: list[Any] = [ObjectInstance.label]
+    else:
+        order = relevance_order(text)
     rows = list(
         db.scalars(
             base.where(ObjectInstance.id.in_(matched))
-            .order_by(ObjectInstance.label)
+            .order_by(*order)
             .limit(CANDIDATE_CAP * 10)
         )
     )

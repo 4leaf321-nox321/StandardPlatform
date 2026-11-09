@@ -30,6 +30,10 @@ class SearchHitOut(BaseModel):
     matched: str
     """label · key · alias — **왜 이게 나왔나.** 안 적으면 엉뚱해 보이는 줄이 오류로 읽힌다."""
     matched_text: str
+    exact: bool = False
+    """이름 · 식별자 · 별칭이 찾은 말과 **꼭 같다** — 이런 줄이 맨 위에 선다(꼭 맞음 → 그 말로
+    시작 → 이름에 듦 → 식별자 · 별칭에만 듦, 같은 자리에서는 짧은 이름부터). 기록 타입으로
+    좁힌 찾기는 이름 순이다."""
 
 
 class SearchPostOut(BaseModel):

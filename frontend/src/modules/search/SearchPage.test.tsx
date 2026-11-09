@@ -71,6 +71,17 @@ describe('검색', () => {
     expect(screen.queryByText('이름')).not.toBeInTheDocument()
   })
 
+  it('꼭 맞는 줄에만 「꼭 맞음」 을 적는다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      items: [{ ...RESULT.items[0], exact: true }, RESULT.items[1]],
+    })
+    await open('/search?q=ansys')
+    await waitFor(() => expect(screen.getByText('ANSYS Inc.')).toBeInTheDocument())
+    expect(screen.getAllByText('꼭 맞음')).toHaveLength(1)
+    expect(screen.getByRole('link', { name: /ANSYS Inc\./ })).toHaveTextContent('꼭 맞음')
+  })
+
   it('줄은 그 객체로 간다', async () => {
     searchApi.find.mockResolvedValue(RESULT)
     await open('/search?q=ansys')

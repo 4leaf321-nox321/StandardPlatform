@@ -57867,6 +57867,11 @@
           "matched_text": {
             "type": "string",
             "title": "Matched Text"
+          },
+          "exact": {
+            "type": "boolean",
+            "title": "Exact",
+            "default": false
           }
         },
         "type": "object",

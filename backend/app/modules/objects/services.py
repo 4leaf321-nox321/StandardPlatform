@@ -19,6 +19,8 @@ from sqlalchemy import (
     bindparam,
     case,
     cast,
+    exists,
+    false,
     func,
     literal,
     literal_column,
@@ -46,7 +48,7 @@ from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.modules.workspaces.models import Workspace
 from app.shared import audit, extensions
 from app.shared.errors import Conflict, code
-from app.shared.text import like_escape, search_words
+from app.shared.text import compare_key, like_escape, search_words
 
 if TYPE_CHECKING:  # 실행 때는 안 읽는다 — scope 가 이 모듈을 읽는다(방향은 한쪽).
     from app.modules.objects.scope import Scope
@@ -321,6 +323,65 @@ def _bigram(column: Any, pairs: list[str] | None) -> tuple[Any, ...]:
     if not pairs:
         return ()
     return (func.sp_bigrams(column).op("@>")(cast(array(pairs), ARRAY(Text))),)
+
+
+def relevance_order(term: str) -> list[Any]:
+    """찾은 줄의 차례 — **꼭 맞는 것이 맨 위**다.
+
+    가나다 순이면 「BT-2041」 을 찾은 사람의 그 줄이 「BT-20411」 · 「BT-20412」 … 사이에
+    묻히고, MCP 의 기본 20줄에서는 빠지기까지 한다 — 그러면 AI 는 「없다」 고 답한다. 그래서
+    네 자리로 세운다:
+
+        0  꼭 맞음 — 이름 · 식별자(대소문자 무시) · 별칭(비교키)이 그 말과 같다
+        1  이름 · 식별자가 그 말로 시작한다
+        2  이름에 낱말이 모두 들었다
+        3  나머지 — 식별자 · 별칭에만 들었다
+
+    같은 자리 안에서는 **짧은 이름부터**(「볼트」 를 찾으면 「볼트 M8」 이 「육각 볼트 M8
+    x 20」 보다 앞), 그다음 이름 · id 다(쪽을 넘겨도 차례가 같게).
+
+    **걸러진 줄에만 계산한다** — `containing_ids` 로 좁힌 뒤의 줄마다 식 몇 개다. 별칭은 그
+    객체의 것만 객체 id 색인(`ix_object_aliases_object`)으로 짚는다(별칭 표를 통째로 비교키로
+    훑지 않는다). 식별자는 비교키 식(`NORMALIZED_KEY_SQL` — NFKC · 공백 정리) 대신 대소문자만
+    무시한다 — 차례를 매기는 데는 그것으로 족하고, 비교키 식은 줄마다 비싸다(판매 모델
+    6,000건이 모두 걸리는 찾기에서 순위 식의 몫이 약 25ms → 약 7ms, 2,000만 건 실측 DB)."""
+    text = term.strip()
+    lowered = text.lower()
+    label = func.lower(ObjectInstance.label)
+    key = func.lower(ObjectInstance.key)
+    alias_exact = exists().where(
+        ObjectAlias.object_id == ObjectInstance.id, ObjectAlias.norm == compare_key(text)
+    )
+    patterns = word_patterns(text)
+    in_label = (
+        and_(*(ObjectInstance.label.ilike(one, escape="\\") for one in patterns))
+        if patterns
+        else false()
+    )
+    rank = case(
+        (or_(label == lowered, key == lowered, alias_exact), 0),
+        (
+            or_(
+                label.startswith(lowered, autoescape=True),
+                key.startswith(lowered, autoescape=True),
+            ),
+            1,
+        ),
+        (in_label, 2),
+        else_=3,
+    )
+    return [rank, func.length(ObjectInstance.label), ObjectInstance.label, ObjectInstance.id]
+
+
+def is_exact(term: str, label: str, key: str | None, alias_norms: list[str]) -> bool:
+    """`relevance_order` 의 「꼭 맞음」(0 자리)과 같은 판정 — 화면 · AI 가 그 줄을 「꼭 맞음」
+    으로 표시할 근거. 둘이 따로 정하면 맨 위의 줄에 표시가 없거나, 표시가 중간에 선다."""
+    lowered = term.strip().lower()
+    return (
+        label.lower() == lowered
+        or (key is not None and key.lower() == lowered)
+        or compare_key(term.strip()) in alias_norms
+    )
 
 
 def containing_ids(

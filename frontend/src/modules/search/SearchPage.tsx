@@ -238,6 +238,13 @@ export default function SearchPage() {
                     {one.key && <span className="ml-2 font-mono">{one.key}</span>}
                   </span>
                 </span>
+                {/* 꼭 맞는 줄은 맨 위에 선다 — 그 줄이 찾던 것임을 적는다(「BT-2041」 을 쳤는데
+                    맨 위가 「BT-2041」 이면 사람은 옆의 「BT-20411」 들을 볼 까닭이 없다). */}
+                {one.exact && (
+                  <span className="shrink-0 rounded border border-emerald-600/40 px-1 text-[10px] text-emerald-700 dark:text-emerald-400">
+                    꼭 맞음
+                  </span>
+                )}
                 {/* 이름에 없는 말로 걸린 줄은 **왜 걸렸는지**를 오른쪽에 적는다. */}
                 {one.matched !== 'label' && (
                   <span

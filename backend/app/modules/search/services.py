@@ -19,6 +19,15 @@
 오류로 읽는다. 별칭으로 걸렸다면 **그 별칭을 함께 보여 준다** — 그러면 같은 결과가
 답이 된다.
 
+## 꼭 맞는 것이 맨 위다
+
+가나다 순이면 「BT-2041」 을 친 사람의 그 줄이 「BT-20411」 · 「BT-20412」 … 사이에 묻히고,
+MCP 의 기본 20줄에서 빠지면 AI 는 「없다」 고 답한다. 꼭 맞는 것(이름 · 식별자 · 별칭) →
+그 말로 시작하는 것 → 이름에 든 것 → 식별자 · 별칭에만 든 것 차례로, 같은 자리 안에서는 짧은
+이름부터 세우고(`objects.services.relevance_order`), 꼭 맞는 줄은 `exact` 로 표시한다.
+**기록 타입으로 좁힌 찾기만은 이름 순 그대로다** — 걸린 줄이 수백만일 수 있어 줄마다 순위 식을
+계산하는 값을 재 보기 전에는 바꾸지 않는다.
+
 ## 타입마다 몇 건인지 먼저 센다
 
 한 줄로 늘어놓으면 상한에 걸린 순간 나머지가 어디 있는지 알 수 없다. 타입별 수를 함께
@@ -49,7 +58,13 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects import system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
-from app.modules.objects.services import bigram_plan, containing_ids, word_patterns
+from app.modules.objects.services import (
+    bigram_plan,
+    containing_ids,
+    is_exact,
+    relevance_order,
+    word_patterns,
+)
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType
 from app.shared import system_sources
@@ -77,6 +92,8 @@ class Hit:
     """label · key · alias. **왜 이게 나왔는지**를 화면이 말할 근거."""
     matched_text: str
     """식별자·별칭으로 걸렸으면 그 값. 이름으로 걸렸으면 빈 글자."""
+    exact: bool = False
+    """이름 · 식별자 · 별칭이 찾은 말과 **꼭 같다** — 맨 위에 선다(`relevance_order`)."""
 
 
 @dataclass
@@ -200,6 +217,7 @@ def _hit_of(object_type: ObjectType, ref: system_sources.SystemRef, q: str) -> H
         if all(one.lower() in ref.label.lower() for one in search_words(q))
         else "key",
         matched_text=ref.hint,
+        exact=is_exact(q, ref.label, ref.key, []),
     )
 
 
@@ -278,20 +296,23 @@ def search(
         logs = [one.id for one in types.values() if one.usage == "log"]
         if logs:
             where = (*where, ObjectInstance.type_id.not_in(logs))
+    narrowed = [target] if target is not None else [types[one] for one in among or ()]
+    if any(one.usage == "log" for one in narrowed):
+        # 기록으로 좁혔다 — 걸린 줄이 수백만일 수 있어 이름 순 그대로(모듈 설명).
+        order: list[Any] = [ObjectInstance.label, ObjectInstance.id]
+    else:
+        order = relevance_order(q)
     rows = list(
         db.scalars(
-            select(ObjectInstance)
-            .where(*where)
-            .order_by(ObjectInstance.label, ObjectInstance.id)
-            .limit(limit)
-            .offset(offset)
+            select(ObjectInstance).where(*where).order_by(*order).limit(limit).offset(offset)
         )
     )
     by_id = {row.id: row for row in types.values()}
     alias_rows = _aliases_of(db, [row.id for row in rows])
     for row in rows:
         object_type = by_id.get(row.type_id)
-        matched, text = _why(row, alias_rows.get(row.id, []), q)
+        aliases = alias_rows.get(row.id, [])
+        matched, text = _why(row, aliases, q)
         found.hits.append(
             Hit(
                 id=row.id,
@@ -302,6 +323,7 @@ def search(
                 key=row.key,
                 matched=matched,
                 matched_text=text,
+                exact=is_exact(q, row.label, row.key, [one.norm for one in aliases]),
             )
         )
     # 섞어 볼 때는 투영 타입의 것도 첫 쪽에 몇 개 얹는다(인터페이스로 좁혔으면 안 얹는다 —

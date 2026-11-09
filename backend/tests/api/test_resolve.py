@@ -76,6 +76,26 @@ def test_포함으로_하나만_걸려도_확정이_아니다(client: TestClient
     assert got["candidates"][0]["matched_by"] == "contains"
 
 
+def test_포함_후보도_그_말로_시작하는_것_짧은_이름이_앞이다(
+    client: TestClient, admin: Signed
+) -> None:
+    """후보는 상한(20개)까지라 차례가 곧 「보이느냐」 다 — 통합 검색과 같은 차례(가나다 순이면
+    「가공 …」 들이 앞을 차지한다)."""
+    tag = uuid.uuid4().hex[:6]
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_object(client, admin, part, label=f"가공 볼트{tag} 세트")
+    _make_object(client, admin, part, label=f"볼트{tag} M8 x 20 육각")
+    _make_object(client, admin, part, label=f"볼트{tag} M8")
+
+    got = _resolve(client, admin, part, f"볼트{tag}")
+    assert got["match"] == "candidates"
+    assert [one["label"] for one in got["candidates"]] == [
+        f"볼트{tag} M8",
+        f"볼트{tag} M8 x 20 육각",
+        f"가공 볼트{tag} 세트",
+    ]
+
+
 def test_포함은_낱말로_나눠_보고_와일드카드를_글자로_본다(
     client: TestClient, admin: Signed
 ) -> None:

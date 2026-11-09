@@ -102,6 +102,7 @@ def search(
                 key=one.key,
                 matched=one.matched,
                 matched_text=one.matched_text,
+                exact=one.exact,
             )
             for one in found.hits
         ],

@@ -54,6 +54,59 @@ def test_이름_식별자_별칭으로_찾고_왜_걸렸는지_말한다(
     assert by_alias["items"][0]["label"] == f"볼트{tag}"
 
 
+def test_꼭_맞는_것이_맨_위이고_그_말로_시작_이름에_듦_식별자에만_듦_차례다(
+    client: TestClient, admin: Signed
+) -> None:
+    """가나다 순이면 「BT-2041」 을 친 사람의 그 줄이 「BT-20411」 … 사이에 묻히고, MCP 의 기본
+    20줄에서 빠지면 AI 는 「없다」 고 답한다. 같은 자리 안에서는 짧은 이름부터다.
+
+    (순위 · 길이가 모두 같은 줄은 만들지 않는다 — 그때는 이름 차례가 DB 의 정렬 규칙을 따라
+    CI(en_US)와 개발 DB(C.UTF-8)가 다르다.)"""
+    tag = uuid.uuid4().hex[:6]
+    q = f"BT{tag}"
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_object(client, admin, part, label=f"보조 {q} 브래킷")  # 이름에 듦
+    _make_object(client, admin, part, label=f"{q}1 셀 모듈")  # 그 말로 시작(긺)
+    _make_object(client, admin, part, label=f"{q}2 셀")  # 그 말로 시작(짧음)
+    _make_object(client, admin, part, label=f"옛 품번 {tag}", key=f"OLD-{q}")  # 식별자에만 듦
+    _make_object(client, admin, part, label=f"배터리 팩 {tag}", key=q)  # 식별자가 꼭 같음
+    alias_only = _make_object(client, admin, part, label=f"별칭 {tag}")
+    client.put(  # 별칭이 꼭 같음(대소문자는 안 가린다)
+        f"/api/objects/{part}/{alias_only['id']}/aliases",
+        json={"aliases": [q.lower()]},
+        headers=admin.headers,
+    )
+
+    found = _find(client, admin, q)
+    order = [
+        f"별칭 {tag}",
+        f"배터리 팩 {tag}",
+        f"{q}2 셀",
+        f"{q}1 셀 모듈",
+        f"보조 {q} 브래킷",
+        f"옛 품번 {tag}",
+    ]
+    assert [one["label"] for one in found["items"]] == order
+    assert [one["exact"] for one in found["items"]] == [True, True, False, False, False, False]
+    # 쪽을 넘겨도 같은 차례다 — 겹치거나 빠지는 줄이 없다.
+    pages = [_find(client, admin, q, limit=2, offset=start)["items"] for start in (0, 2, 4)]
+    assert [one["label"] for page in pages for one in page] == order
+
+
+def test_기록_타입으로_좁힌_찾기는_이름_순_그대로다(client: TestClient, admin: Signed) -> None:
+    """걸린 줄이 수백만일 수 있어 줄마다 순위 식을 계산하지 않는다 — 꼭 맞는 것도 이름 자리에
+    선다(표시는 한다)."""
+    tag = uuid.uuid4().hex[:6]
+    q = f"BT{tag}"
+    log = _make_type(client, admin, label="기록", usage="log", key_policy="optional")
+    _make_object(client, admin, log, label=f"A {q} log")
+    _make_object(client, admin, log, label=f"B log {tag}", key=q)
+
+    narrowed = _find(client, admin, q, type=log)
+    assert [one["label"] for one in narrowed["items"]] == [f"A {q} log", f"B log {tag}"]
+    assert [one["exact"] for one in narrowed["items"]] == [False, True]
+
+
 def test_타입마다_몇_건인지_세고_좁힐_수_있다(client: TestClient, admin: Signed) -> None:
     tag = uuid.uuid4().hex[:6]
     part = _make_type(client, admin, label="부품")

@@ -21,6 +21,8 @@ export interface SearchHit {
   /** label · key · alias — **왜 이게 나왔나.** */
   matched: string
   matched_text: string
+  /** 이름 · 식별자 · 별칭이 찾은 말과 **꼭 같다** — 이런 줄이 맨 위에 선다. */
+  exact?: boolean
 }
 
 /** 뜻이 가까운 것 하나(ADR 0052) — 글자는 안 겹쳐도 뜻이 가까워 걸린 객체. */
