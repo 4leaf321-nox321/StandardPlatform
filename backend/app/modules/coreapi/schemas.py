@@ -112,7 +112,7 @@ class CoreCatalogOut(BaseModel):
     types: list[CoreTypeOut]
     shapes: list[str] = Field(default_factory=lambda: ["core", "sp"])
     """이 창구가 주는 모양 — `core`(기본, 바깥 시스템) · `sp`(형제 SP 가 기준정보를 온전히 받는
-    모양, ADR 0055). 0.4.74 까지의 설치는 이 칸이 없다 — `sp` 를 청해도 기본 모양이 온다."""
+    모양, ADR 0055). 0.4.77 까지의 설치는 이 칸이 없다 — `sp` 를 청해도 기본 모양이 온다."""
 
 
 class CoreConsumerOut(BaseModel):

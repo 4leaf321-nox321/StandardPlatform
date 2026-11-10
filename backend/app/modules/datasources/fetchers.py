@@ -251,7 +251,7 @@ def fetch_sp_core(
     shape: str = "core",
 ) -> Fetched:
     """형제 설치의 코어 창구에서 **지난번 이후**를 받는다. `shape="sp"` 면 행마다 `extra` 가
-    온다(ADR 0055) — 0.4.74 까지의 상대는 그 칸 없이 준다(`services` 가 알아챈다)."""
+    온다(ADR 0055) — 0.4.77 까지의 상대는 그 칸 없이 준다(`services` 가 알아챈다)."""
     if not type_slug.strip():
         raise AppError(
             code("DATASOURCES", 36),
@@ -331,7 +331,7 @@ def core_edge(item: dict[str, Any]) -> dict[str, Any]:
 
 def core_edge_set(item: dict[str, Any]) -> dict[str, Any]:
     """`shape=sp` 의 선 한 쌍 — 봉투(`src` · `relation` · `dst` · `dst_type` · `deleted`)와 그
-    쌍의 기간 전부(`CORE_PERIODS`). 상대가 `periods` 를 안 주면(0.4.74 까지) 그 키가 없다."""
+    쌍의 기간 전부(`CORE_PERIODS`). 상대가 `periods` 를 안 주면(0.4.77 까지) 그 키가 없다."""
     out: dict[str, Any] = {
         name: item[name]
         for name in ("src", "relation", "dst", "dst_type", "deleted")

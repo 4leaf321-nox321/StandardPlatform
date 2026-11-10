@@ -196,7 +196,7 @@ class Forward:
         self.admin = admin
         self.tag = tag
         self.old_hub = False
-        """참이면 0.4.74 처럼 카탈로그에 `shapes` 가 없다."""
+        """참이면 0.4.77 까지처럼 카탈로그에 `shapes` 가 없다."""
         self.seen: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -418,7 +418,7 @@ def test_기본_모양은_그대로_오늘의_선이고_SP_모양을_모르는_�
     client: TestClient, admin: Signed, world: tuple[dict[str, str], Forward]
 ) -> None:
     """바깥 시스템(RA · 연동 키트)의 봉투는 안 바뀐다 — `extra` · `periods` 는 비어 있다.
-    0.4.74 까지의 허브(카탈로그에 `shapes` 가 없다)를 구독하면 기간이 다른 선이 빠지므로
+    0.4.77 까지의 허브(카탈로그에 `shapes` 가 없다)를 구독하면 기간이 다른 선이 빠지므로
     거절한다."""
     twin, forward = world
     hub = _names(twin["group"][len("gtwin") :], "hub")

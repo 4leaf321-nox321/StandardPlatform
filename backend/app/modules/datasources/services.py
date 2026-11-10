@@ -2242,7 +2242,7 @@ def _sync_relations(
         # **쌍마다 기간 전부**(ADR 0055) — 줄로 펴서 넣고, 목록에 없는 이쪽 기간은 끊는다.
         if any(fetchers.CORE_PERIODS not in one for one in got.rows):
             errors.append(
-                "상대가 기간 전부(shape=sp)를 주지 않습니다 — 상대를 0.4.75 이상으로 올리거나 "
+                "상대가 기간 전부(shape=sp)를 주지 않습니다 — 상대를 0.4.78 이상으로 올리거나 "
                 "소스의 「모양」 을 core 로 두세요."
             )
             return {}, errors, False
@@ -2947,7 +2947,7 @@ def subscribe(
     if "sp" not in (body.get("shapes") or []):
         raise AppError(
             code("DATASOURCES", 60),
-            "상대 설치가 기준정보를 온전히 주는 모양(shape=sp)을 모릅니다 — 상대를 0.4.75 "
+            "상대 설치가 기준정보를 온전히 주는 모양(shape=sp)을 모릅니다 — 상대를 0.4.78 "
             "이상으로 올린 뒤 구독하세요. 그 전에는 기간이 다른 선 · 계보 고정이 빠집니다.",
             status=422,
         )
