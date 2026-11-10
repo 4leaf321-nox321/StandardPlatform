@@ -222,6 +222,40 @@ def test_옵션_B_에서만_들어가는_부품(
     assert _names(client, admin, part, only_b) == ["Z"]
 
 
+def test_다름은_자리마다_뜻이_다르다(
+    client: TestClient, admin: Signed, world: dict[str, Any]
+) -> None:
+    """MCP 가이드(`find` — 「`ne` 는 자리마다 뜻이 다르다」)가 적은 그대로 — 바뀌면 가이드도.
+
+    관계 자체의 `ne X` 는 「X 가 하나도 없다」(`eq X` 의 반대, 이어진 것이 없는 P5 도 든다),
+    너머의 칸 · 같은 관계 묶음 안의 `ne X` 는 「그중 하나라도 X 가 아니다」. 견주기(2026-11-11)
+    에서 AI 가 「단독 공급」 을 `eq S` + `ne S` 로 물어 0건 — 그 차를 빼고 틀린 답을 냈다."""
+    product, kind, parts = world["product"], world["kind"], world["parts"]
+    x, y = parts["X"], parts["Y"]
+    rel = f"out.{kind}"
+    assert _names(client, admin, product, {f"f.{rel}.ne": x}) == ["P3", "P5"]
+    assert _names(client, admin, product, {f"f.{rel}.eq": x, f"f.{rel}.ne": x}) == []
+    # 「X 만 든 제품」 — X 가 있고, X 가 아닌 선이 하나라도 있는 것은 뺀다.
+    only_x = {f"f.{rel}.eq": x, f"nf1.fe1.{rel}.ne": x}
+    assert _names(client, admin, product, only_x) == ["P4"]
+    # 너머의 칸 — X 가 아닌 부품이 하나라도(X 뿐인 P4 · 없는 P5 는 안 걸린다).
+    assert _names(client, admin, product, {f"f.{rel}.label.ne": "X"}) == ["P1", "P2", "P3"]
+    # 같은 칸에 둘을 걸어도 AND — 「X 와 Y 가 함께 든 제품」. 「또는」 은 `in`.
+    both = client.get(
+        f"/api/objects/{product}",
+        params=[(f"f.{rel}.eq", x), (f"f.{rel}.eq", y)],
+        headers=admin.headers,
+    )
+    assert both.status_code == 200, both.text
+    assert [one["label"] for one in both.json()["items"]] == ["P1"]
+    assert _names(client, admin, product, {f"f.{rel}.in": f"{x}|{y}"}) == [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+    ]
+
+
 def test_제외_묶음_안의_같은_관계_묶음은_한_조건이다(
     client: TestClient, admin: Signed, world: dict[str, Any]
 ) -> None:

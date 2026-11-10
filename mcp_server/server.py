@@ -1400,8 +1400,9 @@ async def objects_list(
 
     - `q`: 이름·식별자·검색 속성.
     - `properties`: `{"grade": "A"}` 처럼 속성 키로 「같음」 거르기(짧은 꼴).
-    - `conditions`: `[{"field": "power", "op": "gte", "value": "10"}, ...]` — 칸끼리 AND,
-      같은 칸에 여럿이면 그 안은 OR. 연산은 칸의 종류가 정한다:
+    - `conditions`: `[{"field": "power", "op": "gte", "value": "10"}, ...]` — 조건끼리는
+      모두 AND(같은 칸에 둘을 걸어도 AND — `gte` + `lte` 가 범위). 한 칸의 「A 또는 B」 는
+      `in` 의 `"A|B"`. 연산은 칸의 종류가 정한다:
       숫자·날짜 `eq ne gt gte lt lte in` · 글자 `eq ne contains starts in` ·
       선택·참조 `eq ne in` · 참/거짓 `eq` · 모두 `empty notempty`. 참조 칸 · 자신(`id`)에는
       `under`(하위 전체 — 그 객체이거나 트리로 그 아래 전부, 트리가 있는 타입만).
@@ -1905,10 +1906,14 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
     뜻: 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 없는
     객체는 그 너머의 칸 조건에 안 걸린다(`ne` 도) — 그것은 참조 칸이나 관계의
-    `empty` 로 묻는다. 조건이 **같은 선 하나**(선의 칸 · 상대 · 상대의 칸)에서 함께 맞아야
-    하면 같은 `"edge": <번호>` 로 묶는다(`objects_list` 의 `conditions`). 같은 주소는
-    `objects_list(columns=[...])` 의 이어진 칸으로도 싣는다. 인터페이스 slug 도 받는다 — 공통
-    속성에서 나가는 걸음이다."""
+    `empty` 로 묻는다. **`ne` 는 자리마다 다르다**: 참조 칸 · 관계 자체(`out.<관계>` ·
+    `in.<관계>` · `in.<타입>:<칸>`)의 `ne X` 는 「X 를 하나도 안 담음」(`eq X` 의 반대, 빈 것도
+    든다 — `eq X` 와 함께면 늘 0건), 너머의 칸 · 선의 칸 · 같은 관계 묶음 안의 `ne X` 는 「그중
+    하나라도 X 가 아님」. 「S 만 대는 부품」 은 `eq S` + `{"op": "ne", "value": S, "edge": 1,
+    "exclude": 1}`(가이드 `find`). 조건이 **같은 선 하나**(선의 칸 · 상대 · 상대의 칸)에서
+    함께 맞아야 하면 같은 `"edge": <번호>` 로 묶는다(`objects_list` 의 `conditions`). 같은
+    주소는 `objects_list(columns=[...])` 의 이어진 칸으로도 싣는다. 인터페이스 slug 도 받는다 —
+    공통 속성에서 나가는 걸음이다."""
     return await _get(ctx, f"/api/objects/{type_slug}/fields")
 
 
