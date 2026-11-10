@@ -27,6 +27,8 @@ from app.modules.datasources.schemas import (
     RaReportTypeIn,
     RaReportTypeOut,
     RunOut,
+    SubscribeOut,
+    SubscribeRequest,
 )
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
@@ -241,6 +243,23 @@ def create_source(
     db.commit()
     db.refresh(row)
     return _out(db, row)
+
+
+@router.post("/subscriptions", response_model=SubscribeOut)
+def subscribe(
+    payload: SubscribeRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> SubscribeOut:
+    """**묶음 구독**(ADR 0055) — 형제 SP 의 코어에서 사이드바 묶음의 타입들을 받는 소스를 한
+    번에 만든다(`apply=false` 면 무엇을 만들지만 보인다).
+
+    기준정보가 커서 묶음 한 봉투로 못 받을 때의 길이다. 정의는 「정의만」 묶음으로 먼저 받고,
+    행은 이 소스들이 바뀐 것만 쪽씩 받는다 — 기간이 다른 선 · 계보 고정 · 별칭의 출처까지
+    (`shape=sp`). 처음 받기는 5만 줄씩 끊어 끝까지 잇는다."""
+    return services.subscribe(
+        db, user, payload, base_url=_require_url(payload.base_url, kind="sp_core")
+    )
 
 
 @router.get("/{slug}", response_model=DataSourceOut)

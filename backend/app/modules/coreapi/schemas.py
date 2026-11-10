@@ -110,6 +110,9 @@ class CoreCatalogOut(BaseModel):
     코드로 알아챌 수 있다."""
     as_of: str
     types: list[CoreTypeOut]
+    shapes: list[str] = Field(default_factory=lambda: ["core", "sp"])
+    """이 창구가 주는 모양 — `core`(기본, 바깥 시스템) · `sp`(형제 SP 가 기준정보를 온전히 받는
+    모양, ADR 0055). 0.4.74 까지의 설치는 이 칸이 없다 — `sp` 를 청해도 기본 모양이 온다."""
 
 
 class CoreConsumerOut(BaseModel):
@@ -136,8 +139,31 @@ class CoreConsumerOut(BaseModel):
     created_at: datetime
 
 
+class CoreAliasOut(BaseModel):
+    """사람이 붙인 별칭 하나 — 어디서 왔나 · 사람이 봤나까지(`shape=sp`)."""
+
+    value: str
+    source: str = ""
+    note: str = ""
+    verified: bool = False
+    """참이면 사람이 확인한 별칭이다 — 빠지면 허브에서 확인한 것이 쌍둥이에는 영영 검수 대기로
+    남는다(묶음에서 겪었다)."""
+
+
+class CoreRowExtraOut(BaseModel):
+    """**형제 SP 가 기준정보를 온전히 받는 칸**(`shape=sp`, ADR 0055) — 묶음의 행과 같은 것.
+
+    기본 모양에 안 싣는 이유: 바깥 시스템에는 쓸모가 적고, 그쪽 코드에 박힌 봉투를 늘리지
+    않는다. 빈 값도 싣는다(`None`) — 받는 쪽은 거울이라 비운 것을 비운다."""
+
+    description: str | None = None
+    valid_from_year: int | None = None
+    valid_to_year: int | None = None
+    aliases: list[CoreAliasOut] = Field(default_factory=list)
+
+
 class CoreRowOut(BaseModel):
-    """행 하나 — **봉투는 고정.**"""
+    """행 하나 — **봉투는 고정.** `extra` 는 `shape=sp` 일 때만 찬다."""
 
     key: str
     """이 시스템에서 이 객체를 가리키는 값. **받는 쪽은 이것을 저장해 둔다** — 그래야 다음
@@ -163,6 +189,8 @@ class CoreRowOut(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
     """타입이 정한 칸. 참조는 상대의 `key`, 여러 값은 배열, 날짜는 `YYYY-MM-DD`,
     일시는 `...Z`. **빈 값은 키를 뺀다.**"""
+    extra: CoreRowExtraOut | None = None
+    """`shape=sp` 일 때만 — 설명 · 유효 연도 · 별칭의 출처와 확인 표시. 사라진 행에는 없다."""
 
 
 class CorePageOut(BaseModel):
@@ -180,6 +208,21 @@ class CorePageOut(BaseModel):
     next: str | None = None
     """다음 쪽의 커서 — **그대로 돌려준다**(모양은 약속이 아니다). 없으면 끝이다."""
     items: list[CoreRowOut]
+
+
+class CorePeriodOut(BaseModel):
+    """같은 두 객체 사이 선의 **기간 하나**(`shape=sp`) — 지난 · 앞으로의 선까지."""
+
+    valid_from: str | None = None
+    valid_to: str | None = None
+    evidence_note: str = ""
+    properties: dict[str, Any] = Field(default_factory=dict)
+    """그 선에 붙은 값 — 참조 칸은 상대의 `key`."""
+    pinned_revision: str | None = None
+    """계보 선의 고정(ADR 0041) — 받는 쪽은 새로 박지 않고 이 기준을 쓴다."""
+    pinned_at: str | None = None
+    pinned_stale: bool = False
+    """바뀐 때로 판정하는 고정은 시각이 이 설치의 시계라, 판정을 함께 싣는다."""
 
 
 class CoreRelationOut(BaseModel):
@@ -207,6 +250,10 @@ class CoreRelationOut(BaseModel):
     deleted: bool = False
     """참이면 **끊긴 선**이다 — 받는 쪽은 자기 쪽에서도 끊는다. 유효 기간이 끝나 오늘 유효하지
     않게 된 선도 이것으로 온다."""
+    periods: list[CorePeriodOut] | None = None
+    """`shape=sp` 일 때만 — **이 `(src, relation, dst, dst_type)` 쌍의 기간 전부.** 받는 쪽은
+    그 쌍을 이 목록대로 맞춘다(없는 기간은 끊고, 있는 것은 넣거나 고친다). 비었으면 그 쌍의
+    선이 다 끊겼다(`deleted` 도 참). 그때 위의 `valid_from` · `valid_to` 는 비운다."""
 
 
 class CoreRelationPageOut(BaseModel):

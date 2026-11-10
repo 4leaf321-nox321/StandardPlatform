@@ -207,7 +207,42 @@ export interface Preview {
   mapping_error: string | null
 }
 
+/** 묶음 구독(ADR 0055) — 형제 SP 의 코어에서 사이드바 묶음의 타입마다 소스 하나. */
+export interface SubscribeRequest {
+  base_url: string
+  auth_kind: AuthKind
+  auth_user?: string
+  auth_secret: string
+  groups: string[]
+  interval_minutes: number
+  /** 거짓이면 무엇을 만들지만 본다. */
+  apply: boolean
+}
+
+export interface SubscribeItem {
+  type_slug: string
+  type_label: string
+  /** 만든다(만들었다) · 이미 있다 · 못 만든다(`reason`). */
+  action: 'create' | 'exists' | 'skip'
+  reason: string
+  source_slug: string
+  relations: boolean
+  source_name: string
+  count: number
+  notes: string[]
+}
+
+export interface SubscribeResult {
+  system: string
+  applied: boolean
+  items: SubscribeItem[]
+  created: number
+}
+
 export const datasourceApi = {
+  /** 묶음 구독 — `apply` 가 거짓이면 상대의 카탈로그만 읽고 무엇을 만들지 보인다. */
+  subscribe: (body: SubscribeRequest) =>
+    api.post<SubscribeResult>('/datasources/subscriptions', body),
   list: () => api.get<DataSource[]>('/datasources'),
   create: (body: DataSourceWrite) => api.post<DataSource>('/datasources', body),
   update: (slug: string, body: Partial<DataSourceWrite>) =>

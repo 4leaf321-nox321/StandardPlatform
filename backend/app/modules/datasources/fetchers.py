@@ -72,6 +72,7 @@ def fetch(
             page_size=page_size or source.page_size,
             max_rows=max_rows,
             transport=transport,
+            shape=core_shape(source),
         )
     if source.kind == "file":
         return fetch_file(
@@ -100,7 +101,31 @@ def fetch(
 # 안 받는다 — 상대도 그래서 `next` 가 있으면 `as_of` 를 안 준다.
 
 #: 봉투의 자리. 펼친 행에서 **이 이름이 이긴다** — 같은 이름의 속성이 있으면 봉투가 남는다.
-CORE_ENVELOPE = ("key", "label", "status", "updated_at", "deleted", "merged_into")
+CORE_ENVELOPE = (
+    "key",
+    "label",
+    "status",
+    "updated_at",
+    "deleted",
+    "merged_into",
+    # 식별자가 바뀐 행 — 받는 쪽은 옛 식별자로 제 것을 찾아 옮긴다(`bulk.renamed_history`).
+    # 예전에는 안 실어, 허브에서 품번을 바꾸면 쌍둥이에 같은 것이 새로 하나 더 생겼다.
+    "renamed_from",
+    "previous_keys",
+)
+#: `shape=sp` 의 행 칸(`extra` — 설명 · 유효 연도 · 별칭의 출처)을 담아 두는 자리. 대응을 타지
+#: 않고 `services` 가 행에 바로 얹는다(`_`로 시작해 속성 키와 안 겹친다).
+CORE_EXTRA = "_extra"
+#: `shape=sp` 의 선 한 쌍의 기간 전부 — `services._sync_relations` 가 줄로 편다.
+CORE_PERIODS = "_periods"
+SHAPES = ("core", "sp")
+
+
+def core_shape(source: DataSource) -> str:
+    """이 형제 코어 소스가 청하는 모양 — 묶음 구독이 만든 소스는 `sp`(ADR 0055)."""
+    shape = str((source.options or {}).get("shape") or "core")
+    return shape if shape in SHAPES else "core"
+
 
 #: 무덤 표시 — `services.py` 가 이 열을 보고 「사라진 것」 으로 다룬다.
 CORE_DELETED = "deleted"
@@ -113,6 +138,8 @@ def core_row(item: dict[str, Any]) -> dict[str, Any]:
     for name in CORE_ENVELOPE:
         if name in item:
             out[name] = item[name]
+    if isinstance(item.get("extra"), dict):
+        out[CORE_EXTRA] = item["extra"]
     return out
 
 
@@ -154,6 +181,7 @@ def _core_pages(
     max_rows: int,
     transport: httpx.BaseTransport | None,
     shape: Any,
+    extra_params: dict[str, str] | None = None,
 ) -> Fetched:
     """코어 창구의 쪽을 따라간다 — 객체와 선이 **같은 규칙**(`since` · `next` · `as_of`)이다.
 
@@ -169,7 +197,7 @@ def _core_pages(
     try:
         with _core_client(auth, transport) as client:
             while out.pages < MAX_PAGES:
-                params = {"limit": str(page_size)}
+                params = {"limit": str(page_size), **(extra_params or {})}
                 if since:
                     params["since"] = since
                 if current:
@@ -220,8 +248,10 @@ def fetch_sp_core(
     max_rows: int,
     transport: httpx.BaseTransport | None,
     cursor: str = "",
+    shape: str = "core",
 ) -> Fetched:
-    """형제 설치의 코어 창구에서 **지난번 이후**를 받는다."""
+    """형제 설치의 코어 창구에서 **지난번 이후**를 받는다. `shape="sp"` 면 행마다 `extra` 가
+    온다(ADR 0055) — 0.4.74 까지의 상대는 그 칸 없이 준다(`services` 가 알아챈다)."""
     if not type_slug.strip():
         raise AppError(
             code("DATASOURCES", 36),
@@ -238,6 +268,7 @@ def fetch_sp_core(
         max_rows=max_rows,
         transport=transport,
         shape=core_row,
+        extra_params={"shape": shape} if shape != "core" else None,
     )
 
 
@@ -298,6 +329,19 @@ def core_edge(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def core_edge_set(item: dict[str, Any]) -> dict[str, Any]:
+    """`shape=sp` 의 선 한 쌍 — 봉투(`src` · `relation` · `dst` · `dst_type` · `deleted`)와 그
+    쌍의 기간 전부(`CORE_PERIODS`). 상대가 `periods` 를 안 주면(0.4.74 까지) 그 키가 없다."""
+    out: dict[str, Any] = {
+        name: item[name]
+        for name in ("src", "relation", "dst", "dst_type", "deleted")
+        if name in item
+    }
+    if isinstance(item.get("periods"), list):
+        out[CORE_PERIODS] = [one for one in item["periods"] if isinstance(one, dict)]
+    return out
+
+
 def fetch_sp_core_relations(
     *,
     base_url: str,
@@ -308,6 +352,7 @@ def fetch_sp_core_relations(
     max_rows: int,
     transport: httpx.BaseTransport | None,
     cursor: str = "",
+    shape: str = "core",
 ) -> Fetched:
     """형제 설치의 **선**을 받는다 — `/api/core/<타입>/relations`.
 
@@ -325,7 +370,8 @@ def fetch_sp_core_relations(
         page_size=page_size,
         max_rows=max_rows,
         transport=transport,
-        shape=core_edge,
+        shape=core_edge_set if shape == "sp" else core_edge,
+        extra_params={"shape": shape} if shape != "core" else None,
     )
 
 

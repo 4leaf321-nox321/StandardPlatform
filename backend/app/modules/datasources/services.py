@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from typing import Any
 
 import httpx
-from sqlalchemy import event, func, select, update
+from sqlalchemy import event, func, select, tuple_, update
 from sqlalchemy.orm import Session, aliased, load_only
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -41,6 +41,9 @@ from app.modules.datasources.schemas import (
     CoreSuggestOut,
     CoreSuggestProperty,
     RunOut,
+    SubscribeItemOut,
+    SubscribeOut,
+    SubscribeRequest,
     SyncOut,
 )
 from app.modules.jobs import services as job_services
@@ -55,6 +58,7 @@ from app.modules.ontology import managed
 from app.modules.ontology.interfaces import load_ends
 from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.shared import audit, extensions, singleton
+from app.shared.batches import any_of
 from app.shared.batches import chunks as id_batches
 from app.shared.errors import AppError, Conflict, code
 from app.shared.permissions import require_owner_edit
@@ -418,6 +422,42 @@ def map_row(
     elif mirror and alias_mapped:
         out["aliases"] = bulk.NULL_MARK
     return Mapped(external_id=external, row=out)
+
+
+def _carry_core(mapped: list[Mapped], raws: list[dict[str, Any]]) -> None:
+    """형제 코어의 봉투에서 **대응을 안 타는 것**을 행에 얹는다 — 옛 식별자, 그리고 `shape=sp`
+    의 칸(설명 · 유효 연도 · 별칭의 출처와 확인 표시, ADR 0055).
+
+    - 옛 식별자(`renamed_from` · `previous_keys`): 일괄 입력이 그것으로 제 행을 찾아 식별자를
+      옮긴다. 예전에는 안 실어, 허브에서 품번을 바꾸면 쌍둥이에 같은 것이 하나 더 생겼다.
+    - `extra` 는 거울이다 — 빈 것도 「비움」 으로 싣는다(허브에서 지운 설명이 남지 않게).
+      별칭은 목록으로(`{value, source, note, verified}`) — 이름만 이으면 확인 표시가 사라진다.
+    """
+    for one, raw in zip(mapped, raws, strict=True):
+        if one.error:
+            continue
+        if raw.get("renamed_from"):
+            one.row["renamed_from"] = str(raw["renamed_from"])
+        previous = raw.get("previous_keys")
+        if isinstance(previous, list) and previous:
+            one.row["previous_keys"] = [str(x) for x in previous]
+        extra = raw.get(fetchers.CORE_EXTRA)
+        if not isinstance(extra, dict):
+            continue
+        one.row["description"] = str(extra.get("description") or "") or bulk.NULL_MARK
+        for name in ("valid_from_year", "valid_to_year"):
+            value = extra.get(name)
+            one.row[name] = value if value is not None else bulk.NULL_MARK
+        one.row["aliases"] = [
+            {
+                "value": str(alias.get("value") or ""),
+                "source": str(alias.get("source") or ""),
+                "note": str(alias.get("note") or ""),
+                "verified": bool(alias.get("verified")),
+            }
+            for alias in extra.get("aliases") or []
+            if isinstance(alias, dict) and alias.get("value")
+        ]
 
 
 def _clears(target: str, name: str, keep: frozenset[str]) -> bool:
@@ -789,6 +829,10 @@ def sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> 
         return _sync_announced(db, user, source, apply=True)
 
 
+#: 끊긴 형제 코어를 한 작업 안에서 잇는 상한 — 한 차례 5만 줄씩 400번이면 2,000만 줄이다.
+CATCH_UP_ROUNDS = 400
+
+
 def resumable(source: DataSource) -> bool:
     """형제 코어가 **끊은 자리를 들고 있나**(객체 · 선 어느 쪽이든) — 다음 차례가 잇는다."""
     options = source.options or {}
@@ -796,6 +840,48 @@ def resumable(source: DataSource) -> bool:
         isinstance(options.get(key), dict) and bool(options[key].get("next"))
         for key in (RESUME, RESUME_EDGES)
     )
+
+
+def sync_through(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    *,
+    apply: bool,
+    between: Callable[[int], None] | None = None,
+) -> tuple[SyncResult, int]:
+    """동기화하고, 적용에 성공했는데 **끊은 자리가 남았으면 바로 잇는다** — `(마지막 결과,
+    차례 수)`.
+
+    형제 코어는 한 차례에 5만 줄까지 받는다(`odata.MAX_ROWS` — 메모리를 묶어 두는 상한).
+    예전에는 그 다음 차례가 **동기화 간격만큼** 기다렸다 — 부품 80만 · BOM 120만 줄의 처음
+    받기가 40차례, 간격 1시간이면 이틀 가까이 걸렸다(ADR 0055). 이제는 같은 작업이 이어서
+    돌고, 차례마다 커밋하므로 도중에 멈춰도(취소 · 워커 재시작) 받은 만큼은 남고 다음 작업이
+    끊은 자리에서 잇는다.
+
+    **끝점을 기다리는 선이 줄어드는 동안에도 잇는다.** 같은 타입 안의 선(BOM 의 부품 →
+    부품)은 끝 객체가 뒤 차례에 오면 기다리고(`relations_waiting`), 끊은 자리가 다 없어진 뒤에
+    남은 것은 다음 간격까지 기다렸다. 한 차례에 기다리던 것이 하나도 안 줄면 멈춘다 — 끝내
+    안 올 끝점이면 같은 일을 되풀이할 뿐이다.
+
+    `between(차례)` 는 차례 사이에 부른다 — 작업의 진행률 · 취소 확인 자리. 실패한 차례에서는
+    멈춘다(같은 자리를 되풀이해 부르지 않게 — 다음 간격이 다시 해 본다).
+    """
+    waiting = len(source.relations_waiting or [])
+    result = sync(db, user, source, apply=apply)
+    rounds = 1
+    while (
+        apply and result.run.applied and result.run.status == "ok" and rounds < CATCH_UP_ROUNDS
+    ):
+        now = len(source.relations_waiting or [])
+        if not (resumable(source) or 0 < now < waiting):
+            break
+        waiting = now
+        if between is not None:
+            between(rounds)
+        result = sync(db, user, source, apply=True)
+        rounds += 1
+    return result, rounds
 
 
 def _sync_announced(
@@ -1073,6 +1159,8 @@ def _sync_body(
     mirror = mirrors(source)
     keep = frozenset(one.key for one in defs if one.required)
     mapped = [map_row(mapping, raw, source.slug, mirror=mirror, keep=keep) for raw in alive]
+    if source.kind == "sp_core":
+        _carry_core(mapped, alive)
     # 거울이면 별칭을 **맞춘다**(뺀 것을 뺀다) — 아니면 더하기만(사람이 붙인 것을 지우지 않게).
     aliases_mode = "replace" if mirror else "add"
     run.rows_seen = len(fetched.rows)
@@ -1668,6 +1756,210 @@ def _edge_row(raw: dict[str, Any], periodic: set[str]) -> dict[str, Any]:
     return out
 
 
+def _set_periods(item: dict[str, Any], periodic: set[str]) -> list[dict[str, Any]]:
+    """한 쌍의 기간들 — 이쪽 관계 종류가 기간을 안 받으면 **오늘 유효한 것 하나**(없으면 없음).
+
+    기간을 안 받는 종류에 여러 기간을 넣으면 「같은 관계가 두 번」 으로 그 차례가 막힌다. 오늘
+    유효한 하나를 고르는 것은 기본 모양(오늘 유효한 선만)이 하던 일과 같다."""
+    periods = [one for one in item.get(fetchers.CORE_PERIODS) or [] if isinstance(one, dict)]
+    if str(item.get("relation") or "").strip() in periodic:
+        return periods
+    today = edge_rule.today().isoformat()
+    alive = [
+        one
+        for one in periods
+        if (not one.get("valid_from") or str(one["valid_from"]) <= today)
+        and (not one.get("valid_to") or str(one["valid_to"]) > today)
+    ]
+    return [{**one, "valid_from": None, "valid_to": None} for one in alive[:1]]
+
+
+def _set_rows(sets: list[dict[str, Any]], periodic: set[str]) -> list[dict[str, Any]]:
+    """`shape=sp` 의 쌍들 → 관계 적재의 줄 — 기간 하나가 한 줄. 붙은 값은 펴고, 계보 고정은
+    실어 받는 쪽이 새로 박지 않게 한다(ADR 0041)."""
+    out: list[dict[str, Any]] = []
+    for item in sets:
+        for period in _set_periods(item, periodic):
+            values = period.get("properties")
+            row: dict[str, Any] = dict(values) if isinstance(values, dict) else {}
+            row.update(
+                {
+                    "src": item.get("src"),
+                    "relation": item.get("relation"),
+                    "dst": item.get("dst"),
+                    "dst_type": item.get("dst_type") or "",
+                    "evidence_note": str(period.get("evidence_note") or ""),
+                }
+            )
+            for name in ("valid_from", "valid_to"):
+                if period.get(name):
+                    row[name] = period[name]
+            if period.get("pinned_at"):
+                row["pinned_at"] = period["pinned_at"]
+                row["pinned_revision"] = period.get("pinned_revision")
+                if period.get("pinned_stale"):
+                    row["pinned_stale"] = True
+            out.append(row)
+    return out
+
+
+#: 쌍을 한 번에 묻는 수 — (출발 · 종류 · 도착) 셋이 바인드 셋이라 65,535 를 넘지 않게.
+PAIR_BATCH = 5_000
+
+
+def _cut_leftovers(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    sets: list[dict[str, Any]],
+    periodic: set[str],
+    *,
+    apply: bool,
+) -> tuple[dict[str, int], list[str], bool]:
+    """`shape=sp` — 온 쌍마다 **목록에 없는 이쪽 기간을 끊는다.** 적용이면 넣기 전에 끊고(고친
+    기간이 옛 기간 둘과 겹쳐 「어느 관계를 고칠지 모릅니다」 가 되지 않게), 미리 보기면 끊을
+    것을 셈만 한다.
+
+    ⚠️ 미리 보기에서 세이브포인트 안에서 끊어 보고 무르지 않는다 — 끊기가 쌓아 둔 변경 알림
+       (`events`)은 세이브포인트를 물러도 안 버려져, 실행 기록을 커밋할 때 **끊지 않은 선의
+       웹훅이 나간다.**
+
+    **기간만 바뀐 선은 끊지 않는다** — 목록의 한 기간과만 겹치는 이쪽 선 하나는 일괄 입력이 그
+    선의 기간을 고친다(선 id · 이력이 이어진다). 끊는 것은 어느 기간과도 안 겹치는 선, 그리고
+    한 기간에 둘 이상이 겹친 선(허브에서 기간을 합쳤다)이다.
+
+    끊는 것은 **이 소스가 이은 선**, 그리고 이 소스의 출처가 관리하는 관계 종류(허브 관리)의
+    선이다. 사람이 이은 선은 안 끊는다(`_prune_unseen` 과 같은 규칙) — 다만 허브 관리 종류는
+    이 설치에서 아무도 못 이으므로 묶음으로 받은 선까지 이 소스가 정리한다(묶음에서 구독으로
+    옮겨 온 설치). 끊기는 무덤과 같은 규칙이다(`bundles/tombstones.py`, 기간째로).
+    """
+    name = source_name(source)
+    owned = (
+        {
+            one.slug
+            for one in db.scalars(select(RelationType).where(RelationType.managed_by == name))
+        }
+        if name
+        else set()
+    )
+    slugs = {one.slug: one.id for one in db.scalars(select(ObjectType))}
+    wanted: dict[uuid.UUID, set[str]] = {}
+    for item in sets:
+        wanted.setdefault(object_type.id, set()).add(str(item.get("src") or ""))
+        dst_type = slugs.get(str(item.get("dst_type") or ""))
+        if dst_type is not None:
+            wanted.setdefault(dst_type, set()).add(str(item.get("dst") or ""))
+    ids: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
+    for type_id, keys in wanted.items():
+        listed = [one for one in keys if one]
+        for at in range(0, len(listed), PAIR_BATCH):
+            for object_id, key in db.execute(
+                select(ObjectInstance.id, ObjectInstance.key).where(
+                    ObjectInstance.type_id == type_id,
+                    ObjectInstance.deleted_at.is_(None),
+                    any_of(ObjectInstance.key, listed[at : at + PAIR_BATCH]),
+                )
+            ):
+                if key:
+                    ids[(type_id, key)] = object_id
+    pairs: dict[tuple[uuid.UUID, str, uuid.UUID], dict[str, Any]] = {}
+    for item in sets:
+        start = ids.get((object_type.id, str(item.get("src") or "")))
+        dst_type = slugs.get(str(item.get("dst_type") or ""))
+        end = ids.get((dst_type, str(item.get("dst") or ""))) if dst_type else None
+        if start is not None and end is not None:
+            pairs[(start, str(item.get("relation") or ""), end)] = item
+    existing: dict[tuple[uuid.UUID, str, uuid.UUID], list[ObjectRelation]] = {}
+    listed_pairs = list(pairs)
+    for at in range(0, len(listed_pairs), PAIR_BATCH):
+        for edge in db.scalars(
+            select(ObjectRelation).where(
+                tuple_(
+                    ObjectRelation.src_object_id,
+                    ObjectRelation.relation,
+                    ObjectRelation.dst_object_id,
+                ).in_(listed_pairs[at : at + PAIR_BATCH])
+            )
+        ):
+            if edge.datasource_id == source.id or edge.relation in owned:
+                existing.setdefault(
+                    (edge.src_object_id, edge.relation, edge.dst_object_id), []
+                ).append(edge)
+    cuts: list[RelationTombstoneIn] = []
+    for pair, found in existing.items():
+        item = pairs[pair]
+        for edge in _doomed(found, _set_periods(item, periodic)):
+            cuts.append(
+                RelationTombstoneIn(
+                    type_slug=object_type.slug,
+                    src=str(item.get("src")),
+                    relation=edge.relation,
+                    dst=str(item.get("dst")),
+                    dst_type=str(item.get("dst_type") or ""),
+                    valid_from=edge.valid_from,
+                    valid_to=edge.valid_to,
+                    period=True,
+                )
+            )
+    if not cuts:
+        return {}, [], True
+    cut = graves.run(
+        db, _actor(db, user), TombstonesIn(relations=cuts), source=name, apply=apply
+    )
+    errors = [f"끊김 {one.label}: {one.message}" for one in cut.rows if one.action == "error"]
+    return {"relations_unlink": cut.counts.get("unlink", 0)}, errors, cut.ok
+
+
+Span = tuple[date | None, date | None]
+
+
+def _span_of(period: dict[str, Any]) -> Span:
+    def day(raw: Any) -> date | None:
+        return date.fromisoformat(str(raw)[:10]) if raw else None
+
+    return day(period.get("valid_from")), day(period.get("valid_to"))
+
+
+def _meet(a: Span, b: Span) -> bool:
+    """반열린 [from, to) 두 기간이 겹치나 — 빈 끝은 열린 쪽(ADR 0039)."""
+    a_from, a_to = a
+    b_from, b_to = b
+    return (a_to is None or b_from is None or b_from < a_to) and (
+        b_to is None or a_from is None or a_from < b_to
+    )
+
+
+def _doomed(
+    found: list[ObjectRelation], periods: list[dict[str, Any]]
+) -> list[ObjectRelation]:
+    """한 쌍의 이쪽 선 가운데 **끊을 것** — 목록의 기간과 같은 선은 둔다. 목록의 한 기간과만
+    겹치는 선 하나는 그 기간으로 고쳐 쓰므로 둔다. 나머지(아무 기간과도 안 겹침 · 한 기간에
+    둘 이상 겹침)는 끊는다."""
+    wanted = [_span_of(one) for one in periods]
+    same = {(one.valid_from, one.valid_to) for one in found}
+    keep = {one.id for one in found if (one.valid_from, one.valid_to) in set(wanted)}
+    claimed: set[uuid.UUID] = set()
+    clashing: set[uuid.UUID] = set()
+    for span in wanted:
+        if span in same:
+            continue
+        over = [
+            one
+            for one in found
+            if one.id not in keep and _meet((one.valid_from, one.valid_to), span)
+        ]
+        if len(over) == 1 and over[0].id not in claimed:
+            claimed.add(over[0].id)
+        else:
+            clashing.update(one.id for one in over)
+    return [
+        one
+        for one in found
+        if one.id not in keep and (one.id not in claimed or one.id in clashing)
+    ]
+
+
 def _apply_edges(
     db: Session,
     user: User | None,
@@ -1893,6 +2185,7 @@ def _sync_relations(
     예전의 「파일대로 맞춤」 은 온 목록에 나온 (출발 객체 · 관계 종류) 안의 선을 누가 이었든
     끊었다.
     """
+    shape = fetchers.core_shape(source)
     fetch = partial(
         fetchers.fetch_sp_core_relations,
         base_url=source.base_url,
@@ -1901,6 +2194,7 @@ def _sync_relations(
         page_size=source.page_size,
         max_rows=odata.MAX_ROWS,
         transport=transport,
+        shape=shape,
     )
     errors: list[str] = []
     mark = source.relations_since_mark
@@ -1943,15 +2237,31 @@ def _sync_relations(
             )
 
     periodic = edge_rule.kinds_with_periods(db)
-    rows = [_edge_row(one, periodic) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
-    gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
+    sets: list[dict[str, Any]] = []
+    if shape == "sp":
+        # **쌍마다 기간 전부**(ADR 0055) — 줄로 펴서 넣고, 목록에 없는 이쪽 기간은 끊는다.
+        if any(fetchers.CORE_PERIODS not in one for one in got.rows):
+            errors.append(
+                "상대가 기간 전부(shape=sp)를 주지 않습니다 — 상대를 0.4.75 이상으로 올리거나 "
+                "소스의 「모양」 을 core 로 두세요."
+            )
+            return {}, errors, False
+        sets = list(got.rows)
+        rows = _set_rows(sets, periodic)
+        gone: list[dict[str, Any]] = []
+    else:
+        rows = [
+            _edge_row(one, periodic) for one in got.rows if not one.get(fetchers.CORE_DELETED)
+        ]
+        gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
     # **기다리던 선을 다시 싣는다**(끝점이 지난번에 없었다). 이번에 같은 선이 다시 왔으면 새
     # 줄을 쓰고, 상대가 끊었다고 왔으면 버린다. 첫 쪽부터 전량을 다시 받는 세대의 첫 차례면
     # 기다리던 것도 그 안에 다시 오므로 버린다. 한 번에 넣는 상한을 넘기지 않게 남는 자리만큼만
     # — 나머지는 계속 기다린다.
     fresh = full is not None and resume is None
     waiting = [] if fresh else [dict(one) for one in source.relations_waiting or []]
-    again = _edge_keys(rows) | _edge_keys(gone)
+    # 다시 온 쌍(`sp` 는 쌍 전체가 정본이다)의 기다리던 줄은 새 줄이 대신한다.
+    again = _edge_keys(rows) | _edge_keys(gone) | _edge_keys(sets)
     retry = [one for one in waiting if _edge_key(one) not in again]
     room = max(odata.MAX_ROWS - len(rows), 0)
     retry, held = retry[:room], retry[room:]
@@ -1960,6 +2270,12 @@ def _sync_relations(
         errors.append(_dropped_note(dropped))
     sent = rows + retry
     seen: set[uuid.UUID] = set()
+    # `sp` 의 쌍에서 빠진 이쪽 기간 — 적용이면 **넣기 전에** 끊고, 미리 보기면 셈만 한다.
+    cut_counts, cut_errors, cut_ok = (
+        _cut_leftovers(db, user, source, object_type, sets, periodic, apply=apply)
+        if sets
+        else ({}, [], True)
+    )
     counts, more, still, edges_ok = _apply_edges(
         db,
         user,
@@ -1968,13 +2284,18 @@ def _sync_relations(
         sent,
         gone,
         # **늘 더하기다** — 안 온 선의 정리는 세대가 끝난 차례에 이 소스가 이은 것만 한다
-        # (`_prune_unseen`). 끝점을 못 찾은 줄은 나머지를 막지 않고 기다린다.
+        # (`_prune_unseen`). 끝점을 못 찾은 줄은 나머지를 막지 않고 기다린다. `sp` 의 쌍에서
+        # 빠진 기간은 위(`_cut_leftovers`)에서 먼저 끊었다.
         mode="add",
         apply=apply,
         skip_missing=True,
         max_rows=max(len(sent), bulk.MAX_ROWS),
         seen=seen,
     )
+    for name, value in cut_counts.items():
+        counts[name] = counts.get(name, 0) + value
+    errors.extend(cut_errors)
+    edges_ok = edges_ok and cut_ok
     errors.extend(more)
     if still:
         errors.append(_waiting_note(still))
@@ -2535,6 +2856,24 @@ def suggest_core_mapping(
             status=422,
         )
 
+    mapping, shown, notes = core_mapping(db, remote, object_type)
+    return CoreSuggestOut(
+        system=str(body.get("system") or ""),
+        revision=str(body.get("revision") or ""),
+        type_slug=wanted,
+        type_label=str(remote.get("label") or wanted),
+        count=int(remote.get("count") or 0),
+        mapping=mapping,
+        properties=shown,
+        notes=notes,
+    )
+
+
+def core_mapping(
+    db: Session, remote: dict[str, Any], object_type: ObjectType
+) -> tuple[dict[str, Any], list[CoreSuggestProperty], list[str]]:
+    """상대 카탈로그의 타입 하나 → (칸 대응, 칸마다 어떻게 이었나, 못 이은 것) — 대응 제안과
+    묶음 구독이 함께 쓴다."""
     defs = [
         one for one in properties_of(db, object_type.id) if one.data_type not in DETACHED_KINDS
     ]
@@ -2574,17 +2913,156 @@ def suggest_core_mapping(
             )
         )
 
-    return CoreSuggestOut(
-        system=str(body.get("system") or ""),
-        revision=str(body.get("revision") or ""),
-        type_slug=wanted,
-        type_label=str(remote.get("label") or wanted),
-        count=int(remote.get("count") or 0),
-        # **식별자는 상대의 `key` 다.** 그것이 다음 동기화가 같은 객체를 다시 찾는 근거다.
-        mapping={"external_key": "key", "columns": columns},
-        properties=shown,
-        notes=notes,
+    # **식별자는 상대의 `key` 다.** 그것이 다음 동기화가 같은 객체를 다시 찾는 근거다.
+    return {"external_key": "key", "columns": columns}, shown, notes
+
+
+#: 구독이 만드는 소스의 한 쪽 — 코어 창구의 상한(`coreapi.services.MAX_LIMIT`)과 같다.
+SUBSCRIBE_PAGE = 2_000
+
+
+def subscribe(
+    db: Session,
+    user: User,
+    payload: SubscribeRequest,
+    *,
+    base_url: str,
+) -> SubscribeOut:
+    """**묶음 구독**(ADR 0055) — 묶음의 타입마다 형제 코어 소스(`shape=sp`)를 만든다.
+
+    상대의 카탈로그를 한 번 읽어 맞춰 본다: 상대가 코어로 공개하지 않은 타입은 못 만들고 까닭을
+    적는다. 이미 같은 주소 · 타입의 형제 코어 소스가 있으면 두 번 만들지 않는다(같은 객체를 두
+    소스가 번갈아 고친다). 출처 이름은 그 타입을 관리하는 이름(`managed_by`)을 쓴다 — 다르면
+    허브 관리 타입에 아무것도 안 들어간다.
+    """
+    from app.modules.bundles.export import groups_of, types_in
+
+    body = fetchers.core_catalog(
+        base_url=base_url,
+        auth=odata.Auth(
+            kind=payload.auth_kind, user=payload.auth_user, secret=payload.auth_secret
+        ),
+        transport=transport,
     )
+    if "sp" not in (body.get("shapes") or []):
+        raise AppError(
+            code("DATASOURCES", 60),
+            "상대 설치가 기준정보를 온전히 주는 모양(shape=sp)을 모릅니다 — 상대를 0.4.75 "
+            "이상으로 올린 뒤 구독하세요. 그 전에는 기간이 다른 선 · 계보 고정이 빠집니다.",
+            status=422,
+        )
+    remote = {
+        str(one.get("slug")): one for one in body.get("types") or [] if isinstance(one, dict)
+    }
+    system = str(body.get("system") or "형제 SP")
+    types = types_in(db, groups_of(db, payload.groups))
+    taken = {
+        (one.type_id, one.entity_set.strip())
+        for one in db.scalars(
+            select(DataSource).where(
+                DataSource.kind == "sp_core", DataSource.base_url == base_url
+            )
+        )
+    }
+    items: list[SubscribeItemOut] = []
+    created = 0
+    for object_type in types:
+        found = remote.get(object_type.slug)
+        item = SubscribeItemOut(
+            type_slug=object_type.slug,
+            type_label=object_type.label,
+            action="create",
+            source_name=managed.owner_of(object_type),
+        )
+        items.append(item)
+        if found is None:
+            item.action = "skip"
+            item.reason = (
+                "상대가 코어로 공개하지 않은 타입입니다 — 상대의 온톨로지에서 "
+                "「코어 공개」 를 켜야 합니다."
+            )
+            continue
+        item.count = int(found.get("count") or 0)
+        item.relations = bool(found.get("relations_endpoint") and found.get("relations"))
+        if (object_type.id, object_type.slug) in taken:
+            item.action = "exists"
+            item.reason = "이 주소 · 타입의 형제 코어 소스가 이미 있습니다."
+            continue
+        mapping, _, notes = core_mapping(db, found, object_type)
+        # **식별자도 그대로 잇는다** — 기준정보는 허브의 식별자가 곧 이쪽 식별자다. 참조 칸 ·
+        # 선의 끝점이 그 식별자로 풀리고, 식별자가 필수인 타입은 안 이으면 한 행도 안 들어간다.
+        # (대응 제안은 잇지 않는다 — 이쪽에 다른 식별자 체계가 있을 수 있다.)
+        if not any(one.get("target") == "key" for one in mapping["columns"]):
+            mapping["columns"].insert(0, {"source": "key", "target": "key"})
+        item.notes = notes
+        if not payload.apply:
+            continue
+        slug = _free_slug(db, f"{object_type.slug}_core")
+        row = DataSource(
+            slug=slug,
+            name=f"{found.get('label') or object_type.label} ({system})",
+            kind="sp_core",
+            base_url=base_url,
+            entity_set=object_type.slug,
+            options={"relations": item.relations, "shape": "sp"},
+            filter="",
+            select="",
+            auth={
+                "kind": payload.auth_kind,
+                "user": payload.auth_user.strip(),
+                "secret": payload.auth_secret,
+            },
+            page_size=SUBSCRIBE_PAGE,
+            type_id=object_type.id,
+            workspace_id=None,
+            mapping=mapping,
+            source_name=item.source_name,
+            deprecate_missing=False,
+            interval_minutes=payload.interval_minutes,
+            is_active=True,
+            created_by_id=user.id,
+        )
+        db.add(row)
+        db.flush()
+        audit.record(
+            db,
+            action="datasource.create",
+            actor=user,
+            target_table="data_sources",
+            target_id=row.id,
+            target_label=slug,
+            changes={
+                "base_url": base_url,
+                "entity_set": object_type.slug,
+                "type": object_type.slug,
+                "via": "subscribe",
+            },
+        )
+        item.source_slug = slug
+        created += 1
+    if payload.apply:
+        db.commit()
+    return SubscribeOut(
+        system=str(body.get("system") or ""),
+        applied=payload.apply,
+        items=items,
+        created=created,
+    )
+
+
+def _free_slug(db: Session, wanted: str) -> str:
+    """안 쓰인 소스 slug — 32자 안에서 뒤에 `_2` · `_3` 을 붙인다."""
+    base = wanted[:32].rstrip("_")
+    taken = set(
+        db.scalars(select(DataSource.slug).where(DataSource.slug.like(f"{base[:28]}%")))
+    )
+    if base not in taken:
+        return base
+    for number in range(2, 1000):
+        candidate = f"{base[: 32 - len(str(number)) - 1]}_{number}"
+        if candidate not in taken:
+            return candidate
+    raise Conflict(code("DATASOURCES", 6), f"소스 slug 를 정하지 못했습니다: {base}")
 
 
 #: 타이머가 깨는 간격(`deploy/sync.timer.template` 의 `OnUnitActiveSec`) — 그만큼은 봐준다.

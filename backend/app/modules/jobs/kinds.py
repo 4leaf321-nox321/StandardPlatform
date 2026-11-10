@@ -659,12 +659,29 @@ def datasource_sync(work: Work) -> dict[str, Any]:
     if source is None:
         raise NotFound(code("DATASOURCES", 1), f"데이터 소스를 찾을 수 없습니다: {slug}")
     work.progress("읽기", 0, 0)
-    result = datasource_services.sync(
-        work.db, work.user, source, apply=bool(work.params.get("apply"))
+    # **끊긴 자리가 남으면 이 작업이 바로 잇는다**(형제 코어 — 차례마다 5만 줄, ADR 0055).
+    result, rounds = datasource_services.sync_through(
+        work.db,
+        work.user,
+        source,
+        apply=bool(work.params.get("apply")),
+        between=lambda done: work.progress(f"이어 받기 {done + 1}차례", done, 0),
     )
     if result.run.applied and _changed(result.run.counts or {}):
         _after_ingest(work.db, source.type_id, f"datasource:{slug}")
-    return datasource_services.sync_out(result).model_dump(mode="json")
+    out = datasource_services.sync_out(result).model_dump(mode="json")
+    if rounds > 1:
+        out["rounds"] = rounds
+    return out
+
+
+def _catching_up(work: Work, slug: str, at: int, total: int) -> Callable[[int], None]:
+    """차례 사이의 진행률 — 「part · 이어 받기 3차례」. 취소면 거기서 멈춘다(`Cancelled`)."""
+
+    def tick(done: int) -> None:
+        work.progress(f"{slug} · 이어 받기 {done + 1}차례", at, total)
+
+    return tick
 
 
 def datasource_sync_round(work: Work) -> dict[str, Any]:
@@ -705,7 +722,15 @@ def datasource_sync_round(work: Work) -> dict[str, Any]:
                 done.append({"slug": source.slug, "status": "skipped"})
                 continue
             try:
-                result = datasource_services.sync(work.db, work.user, source, apply=apply)
+                # 끊긴 자리가 남으면 다음 소스로 가기 전에 잇는다 — 가리키는 쪽부터 다 들어와야
+                # 뒤 소스의 참조 · 선이 끝점을 찾는다(ADR 0055).
+                result, _ = datasource_services.sync_through(
+                    work.db,
+                    work.user,
+                    source,
+                    apply=apply,
+                    between=_catching_up(work, source.slug, index, len(ordered)),
+                )
             except Cancelled:
                 raise
             except AppError as caught:

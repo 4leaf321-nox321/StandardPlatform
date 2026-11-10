@@ -57,24 +57,29 @@ from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
 from app.modules.coreapi.schemas import (
+    CoreAliasOut,
     CoreCatalogOut,
     CoreConsumerOut,
     CorePageOut,
+    CorePeriodOut,
     CorePropertyOut,
     CorePullOut,
     CoreRelationEndOut,
     CoreRelationKindOut,
     CoreRelationOut,
     CoreRelationPageOut,
+    CoreRowExtraOut,
     CoreRowOut,
     CoreStatusOut,
     CoreTypeOut,
     CoreWithheldReferenceOut,
     CoreWithheldRelationOut,
 )
-from app.modules.objects import aliases, edges, typecounts
+from app.modules.objects import aliases, edges, lineage, typecounts
 from app.modules.objects import keys as key_history
+from app.modules.objects.bulk import relation_defs
 from app.modules.objects.models import (
+    ObjectAlias,
     ObjectInstance,
     ObjectRelation,
     ObjectRelationTombstone,
@@ -363,16 +368,18 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
 
 
 def _ref_keys(
-    db: Session, user: User, defs: list[PropertyDef], rows: list[ObjectInstance]
+    db: Session, user: User, defs: list[PropertyDef], values_of: list[dict[str, Any]]
 ) -> dict[str, str | None]:
     """참조 값(id) → 상대의 `key`. **id 로 주면 받는 쪽에서 아무것도 못 가리킨다.**
+
+    `values_of` 는 객체 · 선의 `properties` 들이다 — 선에 붙은 참조 칸도 같은 규칙이다(예전에는
+    선의 값을 그대로 내보내 참조 칸이 uuid 로 나갔다).
 
     **토큰 주인이 못 보는 상대는 None** — 그 값은 내보내지 않는다(`_properties_out`). 상대의
     부서를 보지 않고 풀었더니 안 보이는 부서 객체의 식별자 · 이름이 참조 칸으로 샜다
     (2026-10-08)."""
     wanted: set[uuid.UUID] = set()
-    for row in rows:
-        values = row.properties or {}
+    for values in values_of:
         for definition in defs:
             if definition.data_type != "object_ref":
                 continue
@@ -395,9 +402,8 @@ def _ref_keys(
 
 
 def _properties_out(
-    row: ObjectInstance, defs: list[PropertyDef], ref_keys: dict[str, str | None]
+    values: dict[str, Any], defs: list[PropertyDef], ref_keys: dict[str, str | None]
 ) -> dict[str, Any]:
-    values = row.properties or {}
     out: dict[str, Any] = {}
     for definition in defs:
         raw = values.get(definition.key)
@@ -416,6 +422,25 @@ def _properties_out(
     return out
 
 
+def _extra_of(row: ObjectInstance, found: list[ObjectAlias]) -> CoreRowExtraOut:
+    """`shape=sp` 의 칸 — 묶음 내보내기의 행(`bundles/export._row`)과 같은 것을 싣는다."""
+    return CoreRowExtraOut(
+        description=row.description or None,
+        valid_from_year=row.valid_from_year,
+        valid_to_year=row.valid_to_year,
+        aliases=[
+            CoreAliasOut(
+                value=one.value,
+                source=one.source or "",
+                note=one.note or "",
+                verified=one.verified_at is not None,
+            )
+            for one in found
+            if one.kind == aliases.HUMAN
+        ],
+    )
+
+
 def page(
     db: Session,
     user: User,
@@ -424,8 +449,12 @@ def page(
     since: datetime | None,
     cursor: str | None,
     limit: int,
+    shape: str = "core",
 ) -> CorePageOut:
-    """한 쪽 — 바뀐 것과 **사라진 것**(지운 것 · 더 이상 안 보이는 것)을 함께."""
+    """한 쪽 — 바뀐 것과 **사라진 것**(지운 것 · 더 이상 안 보이는 것)을 함께.
+
+    `shape="sp"` 면 행마다 `extra`(설명 · 유효 연도 · 별칭의 출처와 확인 표시)를 싣는다 —
+    형제 SP 가 기준정보를 묶음 없이 받는 길이다(ADR 0055)."""
     # **시계는 DB 것을 쓰고, 도는 적재보다 앞서지 않는다**(`watermark` 의 설명). 쪽을 넘기는
     # 중이면 첫 쪽의 시각이 커서에 실려 온다.
     started = _cursor(cursor)[2] if cursor else None
@@ -447,9 +476,13 @@ def page(
         stmt = stmt.where(ObjectInstance.deleted_at.is_(None))
     if cursor:
         mark, last, _ = _cursor(cursor)
+        # ⚠️ **행 비교로 쓴다** — `(시각 > m) OR (시각 = m AND id > l)` 와 뜻은 같지만, OR 로
+        #    쓰면 PostgreSQL 이 색인(`ix_objects_type_updated`)을 **처음부터** 훑었다: 200만 행
+        #    타입의 150만 번째 뒤 한 쪽이 질의만 0.65초(API 4.2초), 깊이에 비례해 늘었다. 행
+        #    비교는 그 자리에서 시작해 1ms 다(2026-11-06 실측, ADR 0055).
         stmt = stmt.where(
-            (ObjectInstance.updated_at > mark)
-            | ((ObjectInstance.updated_at == mark) & (ObjectInstance.id > last))
+            tuple_(ObjectInstance.updated_at, ObjectInstance.id)
+            > tuple_(literal(mark), literal(last))
         )
 
     # **정렬을 고정한다** — 쪽을 넘기는 사이 순서가 바뀌면 행이 빠지거나 두 번 온다.
@@ -462,8 +495,14 @@ def page(
     hidden = {one.id for one, visible in picked if not visible}
     shown_rows = [one for one in found if one.id not in hidden]
 
-    ref_keys = _ref_keys(db, user, defs, shown_rows)
+    ref_keys = _ref_keys(db, user, defs, [one.properties or {} for one in shown_rows])
     human = aliases.human_of(db, [one.id for one in shown_rows])
+    # 형제 SP 가 기준정보를 온전히 받는 모양(ADR 0055) — 별칭의 출처 · 확인 표시까지.
+    detailed = (
+        aliases.of(db, [one.id for one in shown_rows if one.deleted_at is None])
+        if shape == "sp"
+        else {}
+    )
     merged_keys = _merged_keys(db, user, shown_rows)
     items = [
         _gone_out(one)
@@ -480,7 +519,13 @@ def page(
             properties=(
                 {}
                 if one.deleted_at is not None
-                else _properties_out(one, defs, ref_keys) | _aliases_of(human, one)
+                else _properties_out(one.properties or {}, defs, ref_keys)
+                | _aliases_of(human, one)
+            ),
+            extra=(
+                _extra_of(one, detailed.get(one.id, []))
+                if shape == "sp" and one.deleted_at is None
+                else None
             ),
         )
         for one in found
@@ -688,6 +733,7 @@ def relations(
     since: datetime | None,
     cursor: str | None,
     limit: int,
+    shape: str = "core",
 ) -> CoreRelationPageOut:
     """이 타입에서 출발하는 선 — **바뀐 것과 끊긴 것**을 한 흐름으로.
 
@@ -710,6 +756,15 @@ def relations(
     **유효 기간의 경계일이 지남**(그날 0시를 시각으로). 무엇이 들었든 그 선의 **지금 상태**를
     보낸다: 오늘 유효한 같은 선이 있으면 그 선을, 없으면 `deleted` 를. 지난 선을 고치거나 지운
     일, 앞으로의 선을 만든 일도 그래서 받는 쪽의 선을 흔들지 않는다(지금 상태 그대로가 온다).
+
+    ## `shape="sp"` — 기간 전부, 쌍으로(ADR 0055)
+
+    형제 SP 는 기간이 다른 같은 선을 여럿 쥘 수 있다(BOM 의 「3월 1일부터 A1 → A2」). 그쪽에는
+    오늘 유효한 선만으로는 지난 구성 · 앞으로의 구성이 사라진다 — 그래서 기준정보는 묶음으로만
+    온전히 갔다. 이 모양은 일이 든 **`(src, relation, dst, dst_type)` 쌍마다 그 쌍의 기간
+    전부**(`periods`, 계보 고정 포함)를 보낸다. 받는 쪽은 그 쌍을 목록대로 맞춘다 — 기간을 고친
+    일 · 끊은 일 · 다시 이은 일이 다 「그 쌍의 지금 목록」 하나로 온다. 경계일이 지나는 일은
+    없다(기간이 바뀐 것이 아니다 — 받는 쪽이 그날의 선을 스스로 고른다).
     """
     started = _cursor(cursor)[2] if cursor else None
     now = watermark(db)
@@ -767,10 +822,15 @@ def relations(
             )
         )
 
+    sets = shape == "sp"
     streams: list[Any] = []
     if since is None:
-        # 처음 받는 쪽 — 오늘 유효한 선 전부.
-        streams.append(edge_events(rel.updated_at, edges.alive(rel, today)))
+        # 처음 받는 쪽 — 오늘 유효한 선 전부(`sp` 면 기간을 가리지 않고 전부).
+        streams.append(
+            edge_events(rel.updated_at)
+            if sets
+            else edge_events(rel.updated_at, edges.alive(rel, today))
+        )
     else:
         streams.append(edge_events(rel.updated_at, rel.updated_at > since))
         # **무덤도 출발 타입으로 거른다.** 안 그러면 같은 관계 종류를 쓰는 다른 타입의 끊긴
@@ -797,7 +857,7 @@ def relations(
         # 유효 기간의 경계일이 (지난번, 오늘] 에 든 선 — 그날 0시가 그 일의 시각이다. 선도
         # 기록도 안 바뀌어 `updated_at` 으로는 안 보인다.
         after = since.astimezone().date()
-        if after < today:
+        if after < today and not sets:
             for column in (rel.valid_from, rel.valid_to):
                 streams.append(
                     edge_events(
@@ -813,8 +873,9 @@ def relations(
     ordered = select(stream).order_by(stream.c.at, stream.c.id)
     if cursor:
         mark, last, _ = _cursor(cursor)
+        # 객체 쪽과 같이 **행 비교로** — OR 로 쓰면 깊은 쪽일수록 처음부터 다시 훑는다.
         ordered = ordered.where(
-            (stream.c.at > mark) | ((stream.c.at == mark) & (stream.c.id > last))
+            tuple_(stream.c.at, stream.c.id) > tuple_(literal(mark), literal(last))
         )
     picked = db.execute(ordered.limit(limit + 1)).all()
     more = len(picked) > limit
@@ -842,16 +903,56 @@ def relations(
         (one.at, one.id, rows_by_id[one.id]) for one in picked if one.id in rows_by_id
     ]
     # 일마다 그 선의 **지금 상태** — 오늘 유효한 같은 선(같은 두 객체 · 같은 종류)이 있나.
+    # `sp` 면 그 쌍의 기간 전부.
     triples = {(row.src_object_id, row.relation, row.dst_object_id) for _, _, row in marks}
     current: dict[tuple[uuid.UUID, str, uuid.UUID], ObjectRelation] = {}
+    every: dict[tuple[uuid.UUID, str, uuid.UUID], list[ObjectRelation]] = {}
     if triples:
         for one in db.scalars(
-            select(rel).where(
+            select(rel)
+            .where(
                 tuple_(rel.src_object_id, rel.relation, rel.dst_object_id).in_(list(triples)),
-                edges.alive(rel, today),
+                *([] if sets else [edges.alive(rel, today)]),
             )
+            .order_by(rel.valid_from.nulls_first(), rel.id)
         ):
-            current[(one.src_object_id, one.relation, one.dst_object_id)] = one
+            triple = (one.src_object_id, one.relation, one.dst_object_id)
+            current[triple] = one
+            every.setdefault(triple, []).append(one)
+    # 선에 붙은 참조 칸은 상대의 `key` 로 — 받는 쪽의 uuid 는 우리 것과 다르다.
+    kind_defs = {
+        one.slug: relation_defs(db, one)
+        for one in db.scalars(select(RelationType).where(RelationType.slug.in_(slugs)))
+    }
+    shown_edges = [one for group in every.values() for one in group]
+    edge_refs = _ref_keys(
+        db,
+        user,
+        [one for group in kind_defs.values() for one in group],
+        [one.properties or {} for one in shown_edges],
+    )
+    pins = (
+        lineage.pin_states(db, [one.id for one in shown_edges if one.pinned_at is not None])
+        if sets
+        else {}
+    )
+
+    def values_of(edge: ObjectRelation) -> dict[str, Any]:
+        return _properties_out(
+            edge.properties or {}, kind_defs.get(edge.relation, []), edge_refs
+        )
+
+    def period_of(edge: ObjectRelation) -> CorePeriodOut:
+        pinned = pins.get(edge.id)
+        return CorePeriodOut(
+            valid_from=_day(edge.valid_from),
+            valid_to=_day(edge.valid_to),
+            evidence_note=edge.evidence_note or "",
+            properties=values_of(edge),
+            pinned_revision=edge.pinned_revision if pinned is not None else None,
+            pinned_at=_stamp(edge.pinned_at) if pinned is not None else None,
+            pinned_stale=bool(pinned is not None and pinned.stale),
+        )
 
     wanted: set[uuid.UUID] = set()
     for _, _, row in marks:
@@ -872,12 +973,34 @@ def relations(
         )
     }
     items: list[CoreRelationOut] = []
-    for when, _, row in marks:
+    #: `sp` 는 쌍마다 한 줄 — 한 쪽 안에서 같은 쌍의 일이 여럿이면 마지막 일의 자리에 선다.
+    last_of = {
+        (row.src_object_id, row.relation, row.dst_object_id): index
+        for index, (_, _, row) in enumerate(marks)
+    }
+    for index, (when, _, row) in enumerate(marks):
         start, end = ends.get(row.src_object_id), ends.get(row.dst_object_id)
         if start is None or end is None:
             # 끝점까지 정말 사라진 줄 — 그 객체의 무덤이 이미 그것을 말한다.
             continue
-        live = current.get((row.src_object_id, row.relation, row.dst_object_id))
+        triple = (row.src_object_id, row.relation, row.dst_object_id)
+        if sets:
+            if last_of[triple] != index:
+                continue
+            periods = [period_of(one) for one in every.get(triple, [])]
+            items.append(
+                CoreRelationOut(
+                    src=start.key or start.label,
+                    relation=row.relation,
+                    dst=end.key or end.label,
+                    dst_type=type_slugs.get(end.type_id, ""),
+                    updated_at=_stamp(when) or "",
+                    deleted=not periods,
+                    periods=periods,
+                )
+            )
+            continue
+        live = current.get(triple)
         items.append(
             CoreRelationOut(
                 src=start.key or start.label,
@@ -885,9 +1008,7 @@ def relations(
                 dst=end.key or end.label,
                 dst_type=type_slugs.get(end.type_id, ""),
                 evidence_note="" if live is None else (live.evidence_note or ""),
-                properties={}
-                if live is None
-                else {k: v for k, v in (live.properties or {}).items()},
+                properties={} if live is None else values_of(live),
                 valid_from=_day(live.valid_from) if live is not None else None,
                 valid_to=_day(live.valid_to) if live is not None else None,
                 updated_at=_stamp(when) or "",

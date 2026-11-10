@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, aliased
 
-from app.modules.datasources import odata
+from app.modules.datasources import odata, services
 from app.modules.datasources.models import DataSource
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from tests.api.conftest import Signed, clock_settled
@@ -130,6 +130,9 @@ def test_여러_차례에_걸쳐_다시_받으면_마지막_쪽까지_받은_차
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(odata, "MAX_ROWS", 3)
+    # 차례마다의 정리(세대)를 본다 — 한 작업이 끝까지 잇는 것(`sync_through`)은 끈다. 그것은
+    # `test_core_subscribe.py` 가 본다.
+    monkeypatch.setattr(services, "CATCH_UP_ROUNDS", 1)
     vendor, kind, source = _world(
         client, admin, sibling, [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4)], page_size=2
     )
@@ -204,6 +207,9 @@ def test_다시_받는_도중_실패하면_끊지_않고_다음_차례가_이어
     """**일부만 본 것으로 끊으면 아직 안 받은 선이 끊긴다** — 선 창구가 멈추거나, 마지막 쪽의
     적용이 거절되면 그 차례는 아무것도 안 끊고 같은 자리에서 다시 잇는다."""
     monkeypatch.setattr(odata, "MAX_ROWS", 3)
+    # 차례마다의 정리(세대)를 본다 — 한 작업이 끝까지 잇는 것(`sync_through`)은 끈다. 그것은
+    # `test_core_subscribe.py` 가 본다.
+    monkeypatch.setattr(services, "CATCH_UP_ROUNDS", 1)
     _vendor, kind, source = _world(
         client, admin, sibling, [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4)], page_size=2
     )

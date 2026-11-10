@@ -704,6 +704,9 @@ def test_상한에서_끊기면_받은_만큼_넣고_다음_차례가_끊은_자
     받아 **영영 앞으로 못 갔다** — 안내는 「`$filter` 로 나눠」 였는데 코어 소스는 그 칸을
     쓰지도 않는다(2026-10-08)."""
     monkeypatch.setattr(odata, "MAX_ROWS", 3)
+    # 차례마다의 규칙(끊은 자리 · 시계)을 본다 — 한 작업이 끝까지 잇는 것(`sync_through`)은
+    # 끈다. 그것은 `test_core_subscribe.py` 가 본다.
+    monkeypatch.setattr(services, "CATCH_UP_ROUNDS", 1)
     vendor = _vendor_type(client, admin)
     sibling.items = [
         _item(f"V-00{n}", f"공급사 {n}", f"2026-09-0{n}T00:00:00.000000Z") for n in range(1, 6)
@@ -745,6 +748,9 @@ def test_선도_상한에서_끊기면_받은_만큼_넣고_다음_차례가_잇
     """선 쪽도 같았다 — 끊기면 시계를 그대로 두어, 다음 차례가 같은 줄만 다시 받고 「다음
     동기화가 같은 자리에서 잇습니다」 는 사실이 아니었다(2026-10-08)."""
     monkeypatch.setattr(odata, "MAX_ROWS", 3)
+    # 차례마다의 규칙(끊은 자리 · 시계)을 본다 — 한 작업이 끝까지 잇는 것(`sync_through`)은
+    # 끈다. 그것은 `test_core_subscribe.py` 가 본다.
+    monkeypatch.setattr(services, "CATCH_UP_ROUNDS", 1)
     vendor = _vendor_type(client, admin)
     kind = _partner_kind(client, admin, vendor)
     sibling.items = [

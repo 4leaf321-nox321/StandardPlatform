@@ -202,3 +202,52 @@ class PreviewOut(BaseModel):
     rows: list[dict[str, Any]]
     mapped: list[dict[str, Any]]
     mapping_error: str | None
+
+
+class SubscribeRequest(BaseModel):
+    """**묶음 구독**(ADR 0055) — 형제 SP 의 코어에서 사이드바 묶음의 타입들을 받는 소스를
+    한 번에.
+
+    기준정보가 커서 묶음 한 봉투(50만 줄)로 못 받을 때의 길이다: 정의는 「정의만」 묶음으로
+    먼저 받고(사람이 미리 보고 적용 — 허브 관리가 선다), 행은 이 구독이 만든 소스들이 바뀐 것만
+    쪽씩 받는다. 타입마다 소스를 손으로 만들면 묶음 하나에 열 번이고, 그중 하나의 출처 이름 ·
+    선 받기를 빠뜨리면 그 타입만 조용히 안 들어온다."""
+
+    base_url: str = Field(min_length=1, max_length=500)
+    """형제 설치의 API 주소(`https://hub.example/api` — `/core` 의 앞)."""
+    auth_kind: str = "bearer"
+    auth_user: str = ""
+    auth_secret: str = ""
+    """그 설치가 낸 액세스 토큰 — `core:read` 면 된다."""
+    groups: list[str] = Field(min_length=1)
+    """이 설치의 사이드바 묶음 slug — 그 안의 타입마다 소스 하나."""
+    interval_minutes: int = Field(default=0, ge=0, le=60 * 24 * 30)
+    """0 이면 손으로만(「동기화」). 처음 받기는 간격과 상관없이 끝까지 잇는다."""
+    apply: bool = False
+    """거짓이면 **무엇을 만들지만** 보인다(상대의 카탈로그를 읽어 맞춰 본다)."""
+
+
+class SubscribeItemOut(BaseModel):
+    type_slug: str
+    type_label: str
+    action: str
+    """`create`(만든다 · 만들었다) · `exists`(이미 그 주소 · 타입의 소스가 있다) · `skip`(못
+    만든다 — `reason`)."""
+    reason: str = ""
+    source_slug: str = ""
+    relations: bool = False
+    """선도 받나 — 상대가 그 타입에서 나가는 선을 열어 줬을 때."""
+    source_name: str = ""
+    """적재가 말하는 출처 이름 — 허브 관리 타입이면 그 관리자 이름(같아야 들어간다)."""
+    count: int = 0
+    """상대에 있는 수."""
+    notes: list[str] = Field(default_factory=list)
+    """칸 대응에서 못 이은 것 — 조용히 빼면 사람은 그 칸이 온 줄 안다."""
+
+
+class SubscribeOut(BaseModel):
+    system: str
+    """상대 설치의 이름."""
+    applied: bool
+    items: list[SubscribeItemOut]
+    created: int

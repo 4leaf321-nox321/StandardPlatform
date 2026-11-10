@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -27,6 +28,13 @@ from app.shared.auth import current_user
 from app.shared.errors import AppError, code
 
 router = APIRouter(prefix="/core", tags=["core"])
+
+#: 주는 모양 — `core` 는 바깥 시스템, `sp` 는 형제 SP 가 기준정보를 온전히 받는 모양(ADR 0055).
+Shape = Literal["core", "sp"]
+SHAPE_HELP = (
+    "`sp` — 형제 Standard Platform 이 기준정보를 온전히 받는 모양(선은 쌍마다 기간 전부 · "
+    "계보 고정, 행은 설명 · 유효 연도 · 별칭의 출처). 바깥 시스템은 비워 둔다"
+)
 
 #: 이 아래는 이 범위로도 읽는다. `main.py` 가 등록한다.
 SCOPE = "core:read"
@@ -77,6 +85,7 @@ def core_relations(
     ),
     cursor: str | None = Query(default=None, description="지난 응답의 `next`"),
     limit: int = Query(default=services.DEFAULT_LIMIT, ge=1, le=services.MAX_LIMIT),
+    shape: Shape = Query(default="core", description=SHAPE_HELP),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> CoreRelationPageOut:
@@ -95,7 +104,7 @@ def core_relations(
     """
     object_type = services.find_core_type(db, type_slug)
     return services.relations(
-        db, user, object_type, since=_moment(since), cursor=cursor, limit=limit
+        db, user, object_type, since=_moment(since), cursor=cursor, limit=limit, shape=shape
     )
 
 
@@ -108,6 +117,7 @@ def core_rows(
     ),
     cursor: str | None = Query(default=None, description="지난 응답의 `next`"),
     limit: int = Query(default=services.DEFAULT_LIMIT, ge=1, le=services.MAX_LIMIT),
+    shape: Shape = Query(default="core", description=SHAPE_HELP),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> CorePageOut:
@@ -125,5 +135,5 @@ def core_rows(
     """
     object_type = services.find_core_type(db, type_slug)
     return services.page(
-        db, user, object_type, since=_moment(since), cursor=cursor, limit=limit
+        db, user, object_type, since=_moment(since), cursor=cursor, limit=limit, shape=shape
     )

@@ -8,9 +8,10 @@
  */
 
 import { useState } from 'react'
-import { Eye, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
+import { Eye, Link2, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
 
 import { datasourceApi } from '@/modules/datasources/api'
+import { SubscribeDialog } from '@/modules/datasources/SubscribeDialog'
 import {
   RA_FEED,
   RA_PHASE_DEFAULT,
@@ -84,6 +85,7 @@ export default function DataSourcesPage() {
   const schema = useResource(() => ontologyApi.schema(), [])
   const workspaces = useResource(() => workspaceApi.list(true), [])
   const [editing, setEditing] = useState<DataSource | 'new' | null>(null)
+  const [subscribing, setSubscribing] = useState(false)
   const [removing, setRemoving] = useState<DataSource | null>(null)
   const [opened, setOpened] = useState<string | null>(null)
   const [syncing, setSyncing] = useState<{ source: DataSource; result: SyncResult } | null>(null)
@@ -114,12 +116,31 @@ export default function DataSourcesPage() {
         title="데이터 소스"
         description="바깥 시스템(OData)에서 읽어 온톨로지를 채웁니다. 규칙은 일괄 입력과 같습니다 — 계획 먼저, 전부 아니면 무."
         actions={
-          <Button size="sm" onClick={() => setEditing('new')}>
-            <Plus className="mr-1 size-4" />
-            생성
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              title="형제 Standard Platform 의 코어에서 사이드바 묶음의 타입마다 소스를 한 번에 생성합니다"
+              onClick={() => setSubscribing(true)}
+            >
+              <Link2 className="mr-1 size-4" />
+              묶음 구독
+            </Button>
+            <Button size="sm" onClick={() => setEditing('new')}>
+              <Plus className="mr-1 size-4" />
+              생성
+            </Button>
+          </div>
         }
       />
+
+      {subscribing && (
+        <SubscribeDialog
+          groups={schema.data?.groups ?? []}
+          onClose={() => setSubscribing(false)}
+          onCreated={list.reload}
+        />
+      )}
 
       {list.error && <ErrorNotice error={list.error} />}
       {error && <ErrorNotice error={error} />}
@@ -370,8 +391,7 @@ function SyncDialog({
   // (2026-10-08). RA 는 깨진 보고서(오류 줄)를 건너뛰고 넣되, 끊기면 넣지 않는다(전량 대조라
   // 일부로는 「내려감」 을 틀리게 적는다).
   const ok =
-    result.run.status === 'planned' &&
-    (ra ? !result.truncated : (result.counts.error ?? 0) === 0)
+    result.run.status === 'planned' && (ra ? !result.truncated : (result.counts.error ?? 0) === 0)
   const problems = result.rows.filter((row) => row.action === 'error')
 
   async function apply() {
@@ -406,8 +426,8 @@ function SyncDialog({
           (source.options.phase ?? RA_PHASE_DEFAULT) === 'finalized' && (
             <p className="text-sm">
               발행본이 아직 없을 수 있습니다 — RA 에서는 게시한 보고서가 「검토 중」 단계에 머무는
-              것이 보통이고, 발행 버튼을 클릭한 보고서는 아직 적습니다. 게시된 보고서까지
-              수신하려면 소스 수정에서 단계를 「게시된 것 전부」 로 변경합니다.
+              것이 보통이고, 발행 버튼을 클릭한 보고서는 아직 적습니다. 게시된 보고서까지 수신하려면
+              소스 수정에서 단계를 「게시된 것 전부」 로 변경합니다.
             </p>
           )}
         {result.errors.length > 0 && (
@@ -1168,8 +1188,8 @@ function EditDialog({
                     checked={edgeReplace}
                     onChange={(event) => setEdgeReplace(event.target.checked)}
                   />
-                  이 표를 정본으로 — <strong>온 목록에 나온 출발점</strong>의 그 관계 중 안 온
-                  선을 끊습니다. 표에 아예 안 나온 객체의 선은 건드리지 않습니다.
+                  이 표를 정본으로 — <strong>온 목록에 나온 출발점</strong>의 그 관계 중 안 온 선을
+                  끊습니다. 표에 아예 안 나온 객체의 선은 건드리지 않습니다.
                 </label>
                 <p className="text-muted-foreground text-xs">
                   출발점·도착점 열의 값은 그 객체의 <strong>식별자(없으면 별칭·이름)</strong>로
@@ -1184,170 +1204,174 @@ function EditDialog({
                 사람은 그것을 채워야 하는 줄 알고, 서버는 그 값을 무시한다. */}
             {!edgeMode && (
               <>
-              {/* ① 같은 것 검색 */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">① 같은 것 검색</p>
-                <div className="flex flex-wrap items-end gap-3">
+                {/* ① 같은 것 검색 */}
+                <div className="space-y-1.5">
+                  <p className="text-sm font-medium">① 같은 것 검색</p>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="ds-ext" className="text-xs">
+                        바깥 식별자 열
+                      </Label>
+                      <Input
+                        id="ds-ext"
+                        value={externalKey}
+                        placeholder="SupplierID"
+                        list="ds-columns"
+                        className="w-48"
+                        onChange={(event) => setExternalKey(event.target.value)}
+                      />
+                    </div>
+                    <label className="flex cursor-pointer items-center gap-2 pb-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4"
+                        checked={fixedOf('key') === externalKey.trim() && externalKey.trim() !== ''}
+                        onChange={(event) =>
+                          setFixed('key', event.target.checked ? externalKey.trim() : '')
+                        }
+                      />
+                      우리 식별자(key)로도 쓴다
+                    </label>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    이 열의 값이 그 객체에 남아, 다음 동기화가 같은 객체를 다시 찾습니다 — 우리 쪽
+                    이름·식별자를 수정해도 유지됩니다.
+                  </p>
+                </div>
+
+                {/* ② 이름 */}
+                <div className="space-y-1.5">
+                  <p className="text-sm font-medium">② 이름</p>
                   <div className="space-y-1">
-                    <Label htmlFor="ds-ext" className="text-xs">
-                      바깥 식별자 열
+                    <Label htmlFor="ds-label" className="text-xs">
+                      이름 열 (필수)
                     </Label>
                     <Input
-                      id="ds-ext"
-                      value={externalKey}
-                      placeholder="SupplierID"
+                      id="ds-label"
+                      value={fixedOf('label')}
+                      placeholder="CompanyName"
                       list="ds-columns"
                       className="w-48"
-                      onChange={(event) => setExternalKey(event.target.value)}
+                      onChange={(event) => setFixed('label', event.target.value)}
                     />
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2 pb-2 text-sm">
-                    <input
-                      type="checkbox"
-                      className="size-4"
-                      checked={fixedOf('key') === externalKey.trim() && externalKey.trim() !== ''}
-                      onChange={(event) =>
-                        setFixed('key', event.target.checked ? externalKey.trim() : '')
-                      }
-                    />
-                    우리 식별자(key)로도 쓴다
-                  </label>
                 </div>
-                <p className="text-muted-foreground text-xs">
-                  이 열의 값이 그 객체에 남아, 다음 동기화가 같은 객체를 다시 찾습니다 — 우리 쪽
-                  이름·식별자를 수정해도 유지됩니다.
-                </p>
-              </div>
 
-              {/* ② 이름 */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">② 이름</p>
-                <div className="space-y-1">
-                  <Label htmlFor="ds-label" className="text-xs">
-                    이름 열 (필수)
-                  </Label>
-                  <Input
-                    id="ds-label"
-                    value={fixedOf('label')}
-                    placeholder="CompanyName"
-                    list="ds-columns"
-                    className="w-48"
-                    onChange={(event) => setFixed('label', event.target.value)}
-                  />
-                </div>
-              </div>
-
-              {/* ③ 속성 */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">③ 속성</p>
-                {propertyTargets.length === 0 && (
-                  <p className="text-muted-foreground text-xs">
-                    이 타입에 속성이 없습니다. 관리 › 온톨로지에서 먼저 만드세요.
-                  </p>
-                )}
-                {propertyColumns.map(({ column, index }) => (
-                  <div key={index} className="flex flex-wrap items-start gap-2">
-                    <Input
-                      value={column.source}
-                      placeholder="바깥 열"
-                      list="ds-columns"
-                      className="w-40"
-                      onChange={(event) => patchColumn(index, { source: event.target.value })}
-                    />
-                    <span className="text-muted-foreground pt-2 text-sm">→</span>
-                    <Select
-                      value={column.target}
-                      onValueChange={(next) => patchColumn(index, { target: next })}
-                    >
-                      <SelectTrigger className="w-52">
-                        <SelectValue placeholder="어느 속성으로" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {propertyTargets.map(([key, text]) => (
-                          <SelectItem key={key} value={key}>
-                            {text}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Textarea
-                      defaultValue={column.values ? JSON.stringify(column.values) : ''}
-                      placeholder='값 대응표 (선택) {"US": "미국"}'
-                      rows={1}
-                      className="min-h-9 flex-1 font-mono text-xs"
-                      onBlur={(event) => {
-                        const text = event.target.value.trim()
-                        try {
-                          patchColumn(index, {
-                            values: text ? (JSON.parse(text) as Record<string, unknown>) : undefined,
-                          })
-                        } catch {
-                          setError(new Error(`값 대응표가 JSON 이 아닙니다: ${text.slice(0, 40)}`))
-                        }
-                      }}
-                    />
+                {/* ③ 속성 */}
+                <div className="space-y-1.5">
+                  <p className="text-sm font-medium">③ 속성</p>
+                  {propertyTargets.length === 0 && (
+                    <p className="text-muted-foreground text-xs">
+                      이 타입에 속성이 없습니다. 관리 › 온톨로지에서 먼저 만드세요.
+                    </p>
+                  )}
+                  {propertyColumns.map(({ column, index }) => (
+                    <div key={index} className="flex flex-wrap items-start gap-2">
+                      <Input
+                        value={column.source}
+                        placeholder="바깥 열"
+                        list="ds-columns"
+                        className="w-40"
+                        onChange={(event) => patchColumn(index, { source: event.target.value })}
+                      />
+                      <span className="text-muted-foreground pt-2 text-sm">→</span>
+                      <Select
+                        value={column.target}
+                        onValueChange={(next) => patchColumn(index, { target: next })}
+                      >
+                        <SelectTrigger className="w-52">
+                          <SelectValue placeholder="어느 속성으로" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {propertyTargets.map(([key, text]) => (
+                            <SelectItem key={key} value={key}>
+                              {text}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Textarea
+                        defaultValue={column.values ? JSON.stringify(column.values) : ''}
+                        placeholder='값 대응표 (선택) {"US": "미국"}'
+                        rows={1}
+                        className="min-h-9 flex-1 font-mono text-xs"
+                        onBlur={(event) => {
+                          const text = event.target.value.trim()
+                          try {
+                            patchColumn(index, {
+                              values: text
+                                ? (JSON.parse(text) as Record<string, unknown>)
+                                : undefined,
+                            })
+                          } catch {
+                            setError(
+                              new Error(`값 대응표가 JSON 이 아닙니다: ${text.slice(0, 40)}`),
+                            )
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label="속성 대응 삭제"
+                        onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                      >
+                        <X className="size-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  {propertyTargets.length > 0 && (
                     <Button
                       type="button"
-                      size="icon"
-                      variant="ghost"
-                      aria-label="속성 대응 삭제"
-                      onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setColumns([...columns, { source: '', target: propertyTargets[0][0] }])
+                      }
                     >
-                      <X className="size-4" />
+                      <Plus className="mr-1 size-4" />
+                      속성 추가
                     </Button>
-                  </div>
-                ))}
-                {propertyTargets.length > 0 && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() =>
-                      setColumns([...columns, { source: '', target: propertyTargets[0][0] }])
-                    }
-                  >
-                    <Plus className="mr-1 size-4" />
-                    속성 추가
-                  </Button>
-                )}
-                <p className="text-muted-foreground text-xs">
-                  값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 선택할 값이
-                  오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
-                </p>
-              </div>
+                  )}
+                  <p className="text-muted-foreground text-xs">
+                    값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 선택할 값이
+                    오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류
+                    행입니다.
+                  </p>
+                </div>
 
-              {/* ④ 그 밖에 */}
-              <div className="space-y-1.5">
-                <p className="text-sm font-medium">④ 그 밖에 (선택)</p>
-                <div className="flex flex-wrap gap-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="ds-desc" className="text-xs">
-                      설명 열
-                    </Label>
-                    <Input
-                      id="ds-desc"
-                      value={fixedOf('description')}
-                      list="ds-columns"
-                      className="w-48"
-                      onChange={(event) => setFixed('description', event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="ds-alias" className="text-xs">
-                      다른 이름(별칭) 열
-                    </Label>
-                    <Input
-                      id="ds-alias"
-                      value={fixedOf('alias')}
-                      placeholder="ShortName"
-                      list="ds-columns"
-                      className="w-48"
-                      onChange={(event) => setFixed('alias', event.target.value)}
-                    />
+                {/* ④ 그 밖에 */}
+                <div className="space-y-1.5">
+                  <p className="text-sm font-medium">④ 그 밖에 (선택)</p>
+                  <div className="flex flex-wrap gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="ds-desc" className="text-xs">
+                        설명 열
+                      </Label>
+                      <Input
+                        id="ds-desc"
+                        value={fixedOf('description')}
+                        list="ds-columns"
+                        className="w-48"
+                        onChange={(event) => setFixed('description', event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="ds-alias" className="text-xs">
+                        다른 이름(별칭) 열
+                      </Label>
+                      <Input
+                        id="ds-alias"
+                        value={fixedOf('alias')}
+                        placeholder="ShortName"
+                        list="ds-columns"
+                        className="w-48"
+                        onChange={(event) => setFixed('alias', event.target.value)}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-
               </>
             )}
 
@@ -1386,9 +1410,9 @@ function EditDialog({
                 타입 화면에 있어서, 여기서 안 말해 주면 운영자는 동기화가 실패한 뒤에야 안다. */}
             {type?.managed_by ? (
               <p className="text-xs">
-                <b>{type.label}</b> 은(는) <b>{type.managed_by}</b> 가 관리하는 타입입니다 —
-                출처 이름을 <b className="font-mono">{type.managed_by}</b> 로 적어야 이 소스의
-                적재가 통과합니다.{' '}
+                <b>{type.label}</b> 은(는) <b>{type.managed_by}</b> 가 관리하는 타입입니다 — 출처
+                이름을 <b className="font-mono">{type.managed_by}</b> 로 적어야 이 소스의 적재가
+                통과합니다.{' '}
                 {sourceName.trim()
                   ? sourceName.trim() === type.managed_by
                     ? '맞게 적혀 있습니다.'
@@ -1427,8 +1451,8 @@ function EditDialog({
               {ra ? (
                 <p className="text-muted-foreground text-sm">
                   RA 에서 내려간 보고서는 <b>삭제하지도 사용 중지하지도 않습니다</b> — 하루 한 번
-                  전량 대조에서 「원본에서 내려감」 과 그 날짜를 표시하고, 다시 게시되면 「게시
-                  중」 으로 복원합니다.
+                  전량 대조에서 「원본에서 내려감」 과 그 날짜를 표시하고, 다시 게시되면 「게시 중」
+                  으로 복원합니다.
                 </p>
               ) : kind !== 'sp_core' ? (
                 <>

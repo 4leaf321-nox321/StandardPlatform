@@ -3655,6 +3655,48 @@
         }
       }
     },
+    "/api/datasources/subscriptions": {
+      "post": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Subscribe",
+        "description": "**묶음 구독**(ADR 0055) — 형제 SP 의 코어에서 사이드바 묶음의 타입들을 받는 소스를 한\n번에 만든다(`apply=false` 면 무엇을 만들지만 보인다).\n\n기준정보가 커서 묶음 한 봉투로 못 받을 때의 길이다. 정의는 「정의만」 묶음으로 먼저 받고,\n행은 이 소스들이 바뀐 것만 쪽씩 받는다 — 기간이 다른 선 · 계보 고정 · 별칭의 출처까지\n(`shape=sp`). 처음 받기는 5만 줄씩 끊어 끝까지 잇는다.",
+        "operationId": "subscribe_api_datasources_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscribeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/datasources/{slug}": {
       "get": {
         "tags": [
@@ -5231,6 +5273,22 @@
               "default": 500,
               "title": "Limit"
             }
+          },
+          {
+            "name": "shape",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "core",
+                "sp"
+              ],
+              "type": "string",
+              "description": "`sp` — 형제 Standard Platform 이 기준정보를 온전히 받는 모양(선은 쌍마다 기간 전부 · 계보 고정, 행은 설명 · 유효 연도 · 별칭의 출처). 바깥 시스템은 비워 둔다",
+              "default": "core",
+              "title": "Shape"
+            },
+            "description": "`sp` — 형제 Standard Platform 이 기준정보를 온전히 받는 모양(선은 쌍마다 기간 전부 · 계보 고정, 행은 설명 · 유효 연도 · 별칭의 출처). 바깥 시스템은 비워 둔다"
           }
         ],
         "responses": {
@@ -5322,6 +5380,22 @@
               "default": 500,
               "title": "Limit"
             }
+          },
+          {
+            "name": "shape",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "core",
+                "sp"
+              ],
+              "type": "string",
+              "description": "`sp` — 형제 Standard Platform 이 기준정보를 온전히 받는 모양(선은 쌍마다 기간 전부 · 계보 고정, 행은 설명 · 유효 연도 · 별칭의 출처). 바깥 시스템은 비워 둔다",
+              "default": "core",
+              "title": "Shape"
+            },
+            "description": "`sp` — 형제 Standard Platform 이 기준정보를 온전히 받는 모양(선은 쌍마다 기간 전부 · 계보 고정, 행은 설명 · 유효 연도 · 별칭의 출처). 바깥 시스템은 비워 둔다"
           }
         ],
         "responses": {
@@ -28150,6 +28224,35 @@
         ],
         "title": "ControlRuleOut"
       },
+      "CoreAliasOut": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "title": "CoreAliasOut",
+        "description": "사람이 붙인 별칭 하나 — 어디서 왔나 · 사람이 봤나까지(`shape=sp`)."
+      },
       "CoreCatalogOut": {
         "properties": {
           "system": {
@@ -28170,6 +28273,13 @@
             },
             "type": "array",
             "title": "Types"
+          },
+          "shapes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Shapes"
           }
         },
         "type": "object",
@@ -28302,6 +28412,72 @@
         ],
         "title": "CorePageOut",
         "description": "한 쪽 — `next` 가 빌 때까지 부른다."
+      },
+      "CorePeriodOut": {
+        "properties": {
+          "valid_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To"
+          },
+          "evidence_note": {
+            "type": "string",
+            "title": "Evidence Note",
+            "default": ""
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "pinned_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned Revision"
+          },
+          "pinned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned At"
+          },
+          "pinned_stale": {
+            "type": "boolean",
+            "title": "Pinned Stale",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "CorePeriodOut",
+        "description": "같은 두 객체 사이 선의 **기간 하나**(`shape=sp`) — 지난 · 앞으로의 선까지."
       },
       "CorePropertyOut": {
         "properties": {
@@ -28545,6 +28721,20 @@
             "type": "boolean",
             "title": "Deleted",
             "default": false
+          },
+          "periods": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CorePeriodOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods"
           }
         },
         "type": "object",
@@ -28623,6 +28813,53 @@
         "title": "CoreRelationPageOut",
         "description": "한 쪽 — 객체 쪽과 같은 규칙(`since` · `next` · `as_of`)."
       },
+      "CoreRowExtraOut": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "valid_from_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From Year"
+          },
+          "valid_to_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To Year"
+          },
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/CoreAliasOut"
+            },
+            "type": "array",
+            "title": "Aliases"
+          }
+        },
+        "type": "object",
+        "title": "CoreRowExtraOut",
+        "description": "**형제 SP 가 기준정보를 온전히 받는 칸**(`shape=sp`, ADR 0055) — 묶음의 행과 같은 것.\n\n기본 모양에 안 싣는 이유: 바깥 시스템에는 쓸모가 적고, 그쪽 코드에 박힌 봉투를 늘리지\n않는다. 빈 값도 싣는다(`None`) — 받는 쪽은 거울이라 비운 것을 비운다."
+      },
       "CoreRowOut": {
         "properties": {
           "key": {
@@ -28685,6 +28922,16 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Properties"
+          },
+          "extra": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoreRowExtraOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -28694,7 +28941,7 @@
           "updated_at"
         ],
         "title": "CoreRowOut",
-        "description": "행 하나 — **봉투는 고정.**"
+        "description": "행 하나 — **봉투는 고정.** `extra` 는 `shape=sp` 일 때만 찬다."
       },
       "CoreStatusOut": {
         "properties": {
@@ -53980,6 +54227,144 @@
           "deleted"
         ],
         "title": "SubjectOut"
+      },
+      "SubscribeItemOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "source_slug": {
+            "type": "string",
+            "title": "Source Slug",
+            "default": ""
+          },
+          "relations": {
+            "type": "boolean",
+            "title": "Relations",
+            "default": false
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name",
+            "default": ""
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "default": 0
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "action"
+        ],
+        "title": "SubscribeItemOut"
+      },
+      "SubscribeOut": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "title": "System"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SubscribeItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system",
+          "applied",
+          "items",
+          "created"
+        ],
+        "title": "SubscribeOut"
+      },
+      "SubscribeRequest": {
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Base Url"
+          },
+          "auth_kind": {
+            "type": "string",
+            "title": "Auth Kind",
+            "default": "bearer"
+          },
+          "auth_user": {
+            "type": "string",
+            "title": "Auth User",
+            "default": ""
+          },
+          "auth_secret": {
+            "type": "string",
+            "title": "Auth Secret",
+            "default": ""
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Groups"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "maximum": 43200.0,
+            "minimum": 0.0,
+            "title": "Interval Minutes",
+            "default": 0
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_url",
+          "groups"
+        ],
+        "title": "SubscribeRequest",
+        "description": "**묶음 구독**(ADR 0055) — 형제 SP 의 코어에서 사이드바 묶음의 타입들을 받는 소스를\n한 번에.\n\n기준정보가 커서 묶음 한 봉투(50만 줄)로 못 받을 때의 길이다: 정의는 「정의만」 묶음으로\n먼저 받고(사람이 미리 보고 적용 — 허브 관리가 선다), 행은 이 구독이 만든 소스들이 바뀐 것만\n쪽씩 받는다. 타입마다 소스를 손으로 만들면 묶음 하나에 열 번이고, 그중 하나의 출처 이름 ·\n선 받기를 빠뜨리면 그 타입만 조용히 안 들어온다."
       },
       "SummaryOut": {
         "properties": {
