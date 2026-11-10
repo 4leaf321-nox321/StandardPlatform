@@ -48,6 +48,7 @@ python sp_pipeline.py undo <판번호>                          # 되돌리기 �
 | `init --backfill` | 대량 적재용 실행 폴더 — 미리 보기는 **계획만**(적용을 두 번 돌지 않는다) · 웹훅과 감사는 묶음 한 건 · 못 찾은 참조는 그 칸만 비움. `preview`/`apply` 에 `--backfill` 을 줘도 그때 켜진다 | 0 |
 | `runs` | 넣은 판들(적용한 것만) — 최근 것부터. 되돌릴 번호를 여기서 찾는다. 「되돌릴 수 없음」 은 이미 되돌렸거나 기록 보관 기간(30일)이 지난 것 | 0 |
 | `undo <판번호>` | 그 판을 **통째로 되돌린다** — 기본은 계획이다. 사람이 읽은 뒤 `--apply`. 그 사이 남이 고친 줄 · 밖에서 가리키는 것이 생긴 객체 · 합치기는 되돌리지 않고 이유를 적는다 | 오류 있으면 1 |
+| `docx <원천.docx> [출력 폴더]` | Word 를 **그림 자리가 든 마크다운 초안 + 그림 파일**로 꺼낸다(`sp_docx.py`) — 아래 「Word 를 문서 속성으로」. 플랫폼에는 아무것도 보내지 않는다 | 0 |
 | `pull` | (쌍둥이) 허브가 내보낸 사이드바 묶음을 새 실행 폴더로 — `--group plm`(**여러 번 적어도 된다**), `SP_HUB_SERVER` · `SP_HUB_TOKEN`. 별칭·관계의 「맞춤」 과 **사라진 것**(`tombstones.json`)을 그대로 나른다. 그 뒤는 `validate` → `preview` → `apply`(받는 플랫폼에) | 0 |
 
 도구가 막고 멈추면 종료 코드 2 와 함께 이유를 적는다(검증 실패 · 미리 본 뒤 바뀜 · 서버 거절).
@@ -72,6 +73,26 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models    # 그 뒤는 위와
 
 대응 파일의 모양은 [AGENTS.md](AGENTS.md) 의 「표를 규칙으로 옮기기」. **대응 파일 · 사전 · 정의는
 원천과 같이 저장소 밖 작업 폴더에 둔다** — 열 이름과 코드 체계도 사내 정보다.
+
+## Word 를 문서 속성으로 — `sp_docx.py`
+
+플랫폼 객체의 문서 속성(마크다운 본문, ADR 0053)에 Word 를 넣을 때 **그림이 본문 어디에 있었는지를
+잃지 않게** 먼저 꺼낸다. AI 가 글만 뽑아 읽으면 그림 자리가 사라진다.
+
+```bash
+python sp_pipeline.py docx 00-원천/설계서.docx      # → docs/설계서/ (작업 폴더 밖이면 원천 옆 설계서-초안/)
+```
+
+| 나오는 것 | |
+| --- | --- |
+| `draft.md` | 읽는 차례대로 제목 `#` · 목록 `-` `1.` · 표 `\|` · 굵게. 그림은 **제 줄 하나로** `![캡션](media/image3.png?w=60)` — 폭은 Word 에서 본문 폭의 %(10 단위). 머리글 · 바닥글 · 쪽 번호 · 목차는 뺀다 |
+| `media/` | 쓰인 그림만, 읽는 차례대로 `image1.png` …(같은 그림은 한 파일). SVG 는 Word 가 넣어 둔 PNG 사본, **EMF · WMF(Visio · 붙여 넣은 엑셀 차트) · TIFF · BMP 는 PNG 로** — Windows 의 PowerShell(GDI+)로, WSL 에서도 |
+| `manifest.json` | 그림마다 차례 · 파일 · 원래 이름 · 형식 · 바꿨는지 · 폭 · 캡션 · 바로 앞 문단, 못 옮긴 것(차트 · SmartArt · 도형 · 바꾸지 못한 EMF)과 그 이유 — 초안에는 `> 그림: …` 으로 자리가 남는다 |
+
+그 뒤는 AI 가 플랫폼 MCP 로 한다(`attachment_upload_prepare` → `curl` → 그림 줄을 `photo:<첨부 id>` 로 →
+`document_write`) — 절차는 [AGENTS.md](AGENTS.md) 「Word 문서를 문서 속성으로」. **서버가 Word 를 풀지 않는다는
+ADR 0053 과 부딪치지 않는다** — 이 도구는 사용자 PC 에서 표준 라이브러리만으로 돌고, 글은 초안일 뿐 다듬기는
+AI 몫이다. zip 은 풀기 전에 항목 수 · 풀린 크기를 보고, 디스크에 경로째 풀지 않으며, DTD 가 든 XML 은 읽지 않는다.
 
 ## Claude Desktop · Gemini CLI 에 붙이기 (로컬 MCP)
 
@@ -180,6 +201,7 @@ python sp_setup.py --platform qings --server http://<새 주소>/qings --move   
 | `pipeline_guide` | 절차 · 형식의 정본(이 폴더의 AGENTS.md, 모델링 규약) |
 | `work_list` · `work_init` · `work_status` | 작업 폴더 — **어디까지 했고 다음이 무엇인지** |
 | `source_profile` · `source_head` | 원천 표 조사(계산) · 앞부분 보기 |
+| `docx_extract` | Word 원천 → `docs/<이름>/` 에 그림 자리가 든 초안 · 그림 파일(위 「Word 를 문서 속성으로」). 올리는 것은 플랫폼 MCP 로 |
 | `work_read` · `work_write` | 정의 · 판단표 · 대응 · 실행 폴더 행 파일(쓸 수 있는 자리가 정해져 있다) |
 | `decision_record` | 사람이 정한 것 — 정의 확정 · 미해결의 답 |
 | `table_convert` · `run_init` · `run_validate` · `run_preview` | 변환 · 빈 실행 · 검증 · 미리 보기 |
@@ -192,8 +214,8 @@ python sp_setup.py --platform qings --server http://<새 주소>/qings --move   
 **결과를 밖으로 못 들고 나오는 자리** — `source_profile` 의 끝과 `table_convert` 의 `brief` 에 **「말로
 전할 요약」**(수와 열 이름만, 값 없음)이 있다. 그것을 읽어 전하면 규칙을 고칠 수 있다.
 
-MCP 없이 명령으로도 같은 일을 한다 — `sp_work.py init|status|record`, `sp_profile.py`,
-`sp_table.py`, `sp_pipeline.py`.
+도구는 19개다. MCP 없이 명령으로도 같은 일을 한다 — `sp_work.py init|status|record`, `sp_profile.py`,
+`sp_table.py`, `sp_pipeline.py`(Word 꺼내기는 `sp_pipeline.py docx`).
 
 ## 그룹을 시작할 때
 

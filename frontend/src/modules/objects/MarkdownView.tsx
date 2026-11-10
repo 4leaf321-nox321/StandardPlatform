@@ -4,16 +4,27 @@
  * - **글은 HTML 로 해석하지 않는다**(react-markdown 의 기본) — 본문에 든 `<script>` 는 글자로 선다.
  *   AI 가 넣은 본문도 같다.
  * - **안쪽 링크(`/o/…`)는 화면 안에서 옮긴다** — 새로 고치지 않는다. 바깥 링크는 새 탭.
- * - **그림은 아직 그리지 않는다** — 폐쇄망에서 바깥 주소의 그림은 깨져 보이고, 첨부를 가리키는 길은
- *   다음 판이다. 자리에 캡션을 남긴다.
+ * - **그림은 그 문서의 그림(첨부)만 그린다**(ADR 0056) — 본문의 `![캡션](photo:<첨부 id>?w=<폭>)`.
+ *   폭은 본문 너비의 %(비우면 그림 크기대로, 본문보다 넓으면 맞춘다). 누르면 크게 본다.
+ *   - 넘겨받은 `photos`(그 문서 자리의 첨부)에 있고 서버가 이미지로 읽은 것만 띄운다 — blob 주소는
+ *     앱과 같은 출처라 HTML · SVG 를 띄우면 그 안의 스크립트가 앱의 권한으로 돈다(ADR 0012).
+ *   - 없는 id(삭제한 그림 · 남의 문서 그림)는 캡션과 까닭을 적는다 — 옛 판도 그렇게 보인다.
+ *   - 바깥 주소의 그림은 그리지 않는다 — 폐쇄망에서 깨져 보인다. 자리에 캡션을 남긴다.
  * - 제목 h1 ~ h3 마다 id 를 단다 — 목차가 그리로 옮기고, 뜻으로 찾기 · 문서 속 링크의 `#<제목 id>` 가
  *   그 절로 간다(같은 제목이 또 나오면 `-2`). 서버의 `semantic.services.slug_of` 와 같은 규칙.
  */
 
-import Markdown from 'react-markdown'
+import { useMemo, useState } from 'react'
+import Markdown, { defaultUrlTransform } from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link } from 'react-router-dom'
+
+import { attachmentPaths } from '@/modules/files/api'
+import type { Attachment } from '@/modules/files/api'
+import { ImageViewer } from '@/modules/files/ImageViewer'
+import { photoSource } from '@/modules/files/photoMarker'
+import { useBlobUrl } from '@/shared/hooks/useBlobUrl'
 
 /** 본문을 푼 나무(hast)의 마디 — 여기서 쓰는 만큼만. */
 interface TreeNode {
@@ -122,23 +133,120 @@ const COMPONENTS: Components = {
         {children}
       </a>
     ),
-  img: ({ alt }) => (
-    <span className="text-muted-foreground rounded border border-dashed px-1.5 py-0.5 text-xs">
-      그림{alt ? `: ${alt}` : ''}
-    </span>
-  ),
 }
 
-export function MarkdownView({ body }: { body: string }) {
+/** 그리지 않는 그림의 자리 — 캡션과 (있으면) 까닭. */
+function Caption({ alt, why }: { alt?: string; why?: string }) {
+  return (
+    <span className="text-muted-foreground rounded border border-dashed px-1.5 py-0.5 text-xs">
+      그림{alt ? `: ${alt}` : ''}
+      {why ? ` — ${why}` : ''}
+    </span>
+  )
+}
+
+/** 사진 표시의 그림 하나 — 폭(본문 너비의 %)이 작으면 미리보기(320px), 크면 원본을 받는다. */
+function Figure({
+  photo,
+  width,
+  alt,
+  onOpen,
+}: {
+  photo: Attachment
+  width: number | null
+  alt: string
+  onOpen: () => void
+}) {
+  // 본문 너비의 40% 를 넘게 그리면 미리보기(긴 변 320px)로는 흐리다 — 그때만 원본을 받는다.
+  const thumb = width !== null && width <= 40
+  const blob = useBlobUrl(
+    thumb ? attachmentPaths.thumbnail(photo.id) : attachmentPaths.content(photo.id),
+  )
+  const name = alt || photo.original_name
+  const ratio = photo.width && photo.height ? `${photo.width} / ${photo.height}` : undefined
+  return (
+    <span
+      className="my-3 block max-w-full"
+      style={{
+        width: width !== null ? `${width}%` : undefined,
+        // 폭을 안 적었으면 그림 크기대로 — 본문보다 넓으면 맞춘다.
+        maxWidth: width === null && photo.width ? `min(100%, ${photo.width}px)` : undefined,
+      }}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        title={`${name} 크게 보기`}
+        aria-label={`${name} 크게 보기`}
+        style={{ aspectRatio: ratio }}
+        className="bg-muted/30 block w-full overflow-hidden rounded-sm border"
+      >
+        {blob.url ? (
+          <img src={blob.url} alt={name} className="size-full object-contain" />
+        ) : blob.error ? (
+          <span className="text-muted-foreground block p-2 text-xs">
+            그림을 받지 못했습니다 — {blob.error.message}
+          </span>
+        ) : null}
+      </button>
+      {alt && <span className="text-muted-foreground mt-1 block text-center text-xs">{alt}</span>}
+    </span>
+  )
+}
+
+/** `photo:` 는 사진 표시다 — 기본 거르기(`defaultUrlTransform`)는 모르는 주소를 지운다. */
+function urlTransform(url: string): string {
+  return url.startsWith('photo:') ? url : defaultUrlTransform(url)
+}
+
+/**
+ * 마크다운 본문. `photos` 는 그 문서 자리의 첨부(`owner_field` 가 문서 키) — 주면 사진 표시를
+ * 그림으로 그리고, 안 주면(그림을 모르는 자리) 캡션만 남긴다.
+ */
+export function MarkdownView({ body, photos }: { body: string; photos?: Attachment[] }) {
+  const [open, setOpen] = useState<string | null>(null)
+  const images = useMemo(() => (photos ?? []).filter((one) => one.is_image), [photos])
+  const components = useMemo<Components>(
+    () => ({
+      ...COMPONENTS,
+      img: ({ src, alt }) => {
+        const source = typeof src === 'string' ? photoSource(src) : null
+        if (!source || photos === undefined) return <Caption alt={alt} />
+        const photo = images.find((one) => one.id.toLowerCase() === source.id)
+        if (!photo) {
+          return <Caption alt={alt} why="삭제됐거나 이 문서의 그림이 아닙니다" />
+        }
+        return (
+          <Figure
+            photo={photo}
+            width={source.width}
+            alt={alt ?? ''}
+            onOpen={() => setOpen(photo.id)}
+          />
+        )
+      },
+    }),
+    [images, photos],
+  )
+  const index = open ? images.findIndex((one) => one.id === open) : -1
   return (
     <div className="text-sm break-words">
       <Markdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHeadingIds]}
-        components={COMPONENTS}
+        components={components}
+        urlTransform={urlTransform}
       >
         {body}
       </Markdown>
+      {index >= 0 && (
+        <ImageViewer
+          images={images}
+          index={index}
+          onIndex={(next) => setOpen(images[next]?.id ?? null)}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </div>
   )
 }

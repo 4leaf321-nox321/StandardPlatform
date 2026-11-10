@@ -62,14 +62,16 @@ def owner(
     if owner_field is not None:
         props = properties_of(db, object_type.id)
         prop = next((one for one in props if one.key == owner_field), None)
-        if prop is None or prop.data_type != "file":
+        if prop is None or prop.data_type not in ("file", "document"):
             raise Conflict(
                 code("OBJECTS", 97),
                 f"{object_type.label}에는 파일 속성 「{owner_field}」 가 없습니다 — 첨부는 "
-                "파일 속성이나 「그 밖의 첨부」에만 업로드할 수 있습니다.",
+                "파일 속성 · 문서 속성(그림)이나 「그 밖의 첨부」에만 업로드할 수 있습니다.",
                 details={"type_slug": object_type.slug, "owner_field": owner_field},
             )
-        accept = prop.accept
+        # **문서 속성의 자리는 그 문서의 그림이다**(ADR 0056) — 본문 사이에 그리므로 서버가
+        # 이미지로 읽은 것만 받는다. 성적서(PDF)는 파일 속성이나 「그 밖의 첨부」 로 간다.
+        accept = "image" if prop.data_type == "document" else prop.accept
 
     def changed(db: Session, user: User, field: str | None, name: str, added: bool) -> None:
         audit.record(

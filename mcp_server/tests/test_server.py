@@ -880,6 +880,51 @@ def test_바탕을_모르면_답은_그대로이고_link_가_없으면_묻지도
     assert [r.url.path for r in seen] == ["/api/ontology/schema"]
 
 
+def test_그림_여러_장은_장마다_표를_받아_한_번에_돌릴_명령을_준다() -> None:
+    """Word 의 그림 서른 장을 한 장씩 부르면 도구 호출이 예순 번이다(표 · curl). 목록이면
+    장마다 표를 받아 차례대로 돌려주고, 문서의 그림 자리면 본문에 표시 줄을 넣으라고 말한다
+    (ADR 0056)."""
+    count = iter(range(1, 10))
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={
+                "ticket": f"t{next(count)}",
+                "upload_path": "/api/attachments/upload",
+                "upload_url": "https://sp.example.com/api/attachments/upload",
+                "accept": "image",
+                "max_bytes": 1,
+                "expires_in_seconds": 300,
+            },
+        )
+
+    seen = _serve(handler)
+    got = asyncio.run(
+        server.attachment_upload_prepare(
+            _ctx("Bearer t"),
+            "paper",
+            "o1",
+            ["/w/media/image1.png", "/w/media/image2.jpg"],
+            field="body",
+        )
+    )
+    assert [json.loads(one.content)["filename"] for one in seen] == [
+        "image1.png",
+        "image2.jpg",
+    ]
+    assert [one["local_path"] for one in got["uploads"]] == [
+        "/w/media/image1.png",
+        "/w/media/image2.jpg",
+    ]
+    lines = got["script"].split("\n")
+    assert len(lines) == 2 and "t1" in lines[0] and "t2" in lines[1]
+    assert "document_write" in got["next"] and "photo:" in got["next"]
+    assert asyncio.run(
+        server.attachment_upload_prepare(_ctx("Bearer t"), "paper", "o1", [], field="body")
+    ) == {"error": "올릴 파일의 경로(`local_path`)를 하나는 적습니다."}
+
+
 def test_파일을_주는_자리는_바이트를_안_흘린다() -> None:
     """엑셀을 주는 자리다. 바이트를 도구 결과로 흘리면 대화가 쓰레기로 찬다."""
     _serve(

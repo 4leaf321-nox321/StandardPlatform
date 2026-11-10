@@ -15,6 +15,7 @@
       02-정의/       ontology.json · 판단표.md
       03-대응/       <원천 이름>.table.json
       runs/          실행 폴더들(sp_pipeline)
+      docs/          Word 에서 꺼낸 글 초안 · 그림(sp_docx — 문서 속성에 넣기 전에)
       결정기록.md    누가 · 언제 · 무엇을 · 왜
 
 표준 라이브러리만 쓴다. 작업 폴더는 **저장소 밖**에 둔다 — 사내 데이터가 git 에 섞이지 않게.
@@ -42,6 +43,9 @@ SURVEY = "01-조사"
 DEFINITION = "02-정의"
 MAPPING = "03-대응"
 RUNS = "runs"
+DOCS = "docs"
+"""Word(.docx)에서 꺼낸 글 초안과 그림 — `docs/<이름>/` 의 `draft.md` · `media/` ·
+`manifest.json`."""
 DECISIONS = "결정기록.md"
 ONTOLOGY = f"{DEFINITION}/ontology.json"
 TABLES = {".csv"}

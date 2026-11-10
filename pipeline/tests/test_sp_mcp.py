@@ -33,6 +33,7 @@ TOOLS = {
     "decision_record",
     "source_profile",
     "source_head",
+    "docx_extract",
     "table_convert",
     "run_init",
     "hub_pull",

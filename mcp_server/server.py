@@ -2586,7 +2586,11 @@ async def document_write(
     본문은 마크다운(제목 · 목록 · 표). 객체를 가리킬 때는
     **`[이름](/o/<타입 slug>/<객체 id>)`** 링크로 쓴다 — 그 객체의 상세에 「이 객체를 언급한
     문서」 로 모인다. 100만 자까지.
-    Word 원본은 마크다운으로 바꿔 넣는다(제목 → `#`, 표 → `|` 표). 그림은 아직 못 넣는다."""
+    Word 원본은 마크다운으로 바꿔 넣는다(제목 → `#`, 표 → `|` 표).
+
+    **그림(ADR 0056)** — `attachment_upload_prepare(field=<이 문서 키>)` 로 먼저 올리고, 돌아온
+    id 로 그 자리에 제 줄 하나로 `![캡션](photo:<id>?w=<폭>)`(폭은 본문 너비의 %). 셸이 없어
+    못 올리면 그 자리에 `> 그림: <캡션>` 을 남긴다."""
     return await _put(
         ctx,
         f"/api/objects/{type_slug}/{object_id}/documents/{key}",
@@ -2769,22 +2773,27 @@ async def attachment_upload_prepare(
     ctx: Context,
     type_slug: str,
     object_id: str,
-    local_path: str,
+    local_path: str | list[str],
     field: str | None = None,
     filename: str | None = None,
     owner_table: str = "objects",
 ) -> Any:
-    """사진 · 파일을 객체 · 자주검증 칸에 붙일 **curl 명령** — 바이트는 모델을 안 거친다.
+    """사진 · 파일을 객체 · 자주검증 칸 · **문서의 그림 자리**에 붙일 **curl 명령** — 바이트는
+    모델을 안 거친다.
 
     ⚠️ 파일을 읽어 base64 로 옮기거나 내용을 도구 인자에 넣지 않는다 — 1MB 가 수십만 토큰이다.
     이 도구는 한 번 쓰는 업로드 표(5분)를 받아 명령을 돌려줄 뿐이고, **파일은 당신의 셸이
     `curl` 로 직접** 올린다. 셸이 없는 클라이언트면 사람에게 화면에서 올려 달라고 한다.
 
     - `local_path`: 셸에서 보이는 그 파일의 경로 — 이 서버는 그 파일을 열지 않는다
-      (명령에만 넣는다).
+      (명령에만 넣는다). **여러 장이면 목록으로** 준다(Word 의 그림들) — 장마다 표를 받아
+      `uploads[]`(준 차례대로)와 한 번에 돌릴 `script` 가 온다. 표는 5분이라 받은 즉시 돌린다.
     - `field`: 파일 칸의 키(`object_fields` · `ontology_schema` 의 `data_type: file`).
       비우면 「그 밖의 첨부」. 칸의 `accept` 가 `image` 면 **서버가 이미지(PNG · JPEG ·
       GIF · WebP)로 읽은 것만** 붙는다.
+      **문서 속성의 키**(`data_type: document`)를 주면 그 문서의 그림 자리다(이미지만) —
+      올린 뒤 돌아온 id 로 본문의 그 자리에 제 줄 하나로 `![캡션](photo:<id>?w=<폭>)` 을
+      넣어 `document_write` 한다(폭은 본문 너비의 % · 10 ~ 100, 비우면 그림 크기대로).
     - `owner_table`: 기본은 객체(`objects`). **자주검증 표의 칸 사진**이면 `"jv_rows"` —
       `object_id` 는 줄 id, `field` 는 글 칸(`topic` · `problem` · `action` · `remark`),
       `type_slug` 는 비워도 된다(`""`). 올린 뒤 돌아온 id 로 그 칸 글에 표시 줄
@@ -2796,52 +2805,82 @@ async def attachment_upload_prepare(
       구성원 · 토큰은 `objects:write` — 첨부는 공통 자리라 확장의 칸도 이 범위다). 안 되면 표가
       안 나온다.
     """
-    name = filename or PureWindowsPath(local_path).name or "이름없음"
-    issued = await _post(
-        ctx,
-        "/api/attachments/tickets",
-        {
-            "owner_table": (owner_table or "objects").strip(),
-            "owner_id": object_id,
-            "owner_field": field,
-            "filename": name,
-        },
-    )
-    if not isinstance(issued, dict) or "error" in issued:
-        return issued
-    url = issued.get("upload_url")
-    if not url:
-        origin = _public_origin(ctx)
-        if origin is None:
-            return {
-                "error": "이 MCP 에 들어온 주소를 알 수 없어 업로드 주소를 못 만듭니다 — "
-                "운영자에게 `.env` 의 MCP_PUBLIC_URL 을 적어 달라고 하세요.",
-            }
-        url = f"{origin}{issued['upload_path']}"
-    command = (
-        f"curl -sS -T {shlex.quote(local_path)} "
-        f"-H 'X-Upload-Ticket: {issued['ticket']}' "
-        f"'{url}?filename={quote(name, safe='')}'"
-    )
-    return {
-        "curl": command,
-        "owner_table": (owner_table or "objects").strip(),
-        "type_slug": type_slug,
-        "object_id": object_id,
-        "field": field,
-        "accept": issued.get("accept"),
-        "max_bytes": issued.get("max_bytes"),
-        "expires_in_seconds": issued.get("expires_in_seconds"),
-        "next": "셸에서 curl 을 그대로 한 번 실행합니다(5분 안). 응답 JSON 의 id · is_image "
-        "로 붙었는지 확인하고 사용자에게 알립니다. Windows PowerShell 이면 curl.exe 로 "
-        "부릅니다."
-        + (
+    table = (owner_table or "objects").strip()
+    many = not isinstance(local_path, str)
+    paths = [local_path] if isinstance(local_path, str) else list(local_path)
+    if not paths:
+        return {"error": "올릴 파일의 경로(`local_path`)를 하나는 적습니다."}
+    uploads: list[dict[str, Any]] = []
+    for path in paths:
+        name = (None if many else filename) or PureWindowsPath(path).name or "이름없음"
+        issued = await _post(
+            ctx,
+            "/api/attachments/tickets",
+            {
+                "owner_table": table,
+                "owner_id": object_id,
+                "owner_field": field,
+                "filename": name,
+            },
+        )
+        if not isinstance(issued, dict) or "error" in issued:
+            # 앞에서 받은 표는 5분 뒤 저절로 못 쓰게 된다 — 남는 것이 없다.
+            return issued
+        url = issued.get("upload_url")
+        if not url:
+            origin = _public_origin(ctx)
+            if origin is None:
+                return {
+                    "error": "이 MCP 에 들어온 주소를 알 수 없어 업로드 주소를 못 만듭니다 — "
+                    "운영자에게 `.env` 의 MCP_PUBLIC_URL 을 적어 달라고 하세요.",
+                }
+            url = f"{origin}{issued['upload_path']}"
+        command = (
+            f"curl -sS -T {shlex.quote(path)} "
+            f"-H 'X-Upload-Ticket: {issued['ticket']}' "
+            f"'{url}?filename={quote(name, safe='')}'"
+        )
+        uploads.append({"local_path": path, "curl": command, "issued": issued})
+    first = uploads[0]["issued"]
+    if table == "jv_rows":
+        hint = (
             " 자주검증 칸이면 그 id 로 칸 글에 `![](photo:<id>?w=50)` 한 줄을 넣어 "
             "자리 · 폭을 정합니다(한 장을 읽고 expected 와 함께 — 안 넣으면 칸 끝에 "
             "섭니다)."
-            if (owner_table or "").strip() == "jv_rows"
-            else ""
-        ),
+        )
+    elif field and first.get("accept") == "image":
+        hint = (
+            " 문서의 그림 자리면 그 id 로 본문의 그 자리에 제 줄 하나로 "
+            "`![캡션](photo:<id>?w=<폭>)` 을 넣어 `document_write` 합니다 — 안 넣으면 "
+            "본문에 안 보입니다."
+        )
+    else:
+        hint = ""
+    shared: dict[str, Any] = {
+        "owner_table": table,
+        "type_slug": type_slug,
+        "object_id": object_id,
+        "field": field,
+        "accept": first.get("accept"),
+        "max_bytes": first.get("max_bytes"),
+        "expires_in_seconds": first.get("expires_in_seconds"),
+    }
+    if not many:
+        return {
+            "curl": uploads[0]["curl"],
+            **shared,
+            "next": "셸에서 curl 을 그대로 한 번 실행합니다(5분 안). 응답 JSON 의 id · "
+            "is_image 로 붙었는지 확인하고 사용자에게 알립니다. Windows PowerShell 이면 "
+            "curl.exe 로 부릅니다." + hint,
+        }
+    return {
+        "uploads": [{"local_path": one["local_path"], "curl": one["curl"]} for one in uploads],
+        "script": "\n".join(one["curl"] for one in uploads),
+        **shared,
+        "next": f"표 {len(uploads)}장을 받았습니다(5분). `script` 를 셸에서 바로 한 번 "
+        "돌립니다 — 줄마다 응답 JSON 이 하나씩, `uploads` 와 같은 차례로 나옵니다. 실패한 "
+        "줄은 그 말을 사용자에게 전하고 그 파일만 이 도구로 다시 표를 받습니다. Windows "
+        "PowerShell 이면 curl 을 curl.exe 로 바꿉니다." + hint,
     }
 
 

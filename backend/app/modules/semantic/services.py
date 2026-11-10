@@ -54,6 +54,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.modules.accounts.models import User
+from app.modules.files import photomarks
 from app.modules.objects import system, typecounts
 from app.modules.objects.models import ObjectAlias, ObjectDocument, ObjectInstance
 from app.modules.objects.services import properties_of
@@ -398,7 +399,12 @@ def document_pieces(row: ObjectInstance, key: str, body: str) -> list[Piece]:
     out: list[Piece] = []
     for section in sections(body):
         head = f"{row.label} › {section.heading}" if section.heading else row.label
-        for chunk in _chunks(section.text):
+        # 그림 표시(ADR 0056)는 캡션만 남긴다 — 첨부 id 36자가 조각의 뜻을 흐린다. 그림만 있는
+        # 절은 조각이 없다(찾을 글이 없다).
+        text_value = photomarks.readable(section.text).strip()
+        if not text_value:
+            continue
+        for chunk in _chunks(text_value):
             out.append(
                 Piece(
                     part=f"doc:{key}:{len(out)}",

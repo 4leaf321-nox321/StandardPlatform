@@ -30,6 +30,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import sp_docx
 import sp_pipeline as pipeline
 import sp_profile
 import sp_table
@@ -65,7 +66,9 @@ mcp = FastMCP(
         "그 자리에서 멈추고 "
         "묻는다. 통계를 스스로 세지 말고 `source_profile` 결과를 쓴다. "
         "**이 PC 는 플랫폼 여럿에 넣을 수 있다** — 작업 폴더가 넣을 곳을 기억하고"
-        "(`work_list` 에 보인다), 여럿인데 정해지지 않았으면 짐작하지 말고 사람에게 묻는다."
+        "(`work_list` 에 보인다), 여럿인데 정해지지 않았으면 짐작하지 말고 사람에게 묻는다. "
+        "Word 를 객체의 문서 속성(마크다운 본문)에 넣을 때는 글만 뽑지 말고 `docx_extract` 로 "
+        "그림 자리째 꺼낸다(`pipeline_guide('docx')`)."
     ),
 )
 
@@ -151,6 +154,7 @@ def pipeline_guide(topic: str = "") -> dict[str, Any]:
       - `run` 실행 폴더의 모양(객체 행 · 관계 행 · 미해결)
       - `table` 대응 파일(sp-table/1)과 해석기 — 표를 옮기기 전에
       - `sources` 원천별(표 / 문서)로 다른 것
+      - `docx` Word 문서를 객체의 문서 속성(마크다운 본문)으로 — 그림 자리를 지켜서
       - `modeling` 무엇을 타입 · 칸 · 관계로 만드나 — 정의 초안 전에"""
     try:
         sections = _sections(AGENTS.read_text(encoding="utf-8"))
@@ -356,6 +360,67 @@ def source_head(work: str, source: str, rows: int = 20) -> str:
     for number, row in table.rows[: max(1, min(rows, HEAD_LIMIT))]:
         writer.writerow([number, *(row[name] for name in table.header)])
     return f"{table.name} · {len(table.rows)}행 · {table.encoding}\n{buffer.getvalue()}"
+
+
+@mcp.tool()
+def docx_extract(work: str, source: str, name: str = "") -> dict[str, Any]:
+    """Word(.docx) 원천을 **그림 자리가 든 마크다운 초안 + 그림 파일**로 꺼낸다 — 플랫폼 객체의
+    문서 속성(마크다운 본문)에 넣기 전에. 글만 뽑아 읽으면 그림이 어디 있었는지가 사라진다.
+    **플랫폼에는 아무것도 올리지 않는다.**
+
+    `docs/<name>/` 에 `draft.md`(그림은 제 줄 하나로 `![캡션](media/image3.png?w=<폭 %>)`) ·
+    `media/`(EMF · WMF 는 PNG 로 바꿔서) · `manifest.json`(그림마다 캡션 · 폭 · 바로 앞 문단 ·
+    못 옮긴 것과 이유). `name` 을 비우면 원천 이름 — 같은 이름으로 다시 부르면 새로 꺼낸다.
+
+    돌려주는 것: `files`(올릴 파일 — 같은 그림은 한 번, 셸에서 보이는 `local_path`) ·
+    `figures`(그림 자리마다 초안의 줄과 그 파일) · `not_moved`(못 옮긴 것과 이유).
+    그 뒤(`pipeline_guide("docx")`): 플랫폼 MCP `attachment_upload_prepare(local_path=[files 의
+    local_path 들])` → `curl` → 그림 줄의 경로를 그 파일의 `photo:<첨부 id>` 로 → 다듬어
+    `document_write`. 셸이 없으면 그림은 사람이 화면에서 올린다."""
+    folder = _work(work)
+    path = _source(folder, source)
+    out = sp_work.inside(folder / sp_work.DOCS, sp_docx.folder_name(name or path.stem))
+    result = sp_docx.extract(path, out)
+    shown = out.relative_to(folder).as_posix()
+    moved = [one for one in result.figures if one["moved"]]
+    files: dict[str, dict[str, Any]] = {}
+    for one in moved:
+        entry = files.setdefault(
+            one["file"],
+            # 셸에서 보이는 그 파일 — `attachment_upload_prepare(local_path=[…])` 에 그대로.
+            {"file": one["file"], "local_path": str(out / one["file"]), "figures": []},
+        )
+        entry["figures"].append(one["order"])
+    return {
+        "folder": shown,
+        "draft": f"{shown}/{sp_docx.DRAFT}",
+        "draft_chars": result.draft_chars,
+        "files": list(files.values()),
+        "figures": [
+            {
+                "order": one["order"],
+                "line": one["line"],
+                "file": one["file"],
+                "caption": one["caption"],
+                "width": one["width"],
+                "converted": one["converted"],
+            }
+            for one in moved
+        ],
+        "not_moved": result.not_moved,
+        "notes": result.notes,
+        "next": [
+            f'초안을 읽고 원본과 맞춰 다듬는다 — work_read(work, "{shown}/{sp_docx.DRAFT}")',
+            "플랫폼 MCP attachment_upload_prepare(type_slug, object_id, local_path=[files 의 "
+            "local_path 를 그 차례대로], field=<문서 키>) → 돌아온 script 를 셸에서 바로 한 번"
+            "(표는 5분) — 줄마다 첨부 id 가 같은 차례로",
+            "그림 줄 `![캡션](media/imageN.png?w=60)` 의 경로를 그 파일의 "
+            "`photo:<첨부 id>` 로 — `![캡션](photo:<id>?w=60)`",
+            "document_read 로 판을 읽고 document_write",
+            "셸이 없는 클라이언트면 그림 줄을 `> 그림: <캡션>` 으로 두고 사람에게 화면에서 "
+            "올려 달라고 한다(not_moved 도 함께 알린다)",
+        ],
+    }
 
 
 # --------------------------------------------------------------------------

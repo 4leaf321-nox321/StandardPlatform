@@ -104,6 +104,7 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "decision_record",
         "source_profile",
         "source_head",
+        "docx_extract",
         "table_convert",
         "run_init",
         "hub_pull",

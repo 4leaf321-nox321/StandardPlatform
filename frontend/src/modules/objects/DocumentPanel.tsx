@@ -6,17 +6,31 @@
  *   적는다 — AI 가 쓴 판을 사람이 검토하는 흐름의 근거다. 「판 이력」 이 옛 판을 열고 되돌린다.
  * - **고치기:** 작성 · 미리보기. 저장할 때 보고 고친 판을 보낸다 — 그사이 누가(사람이든 AI 든)
  *   먼저 고쳤으면 덮지 않고 회의 표와 같은 충돌 상자(「상대 글 사용」 · 「내 글로 덮어쓰기」)가 선다.
+ * - **그림(ADR 0056):** 문서의 그림은 그 문서 자리(`owner_field` = 문서 키)의 첨부이고, 본문의 사진
+ *   표시(`![캡션](photo:<id>?w=<폭>)`)가 자리 · 폭을 정한다. 「그림 추가」 · 붙여넣기(화면 캡처) ·
+ *   끌어다 놓기는 업로드한 뒤 **커서 자리에** 표시를 넣는다. 본문에서 표시를 빼도 첨부는 남는다 —
+ *   옛 판이 그 그림을 가리킨다. 삭제는 「이 문서의 그림」 에서, 본문 몇 곳이 쓰는지 보고 한다.
  */
 
 import { useEffect, useRef, useState } from 'react'
+import type { ClipboardEvent, DragEvent } from 'react'
 import { useLocation } from 'react-router-dom'
-import { FileText, History, Pencil } from 'lucide-react'
+import { FileText, History, ImagePlus, Pencil } from 'lucide-react'
 
+import { attachmentApi } from '@/modules/files/api'
+import type { Attachment } from '@/modules/files/api'
+import { IMAGE_ACCEPT } from '@/modules/files/AttachmentList'
+import { AttachmentThumbnail } from '@/modules/files/AttachmentThumbnail'
+import { ImageViewer } from '@/modules/files/ImageViewer'
+import { useAttachmentUpload } from '@/modules/files/useAttachmentUpload'
 import { MarkdownView } from '@/modules/objects/MarkdownView'
+import { insertPhotos, placedIn, usesOf } from '@/modules/objects/documentPhotos'
 import { documentApi } from '@/modules/objects/documents'
 import type { DocumentRevision, ObjectDocument } from '@/modules/objects/documents'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { ApiError } from '@/shared/api/client'
+import { pastedFiles } from '@/shared/components/AutoSaveText'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ConflictBox } from '@/shared/components/ConflictBox'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -63,6 +77,77 @@ function MetaLine({ doc }: { doc: ObjectDocument }) {
   )
 }
 
+/**
+ * 이 문서의 그림 — 고칠 때만 선다. 본문에 다시 추가하거나 삭제한다. 본문이 안 쓰는 그림(AI 가
+ * 올리기만 한 것 · 본문에서 뺀 것)에는 「본문에 없음」 을 붙인다 — 화면에는 안 보이므로.
+ */
+function PhotoShelf({
+  photos,
+  draft,
+  disabled,
+  onAdd,
+  onRemove,
+}: {
+  photos: Attachment[]
+  draft: string
+  disabled: boolean
+  onAdd: (id: string) => void
+  onRemove: (photo: Attachment) => void
+}) {
+  const [open, setOpen] = useState<number | null>(null)
+  const images = photos.filter((one) => one.is_image)
+  if (images.length === 0) return null
+  const placed = placedIn(draft)
+  return (
+    <div className="space-y-1">
+      <p className="text-muted-foreground text-xs">이 문서의 그림 {images.length}장</p>
+      <ul className="flex flex-wrap gap-2">
+        {images.map((one, index) => (
+          <li key={one.id} className="w-28 space-y-1 text-xs">
+            <AttachmentThumbnail
+              id={one.id}
+              name={one.original_name}
+              onOpen={() => setOpen(index)}
+              className="size-28"
+            />
+            <p className="truncate" title={one.original_name}>
+              {one.original_name}
+            </p>
+            {!placed.has(one.id.toLowerCase()) && (
+              <span className="rounded border border-amber-500/50 px-1 text-amber-800 dark:text-amber-300">
+                본문에 없음
+              </span>
+            )}
+            <div className="flex gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-1.5 text-xs"
+                disabled={disabled}
+                onClick={() => onAdd(one.id)}
+              >
+                본문에 추가
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive h-6 px-1.5 text-xs"
+                disabled={disabled}
+                onClick={() => onRemove(one)}
+              >
+                삭제
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {open !== null && (
+        <ImageViewer images={images} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />
+      )}
+    </div>
+  )
+}
+
 /** 판 목록 · 옛 판 보기 · 그 판으로 되돌리기. */
 function RevisionsDialog({
   typeSlug,
@@ -70,6 +155,7 @@ function RevisionsDialog({
   def,
   current,
   canEdit,
+  photos,
   onClose,
   onRestore,
 }: {
@@ -78,6 +164,7 @@ function RevisionsDialog({
   def: PropertyDef
   current: number
   canEdit: boolean
+  photos: Attachment[]
   onClose: () => void
   onRestore: (body: string, revision: number) => void
 }) {
@@ -152,7 +239,7 @@ function RevisionsDialog({
                   )}
                 </div>
                 <div className="max-h-[60vh] overflow-y-auto rounded-md border p-3">
-                  <MarkdownView body={shown.data.body} />
+                  <MarkdownView body={shown.data.body} photos={photos} />
                 </div>
               </div>
             ) : (
@@ -193,6 +280,58 @@ export function DocumentPanel({
   const [history, setHistory] = useState(false)
   const [headings, setHeadings] = useState<Heading[]>([])
   const article = useRef<HTMLDivElement>(null)
+  const editor = useRef<HTMLTextAreaElement>(null)
+  const picker = useRef<HTMLInputElement>(null)
+  /** 넣은 뒤 옮길 커서 — 글이 바뀐 다음 그림에서 옮긴다. */
+  const caret = useRef<number | null>(null)
+  const [removing, setRemoving] = useState<Attachment | null>(null)
+  // 이 문서의 그림 — 그 문서 자리(`owner_field` = 문서 키)의 첨부.
+  const photos = useResource(
+    () => attachmentApi.list('objects', objectId, def.key),
+    [objectId, def.key],
+  )
+  const upload = useAttachmentUpload(
+    { ownerTable: 'objects', ownerId: objectId, ownerField: def.key },
+    photos.reload,
+  )
+  const shelf = photos.data ?? []
+
+  useEffect(() => {
+    if (caret.current === null || !editor.current) return
+    editor.current.focus()
+    editor.current.setSelectionRange(caret.current, caret.current)
+    caret.current = null
+  })
+
+  /** 커서 자리에 그림 표시를 넣는다 — 줄 중간이면 그 줄을 가른다. */
+  function placeAtCaret(ids: string[]) {
+    if (ids.length === 0) return
+    const at = editor.current?.selectionStart ?? draft.length
+    const next = insertPhotos(draft, at, ids)
+    caret.current = next.caret
+    setDraft(next.text)
+  }
+
+  async function addPhotos(files: File[]) {
+    const made = await upload.uploadAll(files)
+    placeAtCaret(made.map((one) => one.id))
+  }
+
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    // 글이 함께 오면 글을 붙인다(`pastedFiles`) — 화면 캡처처럼 그림만 올 때만 업로드한다.
+    const files = pastedFiles(event)
+    if (files.length === 0) return
+    event.preventDefault()
+    void addPhotos(files)
+  }
+
+  function onDrop(event: DragEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (files.length === 0) return
+    event.preventDefault()
+    // 놓은 자리로 커서가 옮겨 가지 않으므로, 지금 커서 자리에 넣는다.
+    void addPhotos(files)
+  }
 
   const data = doc.data
   const body = data?.body ?? ''
@@ -295,23 +434,61 @@ export function DocumentPanel({
             >
               미리보기
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={saving || preview || Boolean(upload.progress)}
+              title="이미지를 업로드해 커서 자리에 추가합니다 — 붙여넣기(화면 캡처) · 끌어다 놓기도 됩니다"
+              onClick={() => picker.current?.click()}
+            >
+              <ImagePlus className="mr-1 size-4" />
+              그림 추가
+            </Button>
+            <input
+              ref={picker}
+              type="file"
+              accept={IMAGE_ACCEPT}
+              multiple
+              hidden
+              aria-label={`${def.label} 그림 선택`}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? [])
+                event.target.value = ''
+                void addPhotos(files)
+              }}
+            />
             <span className="text-muted-foreground ml-auto self-center text-xs tabular-nums">
-              {draft.length.toLocaleString()}자 · 마크다운(# 제목 · - 목록 · | 표)
+              {upload.progress ??
+                `${draft.length.toLocaleString()}자 · 마크다운(# 제목 · - 목록 · | 표 · 그림 폭은 ?w=50)`}
             </span>
           </div>
+          <ErrorNotice error={upload.error} />
           {preview ? (
             <div className="min-h-[40vh] rounded-md border p-3">
-              <MarkdownView body={draft} />
+              <MarkdownView body={draft} photos={shelf} />
             </div>
           ) : (
             <Textarea
+              ref={editor}
               aria-label={`${def.label} 본문`}
               className="min-h-[50vh] font-mono text-sm"
               value={draft}
               disabled={saving}
               onChange={(event) => setDraft(event.target.value)}
+              onPaste={onPaste}
+              onDrop={onDrop}
+              onDragOver={(event) => {
+                if (event.dataTransfer?.types?.includes('Files')) event.preventDefault()
+              }}
             />
           )}
+          <PhotoShelf
+            photos={shelf}
+            draft={draft}
+            disabled={saving || preview}
+            onAdd={(id) => placeAtCaret([id])}
+            onRemove={setRemoving}
+          />
           {conflict && (
             <ConflictBox
               by={
@@ -385,7 +562,7 @@ export function DocumentPanel({
             </nav>
           )}
           <div ref={article} className="max-h-[70vh] min-w-0 overflow-y-auto pr-1">
-            <MarkdownView body={body} />
+            <MarkdownView body={body} photos={shelf} />
           </div>
         </div>
       ) : null}
@@ -397,6 +574,7 @@ export function DocumentPanel({
           def={def}
           current={data.revision}
           canEdit={data.can_edit}
+          photos={shelf}
           onClose={() => setHistory(false)}
           onRestore={(text, revision) => {
             setHistory(false)
@@ -404,6 +582,31 @@ export function DocumentPanel({
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        title="그림 삭제"
+        destructive
+        confirmLabel="삭제"
+        description={
+          removing && (
+            <>
+              「{removing.original_name}」 을(를) 이 문서에서 삭제합니다.{' '}
+              {usesOf(draft, removing.id) > 0
+                ? `작성 중인 본문의 ${usesOf(draft, removing.id)}곳이 이 그림을 씁니다 — 그 자리에는 「삭제됐거나 이 문서의 그림이 아닙니다」 가 표시됩니다. `
+                : '작성 중인 본문은 이 그림을 쓰지 않습니다. '}
+              이 그림을 쓰던 옛 판에서도 보이지 않고, 되돌릴 수 없습니다.
+            </>
+          )
+        }
+        onConfirm={async () => {
+          if (!removing) return
+          await attachmentApi.remove(removing.id)
+          setRemoving(null)
+          photos.reload()
+        }}
+        onClose={() => setRemoving(null)}
+      />
     </section>
   )
 }

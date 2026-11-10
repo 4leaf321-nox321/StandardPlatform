@@ -220,3 +220,64 @@ def test_이력에는_판으로_서고_그_시점의_값이_없다(client: TestC
     )
     assert refused.status_code == 409
     assert "판 이력" in refused.text
+
+
+def test_문서의_그림은_그_문서_자리에_이미지만_붙고_조각에는_캡션만_남는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """문서의 그림(ADR 0056) — 문서 속성의 키가 첨부의 자리다. 본문 사이에 그리므로 서버가
+    이미지로 읽은 것만 받는다(성적서 PDF 는 파일 속성 · 「그 밖의 첨부」 로). 뜻으로 찾기의
+    조각에는 첨부 id 대신 캡션이 남는다 — id 36자는 뜻이 없다."""
+    import io
+
+    from PIL import Image
+
+    from app.modules.files import photomarks
+    from app.modules.semantic.services import document_pieces
+
+    slug = _doc_type(client, admin)
+    paper = _make_object(client, admin, slug, label="힌지 내구 백서")
+
+    def attach(content: bytes, name: str, field: str | None = "body") -> Any:
+        data = {"owner_table": "objects", "owner_id": paper["id"]}
+        if field is not None:
+            data["owner_field"] = field
+        return client.post(
+            "/api/attachments",
+            data=data,
+            files={"file": (name, io.BytesIO(content), "application/octet-stream")},
+            headers=admin.headers,
+        )
+
+    out = io.BytesIO()
+    Image.new("RGB", (400, 300), (10, 120, 200)).save(out, format="PNG")
+    placed = attach(out.getvalue(), "단면.png")
+    assert placed.status_code == 201, placed.text
+    assert (placed.json()["owner_field"], placed.json()["is_image"]) == ("body", True)
+    refused = attach(b"%PDF-1.4 not an image", "성적서.pdf")
+    assert refused.status_code == 415, refused.text
+    assert refused.json()["error"]["code"] == code("FILES", 7)
+    # 문서 속성도 파일 속성도 아닌 칸은 예전처럼 거절한다.
+    assert attach(out.getvalue(), "a.png", field="nothing").status_code == 409
+
+    photo = placed.json()["id"]
+    figure = photomarks.marker(photo, 60, "하우징 단면")
+    body = f"# 결과\n\n{figure}\n\n찍힘 없음\n\n## 그림만\n\n{photomarks.marker(photo, 40)}"
+    saved = _put(client, admin, _url(slug, paper["id"]), body, 0)
+    assert saved.status_code == 200, saved.text
+    # 그림 표시는 언급이 아니다(객체 링크가 아니다).
+    listed = client.get(
+        "/api/attachments",
+        params={"owner_table": "objects", "owner_id": paper["id"], "owner_field": "body"},
+        headers=admin.headers,
+    ).json()
+    assert [one["id"] for one in listed] == [photo]
+
+    class Row:
+        label = "힌지 내구 백서"
+
+    pieces = document_pieces(Row(), "body", body)  # type: ignore[arg-type]
+    assert [one.text for one in pieces] == [
+        "힌지 내구 백서 › 결과\n그림: 하우징 단면\n\n찍힘 없음"
+    ]
+    assert photomarks.readable(f"글 ![](photo:{photo}) 글") == "글  글"

@@ -30,11 +30,19 @@
 
 from __future__ import annotations
 
-import re
-import uuid
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
+
+from app.modules.files.photomarks import DEFAULT_WIDTH as DEFAULT_WIDTH
+from app.modules.files.photomarks import MARKER as MARKER
+from app.modules.files.photomarks import MAX_WIDTH as MAX_WIDTH
+from app.modules.files.photomarks import MIN_WIDTH as MIN_WIDTH
+from app.modules.files.photomarks import clamp as clamp
+from app.modules.files.photomarks import marker as marker
+from app.modules.files.photomarks import marker_ids as marker_ids
+from app.modules.files.photomarks import plain as plain
+from app.modules.files.photomarks import without_photos as without_photos
 
 ColumnKind = Literal["text", "schedule"]
 
@@ -61,58 +69,9 @@ TEXT_CELLS: dict[str, str] = {one.key: one.label for one in COLUMNS if one.kind 
 
 # --- 사진 표시 --------------------------------------------------------------------
 
-#: 칸 너비 대비 % — 표시에 폭이 없거나 표시가 없는 사진.
-DEFAULT_WIDTH = 50
-MIN_WIDTH = 10
-MAX_WIDTH = 100
-
-#: 한 줄 전체가 표시일 때만 — 앞뒤의 빈칸은 봐준다.
-MARKER = re.compile(
-    r"^[ \t]*!\[(?P<alt>[^\]\n]*)\]"
-    r"\(photo:(?P<id>[0-9a-fA-F-]{36})(?:\?w=(?P<w>\d{1,3}))?\)[ \t]*$"
-)
-
-
-def marker(photo_id: uuid.UUID | str, width: int = DEFAULT_WIDTH, alt: str = "") -> str:
-    """표시 한 줄 — 폭은 10 ~ 100 으로 묶는다."""
-    return f"![{alt}](photo:{photo_id}?w={clamp(width)})"
-
-
-def clamp(width: int) -> int:
-    return max(MIN_WIDTH, min(MAX_WIDTH, int(width)))
-
-
-def marker_ids(text: str) -> list[uuid.UUID]:
-    """글 안의 표시가 가리키는 첨부 — 나온 차례대로."""
-    out: list[uuid.UUID] = []
-    for line in text.split("\n"):
-        found = MARKER.match(line)
-        if found:
-            try:
-                out.append(uuid.UUID(found.group("id")))
-            except ValueError:
-                continue
-    return out
-
-
-def without_photos(text: str, ids: set[uuid.UUID]) -> str:
-    """그 사진들의 표시 줄을 뺀다(사진을 뗐을 때) — 다른 줄은 그대로."""
-    kept = []
-    for line in text.split("\n"):
-        found = MARKER.match(line)
-        if found:
-            try:
-                if uuid.UUID(found.group("id")) in ids:
-                    continue
-            except ValueError:
-                pass
-        kept.append(line)
-    return "\n".join(kept)
-
-
-def plain(text: str) -> str:
-    """표시 줄을 걷어 낸 글 — 감사의 이름표 · 요약처럼 글을 줄여 보이는 자리."""
-    return "\n".join(line for line in text.split("\n") if not MARKER.match(line)).strip()
+# 표기는 공통 첨부 모듈(`files/photomarks.py`)이 정한다 — 문서 속성의 그림(ADR 0056)이 같은
+# 표기를 쓰고, 코어는 확장을 import 하지 못한다. 이 확장이 쓰던 이름 그대로 위에서 다시
+# 내보낸다.
 
 
 # --- 일정 -------------------------------------------------------------------------

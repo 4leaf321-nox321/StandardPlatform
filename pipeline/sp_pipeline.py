@@ -10,6 +10,7 @@
     python sp_pipeline.py validate runs/2026-09-13-parts
     python sp_pipeline.py preview  runs/2026-09-13-parts
     python sp_pipeline.py apply    runs/2026-09-13-parts
+    python sp_pipeline.py docx     00-원천/설계서.docx      # Word → 글 초안 + 그림(sp_docx)
 
 서버 주소와 토큰은 `SP_SERVER` · `SP_TOKEN` 환경 변수(또는 `--server`
 · `--token`). 토큰은 플랫폼 「내 정보」 에서 발급한 개인 토큰이다.
@@ -1426,6 +1427,20 @@ def main(argv: list[str] | None = None) -> int:
         "--apply", action="store_true", help="계획을 읽은 뒤 — 이것 없이는 아무것도 안 바뀐다"
     )
 
+    docx = sub.add_parser(
+        "docx",
+        help="Word(.docx) → 그림 자리가 든 마크다운 초안 + 그림 파일(플랫폼에는 안 보낸다)",
+    )
+    docx.add_argument("source", type=Path, help="원천 .docx")
+    docx.add_argument(
+        "out",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="출력 폴더 — 비우면 작업 폴더의 docs/<원천 이름>"
+        "(작업 폴더 밖이면 원천 옆 <이름>-초안)",
+    )
+
     for name, what in (
         ("preview", "아무것도 저장하지 않고 미리 본다"),
         ("apply", "미리 본 것을 넣는다"),
@@ -1481,6 +1496,17 @@ def main(argv: list[str] | None = None) -> int:
                     source=args.source,
                 )
             )
+            return 0
+        if args.command == "docx":
+            # 필요할 때만 읽는다 — sp_docx 가 이 파일(Stop · _write)을 쓴다. 명령으로 돌면 이
+            # 파일은 `__main__` 이라 sp_docx 의 Stop 은 **다른 클래스**다 — 따로 받는다.
+            import sp_docx
+
+            try:
+                print(sp_docx.cmd_docx(args.source, args.out))
+            except sp_docx.Stop as stop:
+                print(str(stop), file=sys.stderr)
+                return 2
             return 0
         if args.command == "runs":
             chosen = _chosen(args, "")

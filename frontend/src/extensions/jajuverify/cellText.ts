@@ -14,44 +14,23 @@
  * 한 덩이를 저장하므로 덮어쓰기 보호(본 값 비교)가 그대로 따라온다.
  */
 
-export const DEFAULT_WIDTH = 50
-export const MIN_WIDTH = 10
-export const MAX_WIDTH = 100
+// 표기는 공통 첨부 모듈(`modules/files/photoMarker.ts`)이 정한다 — 문서 속성의 그림(ADR 0056)이
+// 같은 표기를 쓰고, 코어는 확장을 import 하지 못한다. 이 확장이 쓰던 이름 그대로 다시 내보낸다.
+import { DEFAULT_WIDTH, markerLine, markerOf } from '@/modules/files/photoMarker'
+
+export {
+  DEFAULT_WIDTH,
+  MAX_WIDTH,
+  MIN_WIDTH,
+  clampWidth,
+  markerLine,
+  markerOf,
+  snapWidth,
+} from '@/modules/files/photoMarker'
+export type { Marker } from '@/modules/files/photoMarker'
+
 /** 빠른 폭 단추. */
 export const QUICK_WIDTHS = [25, 50, 75, 100]
-
-const MARKER = /^[ \t]*!\[([^\]\n]*)\]\(photo:([0-9a-fA-F-]{36})(?:\?w=(\d{1,3}))?\)[ \t]*$/
-
-export interface Marker {
-  id: string
-  width: number
-  alt: string
-}
-
-/** 10 ~ 100 으로 묶는다 — 저장하는 폭. */
-export function clampWidth(width: number): number {
-  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(width)))
-}
-
-/** 손잡이로 끌 때 — 10 단위로 붙는다. */
-export function snapWidth(width: number): number {
-  return clampWidth(Math.round(width / 10) * 10)
-}
-
-/** 그 줄이 표시면 그 사진 · 폭. */
-export function markerOf(line: string): Marker | null {
-  const found = MARKER.exec(line)
-  if (!found) return null
-  return {
-    alt: found[1],
-    id: found[2].toLowerCase(),
-    width: found[3] ? clampWidth(Number(found[3])) : DEFAULT_WIDTH,
-  }
-}
-
-export function markerLine(id: string, width: number = DEFAULT_WIDTH, alt = ''): string {
-  return `![${alt}](photo:${id}?w=${clampWidth(width)})`
-}
 
 export function linesOf(text: string): string[] {
   return text === '' ? [] : text.split('\n')

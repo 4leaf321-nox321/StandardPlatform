@@ -27,6 +27,7 @@
 | 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` | 확신 없는 것은 `unresolved.json` 으로 |
 | 5 검증 · 미리 보기 | `run_validate` → `run_preview` | **어느 플랫폼에 미리 봤는지부터 요약을 보이고, 적용은 사람이 — `apply_on_screen`(그 플랫폼 화면 「작업」 에서 「적용」) 을 먼저 안내, 명령 창이 편하면 `apply_command`** — 적용 도구는 없다 |
 | 허브에서 받기(쌍둥이) | `hub_pull(work, group="plm")` → `run_validate` → `run_preview` | 적용은 사람이. 받은 타입은 받는 플랫폼에서 **허브 관리**가 되어 거기서는 못 고친다 — 정의 · 값이 틀렸으면 허브 쪽 작업에서 고친다 |
+| Word → 문서 속성(본문) | `docx_extract` → 플랫폼 MCP `attachment_upload_prepare` + `curl` → 그림 줄을 `photo:<id>` 로 → `document_write` — `pipeline_guide("docx")` | 못 옮긴 그림(차트 · SmartArt · 바꾸지 못한 EMF)을 알린다 · **셸이 없으면 그림은 사람이 화면에서** 올린다 |
 
 - **통계를 스스로 세지 않는다.** `source_profile` 결과를 인용한다 — 수천 행을 AI 가 읽어 센 수는
   틀려도 알 길이 없다.
@@ -350,9 +351,58 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
 
 | | 엑셀 · CSV | PPT · PDF · Word |
 | --- | --- | --- |
-| 먼저 할 일 | 시트마다 「한 행이 무엇인가」 를 정하고 열 → 속성 대응표를 `notes` 에 | 텍스트로 바꾼다(PDF 는 바로, PPT · Word 는 쪽 · 슬라이드 번호를 보존해 마크다운으로) |
+| 먼저 할 일 | 시트마다 「한 행이 무엇인가」 를 정하고 열 → 속성 대응표를 `notes` 에 | 텍스트로 바꾼다(PDF 는 바로, PPT · Word 는 쪽 · 슬라이드 번호를 보존해 마크다운으로). Word 는 `docx_extract` 가 그림 자리째 초안으로 꺼낸다 |
 | 누가 옮기나 | **규칙(스크립트)** — 행마다 AI 가 판단하지 않는다 | AI 가 뽑는다 |
 | 문서 자체 | — | **`document` 객체로 넣는다**, 뽑은 사실은 `evidence`(근거 문서)로 그 문서와 잇는다 |
 | `_source` | `{"file", "sheet", "row"}` | `{"file", "page" \| "slide", "quote"}` — quote 는 원문 한두 문장 |
 | `_confidence` | 대개 1 | 원문 그대로 0.9+ · 표 · 그림 0.7~0.9 · **0.7 미만은 넣지 않고 unresolved** |
 | 옮기는 것 | 대응표에 있는 열 | 여러 문서에 걸쳐 묻는 것(과제번호 · 설비 · 기관 · 기술 분야)만. 나머지는 문서 description 에 요약 |
+
+<!--@ docx -->
+## Word 문서를 문서 속성으로 — `docx_extract`
+
+플랫폼 객체의 **문서 속성**(마크다운 본문 · 판 — ADR 0053)에 Word 원천을 넣을 때. 묶음(실행 폴더)과
+다른 길이다: 본문은 플랫폼 MCP 의 `document_write` 로 들어가고 판이 남는다(사람이 판을 보고 복원한다).
+이 키트는 **꺼내기만 한다** — 플랫폼에 아무것도 올리지 않는다.
+
+**Word 에서 글만 뽑아 읽으면 그림이 어디 있었는지가 사라진다.** 그래서 먼저 그림 자리째 꺼낸다:
+
+1. **꺼낸다** — `docx_extract(work, source="설계서.docx")`(명령: `python sp_pipeline.py docx
+   00-원천/설계서.docx`). 같은 원천을 다시 꺼내면 그 폴더를 새로 만든다.
+
+   ```
+   docs/설계서/
+     draft.md        글 초안 — 읽는 차례대로. 제목 #, 목록 - · 1., 표 |, 굵게 **
+     media/          쓰인 그림만, 읽는 차례대로 image1.png …(같은 그림은 한 파일)
+     manifest.json   그림마다 차례 · 파일 · 원래 이름 · 형식 · 바꿨는지 · 폭 · 캡션 ·
+                     바로 앞 문단(before), 그리고 못 옮긴 것(not_moved)과 그 이유
+   ```
+
+   그림은 **제 줄 하나로** `![캡션](media/image3.png?w=60)`. `w` 는 Word 에서 본문 폭의 몇 % 를
+   차지했나(10 단위, 10 ~ 100). 캡션은 그림 바로 아래(또는 위)의 캡션 문단 → 그림 설명(대체 텍스트)
+   → `그림 N`. 머리글 · 바닥글 · 쪽 번호 · 목차는 빠지고, 표 안의 그림은 그 표 바로 아래에 온다.
+2. **초안을 원본과 맞춰 다듬는다** — `work_read(work, "docs/설계서/draft.md")`. 초안은 초안이다: 병합
+   칸은 단순하게, 글상자의 글은 그 자리 문단으로 왔다. **원문에 없는 것을 지어내지 않는다.**
+3. **그림을 올린다** — 플랫폼 MCP `attachment_upload_prepare(type_slug, object_id, local_path=[…],
+   field=<문서 키>)`. `local_path` 에 `docx_extract` 가 돌려준 `files[].local_path` 를 **그 차례대로**
+   준다(같은 그림은 한 번만 — `files[].figures` 가 그 그림이 쓰인 자리들). 돌아온 `script` 를 셸에서
+   바로 한 번(표는 5분) — 줄마다 첨부 id 가 같은 차례로 온다.
+4. **그림 줄의 경로를 바꾼다** — `![캡션](media/image3.png?w=60)` → `![캡션](photo:<첨부 id>?w=60)`.
+   같은 파일이 두 자리에 쓰였으면 id 하나를 두 줄에. 폭 · 캡션은 그대로 둬도 되고 고쳐도 된다.
+5. **넣는다** — `document_read` 로 판을 읽고 `document_write(body, base_revision, note)`.
+
+- **못 옮긴 것**(`not_moved` — 차트 · SmartArt · Word 도형 · 바꾸지 못한 EMF)은 초안에
+  `> 그림: <캡션> (…)` 으로 자리가 남아 있다. 사람에게 그 목록을 보이고, 원본에서 그림으로 저장해
+  화면에서 올릴지 묻는다. SmartArt 는 안의 글을 `> 글:` 로 옮겨 두었다.
+- **셸이 없는 클라이언트**(`curl` 을 못 돌린다)면 그림은 **사람이 플랫폼 화면에서** 올린다. 그림 줄을
+  `> 그림: <캡션>` 으로 바꿔 넣고, 올릴 파일(`local_path`)과 그 자리(`before` — 바로 앞 문단)를
+  사람에게 보인다.
+- **EMF · WMF**(Visio 그림 · 붙여 넣은 엑셀 차트)와 TIFF · BMP 는 Windows 의 PowerShell(GDI+)로 PNG 로
+  바꾼다(메타파일은 긴 변 1600px 로 키워 흰 바탕에). WSL 에서도 된다. 그 밖의 OS 에서는 못 바꾸고
+  `not_moved` 에 남는다. 플랫폼은 PNG · JPEG · GIF · WebP 만 그림으로 받는다.
+- 옛 .doc · 암호가 걸린 문서는 못 읽는다 — Word 에서 「Word 문서(.docx)」 로 다시 저장해 달라고 한다.
+
+**ADR 0053 과 부딪치지 않는다.** 0053 은 「서버가 Word 를 마크다운으로」 를 버렸다 — 서버에 변환기
+(LibreOffice · pandoc)를 깔면 폐쇄망 번들이 커지고, 글 다듬기는 AI 가 원본을 보고 하는 편이 낫다. 이
+도구는 **사용자 PC 에서 표준 라이브러리만으로** 돌고(서버에 깔 것이 없다), 글은 그림 자리를 지키는
+「초안」 일 뿐 다듬기는 여전히 AI 가 원본을 보고 한다.
