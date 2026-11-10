@@ -182,3 +182,86 @@ class MapHubKey(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     updated_by: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+
+
+# ── 밤 그래프 계산(ADR 0067) ─────────────────────────────────────────────────────────────
+# 지도처럼 **계산해 둔 사본**이다 — 객체에 FK 가 없고(지워도 판의 줄은 남는다), 읽을 때 살아
+# 있고 보이는 것만 고른다. 판(`GraphCalcRun`)마다 줄을 새로 쓰고, 다 쓴 뒤 그 판을 「지금」
+# 으로 삼고 앞 판을 지운다 — 쓰는 동안에도 읽는 쪽은 앞 판을 본다.
+
+
+class GraphCalcRun(Base):
+    """판 — 계산 한 번이 한 줄. **지금 판은 끝난(`done`) 것 중 가장 큰 번호.**"""
+
+    __tablename__ = "graph_calc_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """「지금 계산」 을 누른 사람. 비면 타이머."""
+    engine: Mapped[str] = mapped_column(String(8))
+    """`cpu` · `gpu` — 실제로 센 엔진(설정이 `auto` 여도 무엇으로 돌았는지)."""
+    status: Mapped[str] = mapped_column(String(12))
+    """`running` · `done` · `failed`."""
+    stats: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    """노드 · 선 수, 단계마다 걸린 시간, 건너뛴 까닭, 실패 까닭 — 화면과 운영 문서."""
+
+
+class GraphCalcScore(Base):
+    """(판, 지표, 관계, 객체) → 값 · 순위. 지표: `depends_top`(관계마다) · `bridge` · `cluster`
+    (값이 무리 번호, 순위는 무리 안의 차례 — 이음이 많은 것부터)."""
+
+    __tablename__ = "graph_calc_scores"
+    __table_args__ = (
+        Index("ix_graph_calc_scores_rank", "run_id", "metric", "relation", "rank"),
+        Index("ix_graph_calc_scores_value", "run_id", "metric", "relation", "value"),
+        Index("ix_graph_calc_scores_object", "object_id"),
+    )
+
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("graph_calc_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    metric: Mapped[str] = mapped_column(String(24), primary_key=True)
+    relation: Mapped[str] = mapped_column(String(64), primary_key=True, default="")
+    """이어지는 관계 종류의 slug — 관계마다 세는 지표(`depends_top`)만. 나머지는 빈 글자."""
+    object_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    value: Mapped[float] = mapped_column(Float)
+    rank: Mapped[int] = mapped_column(Integer)
+
+
+class GraphCalcCluster(Base):
+    """(판, 무리) → 크기 · 대표(무리 안에서 이음이 가장 많은 것) · 이름 · 타입별 수."""
+
+    __tablename__ = "graph_calc_clusters"
+
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("graph_calc_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    cluster: Mapped[int] = mapped_column(Integer, primary_key=True)
+    size: Mapped[int] = mapped_column(Integer)
+    representative_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+    label: Mapped[str] = mapped_column(String(300))
+    """대표의 이름(셀 때) — 대표가 지워져도 무리를 부를 이름이 남게."""
+    types: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    """{타입 slug: 수}."""
+
+
+class GraphCalcSimilar(Base):
+    """(판, 관계, 객체, 차례) → 상대 · 점수(끝까지 펼친 구성의 자카드). 같은 타입끼리 위 10."""
+
+    __tablename__ = "graph_calc_similar"
+    __table_args__ = (Index("ix_graph_calc_similar_object", "object_id"),)
+
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("graph_calc_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    relation: Mapped[str] = mapped_column(String(64), primary_key=True)
+    object_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+    other_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+    score: Mapped[float] = mapped_column(Float)

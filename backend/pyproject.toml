@@ -76,6 +76,13 @@ ignore_missing_imports = true
 module = ["scipy.*"]
 ignore_missing_imports = true
 
+# 밤 그래프 계산의 엔진(ADR 0067) — NetworKit · cupy · pylibcugraph 도 타입 표시가 없고, GPU 둘은
+# GPU 판 번들에만 있다. 부르는 자리가 `graph/calcengine.py` 하나라(구조 시험) 거기서 numpy
+# 배열로 바꿔 내보낸다.
+[[tool.mypy.overrides]]
+module = ["networkit.*", "cupy.*", "cupyx.*", "pylibcugraph.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

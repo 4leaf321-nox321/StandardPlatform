@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-11a
+GUIDE_VERSION: 2026-11-11b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -53,6 +53,7 @@ GUIDE_VERSION: 2026-11-11a
 | **이것에 기대는 것 전부**(영향 범위) — 「이 부품이 바뀌면 무엇이 흔들리나」 | `graph_reach(object_id, relations=[...], direction="in")` | 고른 관계 · 참조 칸만 **끝까지**(20단) 거꾸로. `by_type` · `levels` 를 먼저 읽는다. **`truncated` 면 전부가 아니다.** 트리 · BOM · 계보로 정해 둔 관계면 그 도구가 먼저 |
 | **두 객체가 어떻게 이어져 있나** | `graph_path(source_id, target_id, max_depth=, relations=, types=)` | 가장 짧은 길들. **`truncated` 면 「없다」 가 아니라 「찾다가 멈춤」** — 좁혀서 다시 |
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
+| **전체를 훑는 그래프 물음** — 「가장 많은 모델이 기대는 부품」 「함께 엮이는 무리」 「구성이 비슷한 모델」 「빠지면 무리가 끊기는 다리」 | `graph_metrics(action="status")` → `top` · `object` · `clusters` · `cluster` | **밤에 센 사본**(ADR 0067) — `run.computed_at` 을 함께 말한다. 모델마다 펼쳐 세지 않는다(5,000번). 판이 없으면 「아직 안 셌다」 지 「없다」 가 아니다(`relations` 주제의 「밤에 센 그래프 지표」) |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 안 보이는 것은 수만(조회를 부서로 좁힌 설치) |
 | 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다. `weighted` 면 수량 반영(총수량만큼 셌다) |
 | **제품 하나에 이 부품이 몇 개** · 「이 부품은 어디에 쓰였나」 | `object_explode(mode="summary"·"indented"·"where_used", as_of=)` | 관계의 수량을 경로 따라 곱한다. `totals.missing`(수량 없음 — 1개로 셈) · `hidden` · `truncated` 를 함께 말한다. `quantity_key` 가 비었으면 「수량 칸이 없어 모두 1개로 셌다」 |
@@ -989,6 +990,24 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   다시 만들었으면(수정) 그 아래가 바로 낡음이 되는 것이 정상이다 — 한 단 내려가 같은 판단을 받는다.
 - 검토함(`review_list(kind="stale_lineage")`)에도 바로 낡은 파생물마다 한 줄로 선다 — 처리는 같은
   다시 고정이다(`find` 주제의 검토함).
+
+### 밤에 센 그래프 지표 — `graph_metrics`
+
+그래프 **전체**를 봐야 답이 나오는 넷을 밤마다 세어 둔다(ADR 0067). 하나씩 펼쳐 세면 수천 번이다 — 이것을 먼저 본다.
+
+| 물음 | 부르기 | 읽는 법 |
+| --- | --- | --- |
+| 무엇을 셌나 · 언제 | `graph_metrics()`(`status`) | `run.stats.relations` 의 키가 **센 이어지는 관계**(BOM 처럼 `transitive` 인 것) — `top` 의 `relation` 에 그대로 |
+| 가장 많은 모델이 기대는 부품 | `graph_metrics("top", metric="depends_top", relation=<관계>, type_slug=<부품 타입>)` | `value` = 끝까지 따라 올라가 닿는 **맨 위**(그 관계로 아무것에도 안 든 것 — BOM 이면 모델)의 **정확한 수** |
+| 이 객체의 값 · 무리 · 비슷한 것 | `graph_metrics("object", object_id=)` | `scores[].rank` / `of`(몇 개 중) · `cluster` · `similar`(같은 타입의 맨 위끼리 끝까지 펼친 구성의 자카드 위 10) |
+| 함께 엮이는 무리 | `graph_metrics("clusters")` → `graph_metrics("cluster", cluster=, type_slug=)` | Louvain — 기준정보 그래프 전체(관계 + 참조 칸)로 짓는다. 이름은 대표(이음이 가장 많은 것) |
+| 빠지면 끊기는 다리 | `graph_metrics("top", metric="bridge")` | 가장 큰 다리 = 1 대비. 표본 2,000 출발점의 어림이라 **순위로** 말한다 |
+
+- **언제 센 값인지 말한다**(`run.computed_at`) — 그 뒤에 이은 · 끊은 선은 안 들었다. 「지금」 이 중요하면
+  `object_explode(mode="where_used")` · `graph_reach` 로 그 자리에서 센다.
+- 무리는 **엔진 · 판마다 조금 다를 수 있다**(무리 번호는 앞 판과 반 넘게 겹치면 이어받는다). 「무리 7 에 든다」 는
+  사실로 말하고, 무리의 뜻(제품군 등)은 `cluster` 의 객체 · `types` 를 보고 말한다 — 짐작하지 않는다.
+- 조회를 부서로 좁힌 설치에서는 모든 부서를 보는 사람에게만 보인다(403 이면 그 까닭이다).
 
 <!--@ sparql -->
 ## 질의어로 묻기 (SPARQL)

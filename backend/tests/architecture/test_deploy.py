@@ -1399,3 +1399,81 @@ def test_update_는_내리기_전에_보고_내린_뒤에만_되돌리기를_건
     assert body.index("trap update_rollback EXIT") < body.index("swap_sif")
     assert body.index("trap - EXIT") > body.index('systemctl start "$SERVICE_NAME"')
     assert "place_sif" not in body  # 새 SIF 는 내리기 전에 옆에 놓는다
+
+
+# --- GPU 판 번들(ADR 0067) -----------------------------------------------------------------
+#
+# 같은 앱의 두 판 — GPU 판은 밤 그래프 계산의 GPU 엔진을 더 담고, 워커가 `--nv` 로 떠야 그
+# GPU 를 쓴다. 드라이버가 없는 서버에서는 `--nv` 를 빼고 말한다(계산은 CPU 로).
+
+
+def _render_worker(
+    tmp_path: Path, *, variant: str, driver: bool
+) -> subprocess.CompletedProcess[str]:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    pieces = [
+        _piece(text, name)
+        for name in ("warn", "installed_variant", "worker_nv", "render_unit_paths")
+    ]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if driver:
+        _stub(bin_dir / "nvidia-smi", "exit 0\n")
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "app.sif").write_text("", encoding="utf-8")
+    script = (
+        "set -euo pipefail\n"
+        f'INSTALL_DIR="{install}"\nOPERATOR=op\nAPP_NAME=x\nAPP_SLUG=x\nENV_FILE=/e\n'
+        "FILESTORE_HOST_DIR=/f\nLOG_HOST_DIR=/l\nBACKUP_HOST_DIR=\n"
+        f"as_op() {{ echo {variant}; }}\n" + "\n".join(pieces) + "\n"
+        f'render_unit_paths "{DEPLOY / "worker.service.template"}"\n'
+    )
+    return subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@_no_bash
+def test_GPU_판이고_드라이버가_있으면_워커가_nv_로_뜬다(tmp_path: Path) -> None:
+    done = _render_worker(tmp_path, variant="gpu", driver=True)
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    start = next(at for at, one in enumerate(lines) if one.startswith("ExecStart="))
+    assert lines[start + 1] == "    --nv \\"
+    assert "@@" not in done.stdout
+
+
+@_no_bash
+@pytest.mark.parametrize(("variant", "driver"), [("cpu", True), ("gpu", False)])
+def test_CPU_판이거나_드라이버가_없으면_nv_줄을_뺀다(
+    tmp_path: Path, variant: str, driver: bool
+) -> None:
+    done = _render_worker(tmp_path, variant=variant, driver=driver)
+    assert done.returncode == 0, done.stderr
+    body = [one for one in done.stdout.splitlines() if not one.startswith("#")]
+    assert not any("--nv" in one for one in body) and "@@" not in done.stdout
+    # 명령이 끊기지 않았다 — ExecStart 다음 줄이 곧 --bind 다.
+    lines = done.stdout.splitlines()
+    start = next(at for at, one in enumerate(lines) if one.startswith("ExecStart="))
+    assert lines[start + 1].strip().startswith("--bind")
+    if variant == "gpu":
+        assert "NVIDIA 드라이버" in done.stderr
+
+
+def test_GPU_판은_이미지가_GPU_의존을_더_깔고_번들_이름에_gpu_가_붙는다() -> None:
+    definition = (DEPLOY / "apptainer.def").read_text(encoding="utf-8")
+    assert "grep -qx 'variant=gpu' /opt/app/BUILD_INFO.txt" in definition
+    assert "requirements-gpu.txt" in definition
+    bundle = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
+    assert 'RELEASE_NAME="${RELEASE_NAME}-gpu"' in bundle
+    assert bundle.count("variant=$VARIANT") == 2  # 이미지 안 · 번들 옆 BUILD_INFO
+    gpu = (REPO / "backend" / "requirements-gpu.txt").read_text(encoding="utf-8")
+    assert "pylibcugraph-cu12==" in gpu and "cupy-cuda12x==" in gpu
+    # cuGraph 전체(cudf · dask)는 안 담는다 — 7GB 를 넘는다.
+    pins = [one.split("==")[0].lower() for one in gpu.splitlines() if "==" in one]
+    assert not any(one.startswith(("cudf", "dask", "cugraph-")) for one in pins), pins

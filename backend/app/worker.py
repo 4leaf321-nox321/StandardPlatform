@@ -155,6 +155,13 @@ class Worker:
                 queued = mapbuild.schedule(db)
             if queued:
                 log.info("지식 그래프 지도 작업을 넣었습니다: %s", queued)
+            # 밤 그래프 계산(ADR 0067)도 같은 바퀴에 **넣기만** 한다.
+            from app.modules.graph import calc as graph_calc
+
+            with SessionLocal() as db:
+                queued = graph_calc.schedule(db)
+            if queued:
+                log.info("밤 그래프 계산을 넣었습니다: %s", queued)
         if now - self._last_semantic >= SEMANTIC_CHECK_EVERY:
             # 뜻으로 찾기의 계산도 **넣기만** 한다 — 켠 타입이 없거나 끔이면 아무것도 안
             # 넣는다.

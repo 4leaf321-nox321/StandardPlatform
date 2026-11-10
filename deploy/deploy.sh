@@ -971,15 +971,40 @@ run_seed() {
     in_container sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python scripts/seed_install.py'
 }
 
+# 깔린 SIF 의 판 — `cpu` · `gpu`(ADR 0067). 판을 적기 전의 SIF · SIF 가 없으면 cpu.
+installed_variant() {
+    local v=""
+    if [[ -f "$INSTALL_DIR/app.sif" ]]; then
+        v="$(as_op apptainer exec "$INSTALL_DIR/app.sif" sed -n 's|^variant=||p' /opt/app/BUILD_INFO.txt \
+            2>/dev/null | tail -n1 || true)"
+    fi
+    echo "${v:-cpu}"
+}
+
+# 워커에 `--nv` 를 줄까 — GPU 판이고 서버에 NVIDIA 드라이버(nvidia-smi)가 보일 때만. GPU 판인데 드라이버가
+# 없으면 말하고 뺀다 — 밤 그래프 계산은 CPU 로 돈다(GRAPH_CALC_ENGINE=auto). `gpu` 로 박아 두었으면 실패한다.
+worker_nv() {
+    [[ "$(installed_variant)" == "gpu" ]] || return 0
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        echo "--nv"
+    else
+        warn "GPU 판 번들인데 이 서버에 NVIDIA 드라이버(nvidia-smi)가 안 보입니다 — 그래프 계산은 CPU 로 돕니다(GRAPH_CALC_ENGINE=auto)"
+    fi
+}
+
 # 유닛 템플릿의 자리표시 — 세 유닛(앱 · 동기화 · 백업)이 같은 경로를 본다.
 # 백업 폴더가 없으면 그 --bind 줄을 통째로 뺀다(apptainer 는 없는 원본을 거부한다).
 render_unit_paths() {  # $1=template
     # 줄 끝의 '\' 가 다음 줄로 잇는다 — 빈 줄로 두면 거기서 명령이 끊기므로 줄을 아예 지운다.
-    local backup_sed
+    local backup_sed nv_sed='/^@@NV@@/d'
     if [[ -n "$BACKUP_HOST_DIR" ]]; then
         backup_sed="s|^@@BACKUP_BIND@@.*|    --bind $BACKUP_HOST_DIR:/data/backup \\\\|"
     else
         backup_sed='/^@@BACKUP_BIND@@/d'
+    fi
+    # GPU 판의 워커만 — 틀에 `@@NV@@` 줄이 있을 때만 SIF 를 열어 본다(유닛마다 열면 느리다).
+    if grep -q '^@@NV@@' "$1" && [[ -n "$(worker_nv)" ]]; then
+        nv_sed="s|^@@NV@@.*|    --nv \\\\|"
     fi
     sed -e "s|@@USER@@|$OPERATOR|g" \
         -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
@@ -990,6 +1015,7 @@ render_unit_paths() {  # $1=template
         -e "s|@@LOG_DIR@@|$LOG_HOST_DIR|g" \
         -e "s|@@BACKUP_DIR@@|${BACKUP_HOST_DIR:-}|g" \
         -e "$backup_sed" \
+        -e "$nv_sed" \
         "$1"
 }
 

@@ -9,6 +9,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Bell, BellOff, Pencil, Trash2, Waypoints } from 'lucide-react'
 
 import { AttachmentList } from '@/modules/files/AttachmentList'
+import { GraphMetricsPanel } from '@/modules/graph/GraphMetricsPanel'
 import { GraphPanel } from '@/modules/graph/GraphPanel'
 import { AxisProfile } from '@/modules/metrics/AxisProfile'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -419,6 +420,16 @@ function ObjectProfile() {
 
           {/* 기록 요약 — 이 타입을 기준(축)으로 가진 지표가 있으면(ADR 0022). 없으면 안 그린다. */}
           {!isSystem && <AxisProfile typeSlug={typeSlug} objectId={objectId} />}
+
+          {/* 그래프 지표 — 밤에 센 기대는 수 · 다리 역할 · 무리 · 비슷한 것(ADR 0067). 센 것이 없으면 안 그린다. */}
+          {!isSystem && (
+            <GraphMetricsPanel
+              objectId={objectId}
+              relationLabels={Object.fromEntries(
+                (schema.data?.relation_types ?? []).map((one) => [one.slug, one.label]),
+              )}
+            />
+          )}
 
           {/* 비슷한 기록 — 축 태그(참조 칸)가 있는 기록 타입에서만(ADR 0022). */}
           {objectType?.usage === 'log' && defs.some((one) => one.data_type === 'object_ref') && (

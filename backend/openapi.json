@@ -18336,6 +18336,333 @@
         }
       }
     },
+    "/api/graph/calc": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Calc Status",
+        "description": "지금 판(언제 · 엔진 · 수 · 단계별 시간) · 기다리는 계산 · 자동 계산이 멈췄나 · 설정.\n\n「GPU 가 보이나」 는 **이 웹 프로세스** 기준이다 — 셈은 워커가 하므로(워커만 `--nv`) 판의\n`engine` 이 실제로 무엇으로 셌는지다.",
+        "operationId": "calc_status_api_graph_calc_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalcStatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/calc/run": {
+      "post": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Calc Run",
+        "description": "「지금 계산」(시스템 관리자) — 이미 기다리거나 돌면 **그 작업을 돌려준다**(겹쳐 돌지\n않는다). 멈췄던 자동 계산은 이것이 끝나면 다시 돈다.",
+        "operationId": "calc_run_api_graph_calc_run_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/calc/top": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Calc Top",
+        "description": "순위 — 「가장 많은 모델이 기대는 부품」 · 「다리 역할이 큰 것」.",
+        "operationId": "calc_top_api_graph_calc_top_get",
+        "parameters": [
+          {
+            "name": "metric",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "`depends_top`(기대는 수) · `bridge`(다리 역할)",
+              "title": "Metric"
+            },
+            "description": "`depends_top`(기대는 수) · `bridge`(다리 역할)"
+          },
+          {
+            "name": "relation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "기대는 수의 이어지는 관계 slug",
+              "default": "",
+              "title": "Relation"
+            },
+            "description": "기대는 수의 이어지는 관계 slug"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 타입만(slug)",
+              "title": "Type"
+            },
+            "description": "이 타입만(slug)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalcTopOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/calc/object/{object_id}": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Calc Object",
+        "description": "객체 하나 — 지표(순위 · 몇 개 중) · 무리 · 비슷한 것 위 10.",
+        "operationId": "calc_object_api_graph_calc_object__object_id__get",
+        "parameters": [
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalcObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/calc/clusters": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Calc Clusters",
+        "description": "무리 목록 — 큰 것부터.",
+        "operationId": "calc_clusters_api_graph_calc_clusters_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalcClustersOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/calc/clusters/{cluster}": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Calc Cluster",
+        "description": "무리 하나의 객체 — 무리 안에서 이음이 많은 것부터.",
+        "operationId": "calc_cluster_api_graph_calc_clusters__cluster__get",
+        "parameters": [
+          {
+            "name": "cluster",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Cluster"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 타입만(slug)",
+              "title": "Type"
+            },
+            "description": "이 타입만(slug)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalcClusterMembersOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/rdf/schema": {
       "get": {
         "tags": [
@@ -25891,6 +26218,578 @@
         },
         "type": "object",
         "title": "BundleIn"
+      },
+      "CalcClusterMembersOut": {
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cluster": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcClusterOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalcMemberOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "cluster",
+          "total",
+          "items"
+        ],
+        "title": "CalcClusterMembersOut"
+      },
+      "CalcClusterOut": {
+        "properties": {
+          "cluster": {
+            "type": "integer",
+            "title": "Cluster"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "대표(무리 안에서 이음이 가장 많은 것)의 이름 — 셀 때"
+          },
+          "representative_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Representative Id"
+          },
+          "types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Types",
+            "description": "타입 slug → 수"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cluster",
+          "size",
+          "label",
+          "representative_id"
+        ],
+        "title": "CalcClusterOut"
+      },
+      "CalcClustersOut": {
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalcClusterOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "total",
+          "items"
+        ],
+        "title": "CalcClustersOut"
+      },
+      "CalcMemberOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "type_slug",
+          "rank"
+        ],
+        "title": "CalcMemberOut"
+      },
+      "CalcObjectClusterOut": {
+        "properties": {
+          "cluster": {
+            "type": "integer",
+            "title": "Cluster"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank",
+            "description": "무리 안의 차례(이음이 많은 것부터)"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "representative_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Representative Id"
+          },
+          "types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cluster",
+          "rank",
+          "size",
+          "label",
+          "representative_id"
+        ],
+        "title": "CalcObjectClusterOut"
+      },
+      "CalcObjectOut": {
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scores": {
+            "items": {
+              "$ref": "#/components/schemas/CalcScoreOut"
+            },
+            "type": "array",
+            "title": "Scores"
+          },
+          "cluster": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcObjectClusterOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "similar": {
+            "items": {
+              "$ref": "#/components/schemas/CalcSimilarOut"
+            },
+            "type": "array",
+            "title": "Similar"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "scores",
+          "cluster",
+          "similar"
+        ],
+        "title": "CalcObjectOut"
+      },
+      "CalcPendingOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "CalcPendingOut"
+      },
+      "CalcRunOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At",
+            "description": "셈을 마친 때 — 그 뒤의 변화는 안 들었다"
+          },
+          "engine": {
+            "type": "string",
+            "title": "Engine",
+            "description": "실제로 센 엔진 — cpu · gpu"
+          },
+          "stats": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Stats",
+            "description": "노드 · 짝 수, 관계마다(맨 위 · 칸 · 비슷한 것), 무리 수 · 모듈성, 단계별 초, 건너뛴 까닭"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "engine"
+        ],
+        "title": "CalcRunOut"
+      },
+      "CalcScoreOut": {
+        "properties": {
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank"
+          },
+          "of": {
+            "type": "integer",
+            "title": "Of",
+            "description": "순위가 매겨진 객체 수(값이 0 인 것은 순위가 없다)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "metric",
+          "relation",
+          "value",
+          "rank",
+          "of"
+        ],
+        "title": "CalcScoreOut"
+      },
+      "CalcSimilarOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "끝까지 펼친 구성의 자카드(0 ~ 1)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "type_slug",
+          "relation",
+          "rank",
+          "score"
+        ],
+        "title": "CalcSimilarOut"
+      },
+      "CalcStatusOut": {
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcPendingOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paused": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused",
+            "description": "자동 계산이 멈춘 까닭(없으면 돈다)"
+          },
+          "engine_setting": {
+            "type": "string",
+            "title": "Engine Setting"
+          },
+          "night_hour": {
+            "type": "integer",
+            "title": "Night Hour"
+          },
+          "gpu_visible": {
+            "type": "boolean",
+            "title": "Gpu Visible",
+            "description": "이 웹 프로세스에서 GPU 가 보이나(셈은 워커)"
+          },
+          "gpu_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Name"
+          },
+          "gpu_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Reason"
+          },
+          "networkit": {
+            "type": "boolean",
+            "title": "Networkit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "pending",
+          "engine_setting",
+          "night_hour",
+          "gpu_visible",
+          "gpu_name",
+          "gpu_reason",
+          "networkit"
+        ],
+        "title": "CalcStatusOut"
+      },
+      "CalcTopItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value",
+            "description": "기대는 수(맨 위의 수) · 다리 역할(가장 큰 다리 대비)"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "type_slug",
+          "value",
+          "rank"
+        ],
+        "title": "CalcTopItem"
+      },
+      "CalcTopOut": {
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalcRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalcTopItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "total",
+          "items"
+        ],
+        "title": "CalcTopOut"
       },
       "CandidateOut": {
         "properties": {

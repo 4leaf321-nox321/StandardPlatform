@@ -316,6 +316,19 @@ class Settings(BaseSettings):
     """지도 작업의 임시 파일 상한(`temp_file_limit`, ADR 0049) — 넘으면 그 작업만 실패한다.
     `READ_TEMP_LIMIT` 처럼 배포가 앱 계정에 권한을 줄 때만 걸린다. 비우면 안 건다."""
 
+    graph_calc_night_hour: int = 5
+    """밤 그래프 계산(기대는 수 · 군집 · 비슷한 것 · 다리 역할, ADR 0067)을 워커가 넣는 시간
+    (서버 현지 시각, 0 ~ 23). 지표(2시) · 백업(3시) · 지도 덧붙임(4시) 뒤."""
+    graph_calc_auto: bool = True
+    """밤 그래프 계산을 **워커가 스스로** 넣나. false 면 시스템 관리자의 「지금 계산」 만 돈다.
+    실패 · 취소한 뒤에는 사람이 누를 때까지 다시 넣지 않는다(ADR 0049 의 교훈)."""
+    graph_calc_engine: str = "auto"
+    """`auto`(GPU 가 보이면 GPU, 아니면 CPU) · `cpu` · `gpu`(못 쓰면 계산이 실패한다 — 말없이
+    CPU 로 돌지 않는다). GPU 는 GPU 판 번들이어야 하고 워커가 `--nv` 로 떠야 한다."""
+    graph_calc_threads: int = 0
+    """CPU 엔진(NetworKit)이 쓸 스레드 — 0 이면 서버의 코어 전부. 같은 서버의 DB · 웹이
+    버거우면 줄인다."""
+
     embedding_backend: Literal["ollama", "off"] = "ollama"
     """글을 뜻의 자리(숫자 1,024개)로 바꾸는 임베딩 모델을 어디서 돌리나(ADR 0050).
     `ollama` 면 서버 안의 Ollama — 글이 서버 밖으로 나가지 않는다. `off` 면 뜻으로 찾기를 끈

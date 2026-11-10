@@ -34,6 +34,10 @@ from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.graph.models import (
+    GraphCalcCluster,
+    GraphCalcRun,
+    GraphCalcScore,
+    GraphCalcSimilar,
     MapCount,
     MapCounted,
     MapFrozen,
@@ -108,6 +112,10 @@ __all__ = [
     "DataSource",
     "DataSourceRun",
     "ExtensionState",
+    "GraphCalcCluster",
+    "GraphCalcRun",
+    "GraphCalcScore",
+    "GraphCalcSimilar",
     "GraphEdgeSnapshot",
     "HomeMetric",
     "Job",

@@ -42,9 +42,15 @@ cryptography==50.0.1
 cffi==2.1.1
 pycparser==3.0
 # 분석(ADR 0014) — 와이블 최대우도 · 분포 함수 · 묶음. scipy 는 `metrics/recipes/_numeric.py`
-# 한 곳에서만 부른다(구조 시험). pandas · statsmodels 는 쓰지 않는다 — 번들이 커지고 쓸 것이 없다.
+# 와 밤 그래프 계산의 문 `graph/calcengine.py` 에서만 부른다(구조 시험). pandas · statsmodels 는
+# 쓰지 않는다 — 번들이 커지고 쓸 것이 없다.
 numpy==2.5.3
 scipy==1.18.1
+# 밤 그래프 계산(ADR 0067)의 CPU 엔진 — 군집(PLM) · 다리 역할(매개 중심성 어림). MIT.
+# `graph/calcengine.py` 한 곳에서만, 함수 안에서 늦게 부른다(구조 시험). tabulate 는 그 의존.
+# GPU 판은 `requirements-gpu.txt` 를 더 깐다.
+networkit==11.3
+tabulate==0.10.0
 # 장표의 pptx 내보내기(ADR 0037 3단계) — 표 · 셀 병합을 PowerPoint 가 「복구」 를 묻지 않게 쓴다.
 # `slides/pptx.py` 한 곳에서만 부른다. lxml · XlsxWriter 는 그 의존(Pillow 는 위에 있다).
 python-pptx==1.0.2

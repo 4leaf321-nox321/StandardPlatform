@@ -1,0 +1,156 @@
+# GPU 판 번들(ADR 0067) — 같은 앱에 밤 그래프 계산의 GPU 엔진과 CUDA 런타임(약 5GB)을 더 담은 판을
+# **이미 게시된 릴리스**에 더한다.
+#
+# CUDA 런타임은 NVIDIA 독점 라이선스(CUDA EULA)다. 저장소가 공개라 릴리스에 올리면 누구나 받는다 —
+# 그래서 **기본은 꺼져 있다**. 켜는 길은 둘이다.
+#
+# - 태그마다 같이: 저장소 변수 `RELEASE_GPU` 를 `true` 로(Settings › Secrets and variables › Actions ›
+#   Variables). `release.yml` 이 CPU 판을 게시한 뒤 이것을 부른다.
+# - 한 판만 나중에: Actions › 「Release (GPU 판)」 › Run workflow 에 게시된 태그(예: v0.4.79)를 넣는다.
+#
+# CPU 판을 게시한 **뒤에** 따로 돈다 — CPU 판의 단계들은 번들이 하나라고 보고, GPU 판이 실패해도
+# CPU 판 릴리스는 서 있어야 한다. GitHub 릴리스 파일 하나는 2GiB 까지라 넘으면 조각으로 올린다.
+
+name: Release (GPU 판)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      since:
+        description: '판 기록의 출발점(앞 릴리스) — 비우면 이 태그 바로 앞의 게시된 릴리스'
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'GPU 판을 더할 게시된 릴리스의 태그(예: v0.4.79)'
+        type: string
+        required: true
+      since:
+        description: '판 기록의 출발점(앞 릴리스) — 비우면 이 태그 바로 앞의 게시된 릴리스'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  gpu:
+    name: GPU 판 번들 · 릴리스에 더하기
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      # 손으로 돌릴 때도 **그 태그의 코드**로 만든다(기본은 돌린 가지의 끝). 이력 전부는 판 기록 때문.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.node-version'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: '.python-version'
+
+      - uses: ./.github/actions/apptainer
+
+      # 러너의 디스크(약 14GB 빈 곳)로는 CUDA 런타임을 깐 이미지 · 그 tar 를 함께 못 든다 — 쓰지 않는
+      # 도구(.NET · 안드로이드 · GHC · CodeQL)를 지운다.
+      - name: 디스크 비우기
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # 판 기록은 CPU 판과 같은 출발점에서 — 이 태그가 이미 게시돼 있어 「마지막 릴리스」 를 다시 찾으면
+      # 자기 자신이 나온다. 그래서 목록에서 **이 태그 바로 다음**(더 오래된 쪽)을 고른다.
+      - name: 앞 릴리스 찾기
+        id: since
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIVEN: ${{ inputs.since }}
+        run: |
+          set -euo pipefail
+          tags=$(gh release list --limit 50 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft | not) | .tagName] | join(" ")')
+          [[ " $tags " == *" $TAG "* ]] || { echo "게시된 릴리스가 아닙니다: $TAG (먼저 CPU 판을 게시)"; exit 1; }
+          prev="$GIVEN"
+          if [[ -z "$prev" ]]; then
+            prev=$(tr ' ' '\n' <<< "$tags" | grep -A1 -x "$TAG" | sed -n 2p || true)
+          fi
+          echo "앞 릴리스: ${prev:-없음}"
+          echo "since=$prev" >> "$GITHUB_OUTPUT"
+
+      # 정제 도구 묶음은 **CPU 판과 같은 파일**을 이미지에 넣는다(릴리스에 올라간 것을 받는다).
+      - name: 정제 도구 묶음 받기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          gh release download "$TAG" --pattern 'sp-pipeline-*.zip' --dir release
+          ls -l release
+
+      - name: GPU 판 번들 빌드
+        env:
+          USE_SUDO_APPTAINER: '1'
+          VARIANT: gpu
+          RELEASE_SINCE: ${{ steps.since.outputs.since }}
+        run: ./deploy/build_bundle.sh "$TAG"
+
+      - name: GPU 판이 온전한가
+        run: |
+          set -euo pipefail
+          tarball=$(ls release/*-gpu.tar.gz)
+          tar tzf "$tarball" | sed 's|^[^/]*/||' | sort > /tmp/have.txt
+          for f in app.sif deploy.sh worker.service.template BUILD_INFO README.md CHANGES.md; do
+            grep -qx "$f" /tmp/have.txt || { echo "GPU 판 번들에 $f 가 없습니다"; exit 1; }
+          done
+          info=$(find release -path '*-gpu/BUILD_INFO' | head -1)
+          grep -qx 'variant=gpu' "$info" || { echo "BUILD_INFO 에 variant=gpu 가 없습니다"; exit 1; }
+          grep -q "^version=${TAG}$" "$info" || { echo "BUILD_INFO 의 version 이 태그와 다릅니다"; exit 1; }
+          sif=$(find release -path '*-gpu/app.sif' | head -1)
+          # 이미지 안에 GPU 엔진이 실제로 들었나 — 드라이버가 없는 러너라 GPU 는 「안 보임」 이 맞다.
+          apptainer exec "$sif" sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python -c \
+            "import pylibcugraph, cupy; from app.modules.graph import calcengine; print(calcengine.availability())"'
+          apptainer exec "$sif" grep -qx 'variant=gpu' /opt/app/BUILD_INFO.txt
+          ls -lh "$tarball"
+
+      - name: 릴리스에 더하기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tarball=$(ls release/*-gpu.tar.gz)
+          base=$(basename "$tarball")
+          files=("release/$base.sha256")
+          size=$(stat -c %s "$tarball")
+          # 2GiB 상한보다 넉넉히 아래로 — 넘으면 1,900MiB 조각(`.part-00` …)으로, 받은 뒤 `cat` 으로 잇는다.
+          if (( size > 1900 * 1024 * 1024 )); then
+            split -b 1900M -d -a 2 "$tarball" "$tarball.part-"
+            files+=("$tarball".part-*)
+            how=$(printf 'cat %s.part-* > %s\nsha256sum -c %s.sha256' "$base" "$base" "$base")
+          else
+            files+=("$tarball")
+            how=$(printf 'sha256sum -c %s.sha256' "$base")
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
+          gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/body.md"
+          # 두 번 돌려도(손으로 다시) 본문의 GPU 절은 하나만.
+          if ! grep -q '^## GPU 판 ' "$RUNNER_TEMP/body.md"; then
+            {
+              printf '\n## GPU 판 (밤 그래프 계산을 GPU 로 — ADR 0067)\n\n'
+              printf '같은 앱에 GPU 엔진과 CUDA 런타임(NVIDIA CUDA EULA)을 더 담은 판입니다. 서버에 NVIDIA 드라이버(CUDA 12)가 '
+              printf '있어야 GPU 로 돌고, 없으면 CPU 로 돕니다. 받은 파일을 잇고 맞춘 뒤 CPU 판과 같은 `deploy.sh` 로 깝니다.\n\n'
+              printf '```bash\n%s\n```\n' "$how"
+            } >> "$RUNNER_TEMP/body.md"
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/body.md"
+          fi
+          echo "GPU 판을 더했습니다: ${files[*]}"

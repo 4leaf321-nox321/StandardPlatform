@@ -2363,6 +2363,66 @@ async def graph_overview(ctx: Context) -> Any:
 
 
 @tool()
+async def graph_metrics(
+    ctx: Context,
+    action: str = "status",
+    metric: str | None = None,
+    relation: str | None = None,
+    type_slug: str | None = None,
+    object_id: str | None = None,
+    cluster: int | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> Any:
+    """**밤에 센 그래프 지표**(ADR 0067) — 펼쳐서 세면 수천 번 불러야 하는 물음을 한 번에.
+
+    - `status` — 지금 판: 언제 셌나 · 엔진 · **센 이어지는 관계**(`run.stats.relations`의
+      키 — `top` 의 `relation` 에 그대로 넣는다). 처음엔 이것부터.
+    - `top` — 순위. `metric="depends_top"`(**기대는 수** — 끝까지 따라 올라가면 기대는 맨
+      위의 수, BOM 이면 「이 부품을 쓰는 모델 수」, `relation` 필요) · `metric="bridge"`
+      (**다리 역할** — 무리 사이의 길이 이것을 지나는 정도, 가장 큰 다리 = 1). `type_slug`
+      로 좁힌다. 「가장 많은 모델이 기대는 부품 10개」 = `top(depends_top, bom, part)`.
+    - `object` — 객체 하나(`object_id`): 지표마다 값 · 순위 · 몇 개 중, 무리, **비슷한 것**
+      위 10(같은 타입의 맨 위끼리 끝까지 펼친 구성의 자카드 — 「구성이 비슷한 모델」).
+    - `clusters` — 무리(함께 엮이는 것 — Louvain) 목록, 큰 것부터. 이름은 대표(무리 안에서
+      이음이 가장 많은 것)의 이름.
+    - `cluster` — 무리 하나의 객체(`cluster` 번호, `type_slug` 로 좁힘).
+
+    **밤에 센 사본이다** — 답에 `run.computed_at`(언제 센 값인지)을 함께 말한다. 그 뒤에
+    바뀐 관계는 안 들었다. 지금 값이 꼭 필요하면 `object_explode` · `graph_reach` 로
+    센다. 판이 없으면(`run` 이 null) 아직 안 셌다 — 「없다」 가 아니다. 무리 번호는 앞
+    판과 반 넘게 겹치면 이어받는다."""
+    limit = max(1, min(limit, 200))
+    if action == "status":
+        return await _get(ctx, "/api/graph/calc")
+    if action == "top":
+        if not metric:
+            return {"error": "metric 을 줍니다 — depends_top(relation 필요) 또는 bridge."}
+        params: dict[str, Any] = {"metric": metric, "limit": limit, "offset": offset}
+        if relation:
+            params["relation"] = relation
+        if type_slug:
+            params["type"] = type_slug
+        return await _get(ctx, "/api/graph/calc/top", params=params)
+    if action == "object":
+        if not object_id:
+            return {"error": "object_id 를 줍니다."}
+        return await _get(ctx, f"/api/graph/calc/object/{object_id}")
+    if action == "clusters":
+        return await _get(
+            ctx, "/api/graph/calc/clusters", params={"limit": limit, "offset": offset}
+        )
+    if action == "cluster":
+        if cluster is None:
+            return {"error": "cluster(무리 번호)를 줍니다 — clusters 로 먼저 봅니다."}
+        params = {"limit": limit, "offset": offset}
+        if type_slug:
+            params["type"] = type_slug
+        return await _get(ctx, f"/api/graph/calc/clusters/{cluster}", params=params)
+    return {"error": f"모르는 action: {action} — status · top · object · clusters · cluster"}
+
+
+@tool()
 async def bulk_edit(
     ctx: Context,
     type_slug: str,

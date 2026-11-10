@@ -231,21 +231,54 @@ def test_모듈_이름이_백엔드와_프론트에서_같다() -> None:
     assert not only_backend, f"프론트에 짝이 없는 모듈: {sorted(only_backend)}"
 
 
-def test_scipy_는_수치_문_한_곳에서만_부른다() -> None:
-    """**scipy 는 `metrics/recipes/_numeric.py` 에서만, pandas · statsmodels 는 아무 데서도.**
+def test_scipy_는_수치_문_두_곳에서만_부른다() -> None:
+    """**scipy 는 분석의 문 `metrics/recipes/_numeric.py` 와 밤 그래프 계산의 문
+    `graph/calcengine.py` 에서만, pandas · statsmodels 는 아무 데서도.**
 
     scipy 는 타입 표시가 없어 부르는 자리마다 Any 가 퍼지고, 프로세스마다 0.3~0.6초 · 약
-    50MB 를 들여 올린다 — 한 문(늦은 import)으로만 들어오게 한다(ADR 0014). pandas ·
+    50MB 를 들여 올린다 — 정한 문(늦은 import)으로만 들어오게 한다(ADR 0014 · 0067). pandas ·
     statsmodels 는 번들을 240MB 로 키우고 쓸 것이 없다 — 「잠깐 편하자」 는 import 하나가 그
     값을 치르게 한다.
     """
-    allowed = MODULES / "metrics" / "recipes" / "_numeric.py"
+    allowed = {
+        MODULES / "metrics" / "recipes" / "_numeric.py",
+        MODULES / "graph" / "calcengine.py",
+    }
     offenders: list[str] = []
     for path in (BACKEND / "app").rglob("*.py"):
         for name in _imports(path):
             root = name.split(".")[0]
             if root in ("pandas", "statsmodels"):
                 offenders.append(f"{path.relative_to(BACKEND)} -> {name}")
-            if root == "scipy" and path != allowed:
+            if root == "scipy" and path not in allowed:
                 offenders.append(f"{path.relative_to(BACKEND)} -> {name}")
     assert not offenders, "수치 라이브러리를 정한 문 밖에서 부릅니다: " + ", ".join(offenders)
+
+
+def test_그래프_계산_라이브러리는_엔진_한_곳에서_늦게_부른다() -> None:
+    """**NetworKit · cupy · pylibcugraph 는 `graph/calcengine.py` 에서만, 함수 안에서**
+    (ADR 0067).
+
+    GPU 둘은 GPU 판 번들에만 있다 — 모듈 맨 위에서 부르면 CPU 판에서 앱이 안 뜬다. NetworKit 은
+    웹 워커가 열 까닭이 없다(셈은 워커가 한다)."""
+    allowed = MODULES / "graph" / "calcengine.py"
+    heavy = ("networkit", "cupy", "cupyx", "pylibcugraph")
+    offenders: list[str] = []
+    for path in (BACKEND / "app").rglob("*.py"):
+        for name in _imports(path):
+            if name.split(".")[0] in heavy and path != allowed:
+                offenders.append(f"{path.relative_to(BACKEND)} -> {name}")
+    tree = ast.parse(allowed.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = (
+                [alias.name for alias in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+            )
+            for name in names:
+                if name.split(".")[0] in (*heavy, "scipy"):
+                    offenders.append(f"calcengine.py 맨 위에서 부름: {name}")
+    assert not offenders, "그래프 계산 라이브러리를 정한 자리 밖에서 부릅니다: " + ", ".join(
+        offenders
+    )

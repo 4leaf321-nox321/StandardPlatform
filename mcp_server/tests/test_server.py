@@ -80,6 +80,7 @@ TOOLS = {
     "graph_reach",
     "graph_path",
     "graph_overview",
+    "graph_metrics",
     "bulk_edit",
     "bulk_edit_undo",
     "audit_recent",
@@ -2043,6 +2044,40 @@ def test_영향_범위와_이웃의_방향이_그대로_건너간다() -> None:
     asyncio.run(server.graph_neighbors(ctx, "p1"))
     assert seen[1].url.params["direction"] == "in"
     assert "direction" not in seen[2].url.params
+
+
+def test_밤에_센_그래프_지표의_길과_인자가_그대로_건너간다() -> None:
+    """`graph_metrics`(ADR 0067) — 행동마다 경로 하나. 빠진 인자는 부르지 않고 말한다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"run": None}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(server.graph_metrics(ctx))
+    asyncio.run(
+        server.graph_metrics(
+            ctx, "top", metric="depends_top", relation="bom", type_slug="part", limit=500
+        )
+    )
+    asyncio.run(server.graph_metrics(ctx, "object", object_id="o1"))
+    asyncio.run(server.graph_metrics(ctx, "clusters"))
+    asyncio.run(server.graph_metrics(ctx, "cluster", cluster=7, type_slug="model"))
+    paths = [one.url.path for one in seen]
+    assert paths == [
+        "/api/graph/calc",
+        "/api/graph/calc/top",
+        "/api/graph/calc/object/o1",
+        "/api/graph/calc/clusters",
+        "/api/graph/calc/clusters/7",
+    ]
+    assert dict(seen[1].url.params) == {
+        "metric": "depends_top",
+        "limit": "200",
+        "offset": "0",
+        "relation": "bom",
+        "type": "part",
+    }
+    assert seen[4].url.params["type"] == "model"
+    missing = asyncio.run(server.graph_metrics(ctx, "top"))
+    assert "metric" in missing["error"] and len(seen) == 5
+    assert "action" in asyncio.run(server.graph_metrics(ctx, "뭐지"))["error"]
 
 
 def test_관계의_유효_기간과_기준일이_그대로_건너간다() -> None:

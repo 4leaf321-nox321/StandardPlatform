@@ -916,6 +916,16 @@ def graph_map_count(work: Work) -> dict[str, Any]:
     return mapbuild.run_count(work.db, progress=work.progress)
 
 
+def graph_calc(work: Work) -> dict[str, Any]:
+    """밤 그래프 계산(ADR 0067) — 기대는 수 · 비슷한 것 · 군집 · 다리 역할을 새 판으로 센다.
+    GPU 를 고른 설정(`GRAPH_CALC_ENGINE=gpu`)인데 못 쓰면 그 까닭으로 실패한다."""
+    from app.modules.graph import calc
+
+    return calc.run(
+        work.db, user_id=work.user.id if work.user else None, progress=work.progress
+    )
+
+
 def metric_insights(work: Work) -> dict[str, Any]:
     """지표 하나를 훑어 「눈여겨볼 것」 을 적는다(ADR 0032) — 지표를 다시 센 뒤 들어온다.
     분석 하나의 실패는 훑기를 멈추지 않고 결과에 적는다."""
@@ -1126,6 +1136,22 @@ register(
         False,
         False,
         graph_map_count,
+        allow_system=True,
+        admin_only=True,
+        retries=False,
+        stop_midway=True,
+    )
+)
+# 밤 그래프 계산(ADR 0067) — 타이머(워커가 5분마다 `calc.schedule`)가 넣고, 「지금 계산」 은
+# 시스템 관리자가 전용 경로(`POST /api/graph/calc/run`)로. 메모리를 다 써 워커가 죽었을 수 있어
+# 다시 돌리지 않고, 취소하면 도는 질의까지 끊는다(지도와 같다, ADR 0049).
+register(
+    Kind(
+        "graph_calc",
+        "그래프 계산(기대는 수 · 군집 · 비슷한 것 · 다리 역할)",
+        False,
+        False,
+        graph_calc,
         allow_system=True,
         admin_only=True,
         retries=False,

@@ -12,7 +12,10 @@ WorkingDirectory=@@INSTALL_DIR@@
 # 웹 서비스와 **같은 SIF·같은 .env** 로 돈다. 두 서버에 하나씩 떠도 같은 작업을 두 번 안 집는다
 # (`FOR UPDATE SKIP LOCKED`). 작업 파일은 DB 에 있어 filestore 를 안 봐도 되지만, 앞으로의
 # 종류(내보내기 → 첨부)를 위해 같은 bind 를 건다.
+# GPU 판 번들이면 ExecStart 아래 자리표시 줄이 NVIDIA 드라이버를 여는 줄이 된다(밤 그래프 계산, ADR 0067).
+# CPU 판이거나 드라이버가 안 보이면 줄째 빠진다.
 ExecStart=/usr/bin/apptainer exec \
+@@NV@@
     --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
     --bind @@FILESTORE_DIR@@:/data/filestore \
     --bind @@LOG_DIR@@:/data/logs \

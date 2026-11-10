@@ -3,8 +3,10 @@
 #
 #   ./deploy/build_bundle.sh            버전은 git describe 에서
 #   ./deploy/build_bundle.sh v0.1.0     직접 지정
+#   VARIANT=gpu ./deploy/build_bundle.sh   GPU 판(ADR 0067) — 밤 그래프 계산의 GPU 엔진과 CUDA 런타임을
+#                                          더 담는다(약 5GB 더). 이름 끝에 `-gpu`.
 #
-# 산출물: release/<slug>-<버전>.tar.gz
+# 산출물: release/<slug>-<버전>[-gpu].tar.gz
 #   app.sif · deploy.sh · ha.sh · pg-ha.sh · pg-tune.sh · backup.sh · restore.sh · *.template · .env.example
 #   · BUILD_INFO · README.md · CHANGES.md(판 기록) · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ · pgvector_debs/ (폐쇄망용)
 #
@@ -59,7 +61,12 @@ EOF
 [[ -n "$APP_SLUG" ]] || { echo "오류: 플랫폼 정보를 읽지 못했습니다"; exit 1; }
 
 VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || date +%Y%m%d-%H%M%S)}"
+# **판(cpu · gpu)** — 같은 앱이고 GPU 판은 그래프 계산의 GPU 엔진을 더 담는다. 이름에 붙여 두 번들이
+# 한 폴더에 나란히 있어도 헷갈리지 않게(CPU 판은 예전 이름 그대로).
+VARIANT="${VARIANT:-cpu}"
+case "$VARIANT" in cpu|gpu) ;; *) echo "오류: VARIANT 는 cpu 또는 gpu 입니다: $VARIANT"; exit 1 ;; esac
 RELEASE_NAME="${APP_SLUG}-${VERSION}"
+[[ "$VARIANT" == "gpu" ]] && RELEASE_NAME="${RELEASE_NAME}-gpu"
 OUT_DIR="release"
 STAGE="${OUT_DIR}/${RELEASE_NAME}"
 
@@ -67,7 +74,7 @@ STAGE="${OUT_DIR}/${RELEASE_NAME}"
 # 다음 자리다. 따로 적으면 옆 플랫폼과 겹치는지 볼 자리가 하나 더 생긴다.
 MCP_PORT=$((APP_PORT + 2))
 
-echo "==> $APP_NAME ($APP_SLUG) · 포트 $APP_PORT (MCP $MCP_PORT) · 버전 $VERSION"
+echo "==> $APP_NAME ($APP_SLUG) · 포트 $APP_PORT (MCP $MCP_PORT) · 버전 $VERSION · 판 $VARIANT"
 
 # ── 1. 프론트엔드 ─────────────────────────────────────────────────────────────
 # **이게 없으면 배포된 앱이 모든 페이지에 API 의 JSON 404 를 돌려준다** —
@@ -115,6 +122,7 @@ mkdir -p "$STAGE"
 # 없어진다 — 실측으로 그렇게 나왔다. .def 의 %files 가 이 파일을 집는다.
 cat > deploy/BUILD_INFO.txt <<INFO
 version=$VERSION
+variant=$VARIANT
 app_name=$APP_NAME
 app_slug=$APP_SLUG
 python=3.12
@@ -244,6 +252,7 @@ app_slug=$APP_SLUG
 port=$APP_PORT
 mcp_port=$MCP_PORT
 version=$VERSION
+variant=$VARIANT
 python=3.12
 built_at=$(date -Is)
 INFO
