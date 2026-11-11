@@ -33,6 +33,30 @@ describe('copyText', () => {
     expect(document.querySelectorAll('textarea')).toHaveLength(0)
   })
 
+  it('옛 방식도 막히면 던진다 — 부르는 쪽이 글을 보여 주고 Ctrl+C 를 말한다', async () => {
+    vi.stubGlobal('navigator', {})
+    Object.defineProperty(document, 'execCommand', {
+      value: vi.fn().mockReturnValue(false),
+      configurable: true,
+    })
+    await expect(copyText('세 줄')).rejects.toThrow()
+    expect(document.querySelectorAll('textarea')).toHaveLength(0)
+  })
+
+  it('복사한 뒤 누른 단추로 초점을 돌려준다', async () => {
+    vi.stubGlobal('navigator', {})
+    Object.defineProperty(document, 'execCommand', {
+      value: vi.fn().mockReturnValue(true),
+      configurable: true,
+    })
+    const button = document.createElement('button')
+    document.body.appendChild(button)
+    button.focus()
+    await copyText('네 줄')
+    expect(document.activeElement).toBe(button)
+    button.remove()
+  })
+
   it('클립보드 API 가 막히면(권한 거부) 옛 방식으로 떨어진다', async () => {
     vi.stubGlobal('navigator', {
       clipboard: { writeText: vi.fn().mockRejectedValue(new Error('막힘')) },

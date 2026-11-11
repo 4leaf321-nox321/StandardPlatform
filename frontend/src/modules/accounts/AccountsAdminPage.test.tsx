@@ -26,8 +26,10 @@ const accountApi = vi.hoisted(() => ({
   revokeToken: vi.fn(),
 }))
 const workspaceApi = vi.hoisted(() => ({ options: vi.fn() }))
+const clipboard = vi.hoisted(() => ({ copyText: vi.fn() }))
 vi.mock('@/modules/accounts/api', () => ({ accountApi }))
 vi.mock('@/modules/workspaces/api', () => ({ workspaceApi }))
+vi.mock('@/shared/lib/clipboard', () => clipboard)
 
 const ACCOUNT: Account = {
   id: 'acc-1',
@@ -93,6 +95,44 @@ describe('계정 관리 · 쪽 넘김과 상태 거르기', () => {
     await waitFor(() =>
       expect(accountApi.list).toHaveBeenLastCalledWith({ status: null, limit: 50, offset: 0 }),
     )
+  })
+})
+
+describe('계정 관리 · 여러 계정에 메일 쓰기', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    clipboard.copyText.mockResolvedValue(undefined)
+  })
+
+  it('고른 계정의 메일 주소를 복사한다', async () => {
+    await open({ ...ACCOUNT, email: 'hong@corp.example' })
+    await userEvent.click(screen.getByRole('checkbox', { name: /홍길동\(hong@corp.example\) 고르기/ }))
+    expect(screen.getByText('고른 계정 1명')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /메일 주소 복사/ }))
+    expect(clipboard.copyText).toHaveBeenCalledWith('hong@corp.example')
+  })
+
+  it('「모두 고르기」 는 이 거르기의 계정을 쪽마다 받아 전부 고른다 — 보이는 50명이 끝이 아니다', async () => {
+    await open(ACCOUNT, { total: 150 })
+    const everyone = Array.from({ length: 150 }, (_, n) => ({
+      ...ACCOUNT,
+      id: `acc-${n}`,
+      email: `user${n}@corp.example`,
+    }))
+    accountApi.list.mockImplementation(async (query: { limit: number; offset: number }) => ({
+      items: everyone.slice(query.offset, query.offset + query.limit),
+      total: everyone.length,
+      limit: query.limit,
+      offset: query.offset,
+    }))
+    await userEvent.click(screen.getByRole('button', { name: /「전체」 150명 모두 고르기/ }))
+    await screen.findByText('고른 계정 150명')
+    expect(accountApi.list).toHaveBeenCalledWith({ status: null, limit: 100, offset: 0 })
+    expect(accountApi.list).toHaveBeenCalledWith({ status: null, limit: 100, offset: 100 })
+    await userEvent.click(screen.getByRole('button', { name: /메일 주소 복사/ }))
+    const copied = String(clipboard.copyText.mock.calls[0]?.[0])
+    expect(copied.split('; ')).toHaveLength(150)
+    expect(copied.startsWith('user0@corp.example; user1@corp.example')).toBe(true)
   })
 })
 

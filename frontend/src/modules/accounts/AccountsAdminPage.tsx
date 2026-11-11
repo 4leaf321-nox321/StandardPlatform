@@ -13,6 +13,7 @@ import { accountApi } from '@/modules/accounts/api'
 import type { Account } from '@/modules/accounts/api'
 import { AccountTokensDialog } from '@/modules/accounts/AccountTokensDialog'
 import { AccountWorkspacesDialog } from '@/modules/accounts/AccountWorkspacesDialog'
+import { MailCopyBar } from '@/modules/accounts/MailCopyBar'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -38,6 +39,8 @@ import { shownDate } from '@/shared/lib/datetime'
 
 /** 서버 상한(`accounts/routes.py` 의 le=100) 안에서 고른 한 쪽 크기. */
 const PER_PAGE = 50
+/** 「모두 고르기」 가 한 번에 받는 수 — 서버 상한. */
+const GATHER_PAGE = 100
 
 /** 상태 거르기 — 알림의 링크(`?status=pending`)가 이 값을 싣고 온다. */
 const STATUS_FILTERS: { value: string | null; label: string }[] = [
@@ -88,6 +91,48 @@ export default function AccountsAdminPage() {
   // 승인하면 서버가 「부서를 골라 주세요」 로 거절하는데 고를 자리가 없었다. 승인할 때 묻는다.
   const [approving, setApproving] = useState<Account | null>(null)
   const [approveTo, setApproveTo] = useState('')
+
+  // **고른 계정**(id → 아이디) — 쪽을 넘기거나 거르기를 바꿔도 남는다(여러 쪽에서 골라 한 번에
+  // 메일을 쓴다). 아이디를 함께 들고 있어야 누르는 순간 곧바로 복사한다(`MailCopyBar`).
+  const [picked, setPicked] = useState<Map<string, string>>(new Map())
+  const [gathering, setGathering] = useState(false)
+
+  function pick(one: Account, on: boolean) {
+    setPicked((was) => {
+      const next = new Map(was)
+      if (on) next.set(one.id, one.email)
+      else next.delete(one.id)
+      return next
+    })
+  }
+
+  /** 이 거르기의 계정 **전부**를 고른다 — 쪽마다 받아 모은다(서버는 한 번에 100명까지). */
+  async function pickAll() {
+    setError(null)
+    setGathering(true)
+    try {
+      const found: Account[] = []
+      let total = Infinity
+      while (found.length < total) {
+        const page = await accountApi.list({ status, limit: GATHER_PAGE, offset: found.length })
+        total = page.total
+        if (page.items.length === 0) break
+        found.push(...page.items)
+      }
+      setPicked((was) => {
+        const next = new Map(was)
+        for (const one of found) next.set(one.id, one.email)
+        return next
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setGathering(false)
+    }
+  }
+
+  const pageAllPicked = rows.length > 0 && rows.every((one) => picked.has(one.id))
+  const filterLabel = STATUS_FILTERS.find((one) => one.value === status)?.label ?? '전체'
 
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
@@ -210,6 +255,14 @@ export default function AccountsAdminPage() {
         ))}
       </div>
 
+      {list.data && list.data.total > 0 && (
+        <MailCopyBar ids={[...picked.values()]} onClear={() => setPicked(new Map())}>
+          <Button size="sm" variant="outline" disabled={gathering} onClick={() => void pickAll()}>
+            {gathering ? '고르는 중…' : `「${filterLabel}」 ${list.data.total}명 모두 고르기`}
+          </Button>
+        </MailCopyBar>
+      )}
+
       {list.data && rows.length === 0 ? (
         status ? (
           <EmptyState
@@ -226,6 +279,16 @@ export default function AccountsAdminPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-8">
+                <input
+                  type="checkbox"
+                  aria-label="이 쪽 전부 고르기"
+                  checked={pageAllPicked}
+                  onChange={(event) => {
+                    for (const one of rows) pick(one, event.target.checked)
+                  }}
+                />
+              </TableHead>
               <TableHead>아이디</TableHead>
               <TableHead>이름</TableHead>
               <TableHead>상태</TableHead>
@@ -237,6 +300,14 @@ export default function AccountsAdminPage() {
           <TableBody>
             {rows.map((one) => (
               <TableRow key={one.id}>
+                <TableCell className="pr-0">
+                  <input
+                    type="checkbox"
+                    aria-label={`${one.display_name}(${one.email}) 고르기`}
+                    checked={picked.has(one.id)}
+                    onChange={(event) => pick(one, event.target.checked)}
+                  />
+                </TableCell>
                 <TableCell className="font-mono text-xs">{one.email}</TableCell>
                 <TableCell>
                   {one.display_name}
