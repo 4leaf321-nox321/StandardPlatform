@@ -156,9 +156,9 @@ describe('조건 줄', () => {
     ])
   })
 
-  it('상대가 정해지지 않은 관계는 있음·없음만 걸 수 있다', async () => {
+  it('상대가 정해지지 않은 관계는 있음·없음 · 개수만 걸 수 있다', async () => {
     const { opsFor } = await import('@/modules/objects/ConditionBar')
-    expect(opsFor('relation')).toEqual(['empty', 'notempty'])
+    expect(opsFor('relation')).toEqual(['empty', 'notempty', 'count_eq', 'count_gte', 'count_lte'])
   })
 
   it('목록에 이름이 안 실려 오는 참조 값도 새로 열었을 때 이름으로 선다', async () => {
@@ -310,13 +310,15 @@ describe('같은 관계 묶음(ADR 0043)', () => {
     ])
   })
 
-  it('관계 걸음을 지나는 주소를 가른다 — 나를 가리키는 것은 선이 아니다', async () => {
+  it('관계 걸음 · 나를 가리키는 걸음을 지나는 주소를 가른다', async () => {
     const { bindable } = await import('@/modules/objects/ConditionBar')
     expect(bindable('out.bom~qty')).toBe(true)
     expect(bindable('out.bom.label')).toBe(true)
     expect(bindable('ref.model.in.bom')).toBe(true)
     expect(bindable('ref.vendor.country')).toBe(false)
-    expect(bindable('in.svc_case:model.symptom')).toBe(false)
+    // 나를 가리키는 것 — 같은 기록 하나(「불합격인 시험이 8건 이상」).
+    expect(bindable('in.svc_case:model.symptom')).toBe(true)
+    expect(bindable('in.svc_case:model')).toBe(true)
     expect(bindable('weight')).toBe(false)
   })
 })
@@ -335,7 +337,8 @@ describe('하위 전체(ADR 0035)', () => {
 
   it('트리가 있는 타입을 가리키는 칸에만 연산이 선다', async () => {
     const { opsFor } = await import('@/modules/objects/ConditionBar')
-    expect(opsFor('object_ref')).toEqual(['eq', 'ne', 'in', 'empty', 'notempty'])
+    const count = ['count_eq', 'count_gte', 'count_lte']
+    expect(opsFor('object_ref')).toEqual(['eq', 'ne', 'in', 'empty', 'notempty', ...count])
     expect(opsFor('object_ref', { tree: true })).toEqual([
       'eq',
       'ne',
@@ -343,9 +346,10 @@ describe('하위 전체(ADR 0035)', () => {
       'under',
       'empty',
       'notempty',
+      ...count,
     ])
-    // 목록 자신은 「하위 전체」 하나뿐이다.
-    expect(opsFor('object_ref', { self: true })).toEqual(['under'])
+    // 목록 자신은 「하위 전체」 · 「위 전부」 다.
+    expect(opsFor('object_ref', { self: true })).toEqual(['under', 'above'])
   })
 
   it('칩은 「…: 이름 하위 전체」 로 읽히고 이름은 상세에서 채운다', async () => {
@@ -359,6 +363,38 @@ describe('하위 전체(ADR 0035)', () => {
       />,
     )
     expect(await screen.findByText('교체 부품: 해석팀 하위 전체')).toBeInTheDocument()
+  })
+
+  it('개수는 숫자로 걸고 칩은 「… 개수 ≥ 2」 로 읽힌다 — 값을 객체로 묻지 않는다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const { objectApi } = await import('@/modules/objects/api')
+    const onChange = vi.fn()
+    const asked = vi.mocked(objectApi.profile).mock.calls.length
+    const kept = { field: 'model', op: 'count_gte' as const, value: '2' }
+    render(<ConditionBar defs={REFS} conditions={[kept]} onChange={onChange} />)
+    expect(await screen.findByText('모델 개수 ≥ 2')).toBeInTheDocument()
+    expect(vi.mocked(objectApi.profile).mock.calls.length).toBe(asked)
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
+    await userEvent.click(screen.getByRole('button', { name: '교체 부품' }))
+    await userEvent.click(screen.getByRole('combobox', { name: '연산' }))
+    await userEvent.click(await screen.findByRole('option', { name: '개수가' }))
+    await userEvent.type(screen.getByRole('spinbutton', { name: '개수' }), '1')
+    await userEvent.click(screen.getByRole('button', { name: '걸기' }))
+    expect(onChange).toHaveBeenLastCalledWith([kept, { field: 'part', op: 'count_eq', value: '1' }])
+  })
+
+  it('목록 자신의 「위 전부」 는 「…: 이름 위 전부」 로 읽힌다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    render(
+      <ConditionBar
+        defs={REFS}
+        conditions={[{ field: 'part', op: 'above', value: 'w1' }]}
+        onChange={vi.fn()}
+        treeTypes={new Set(['part'])}
+      />,
+    )
+    expect(await screen.findByText('교체 부품: 해석팀 위 전부')).toBeInTheDocument()
   })
 
   it('목록 자신이 트리 타입이면 「자신」 칸이 서고, 아니면 안 선다', async () => {

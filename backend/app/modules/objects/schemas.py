@@ -1006,6 +1006,15 @@ class SummaryOut(BaseModel):
     buckets: list[BucketOut]
     other_groups: int
     other_count: int
+    """이 쪽에 없는 막대의 수와 그 건수(앞 쪽 · 뒤 쪽) — 문턱에 못 미친 것은 `below_*`."""
+    offset: int = 0
+    """이 쪽이 몇 번째 막대부터인가(0 부터)."""
+    groups: int = 0
+    """문턱(`min_value` · `max_value`)을 넘은 막대의 **전체** 수 — `offset + len(buckets) <
+    groups` 면 다음 쪽이 있다."""
+    below_groups: int = 0
+    below_count: int = 0
+    """문턱에 못 미쳐 뺀 막대의 수와 그 건수(문턱이 없으면 0)."""
     overlap: bool = False
     """기준·세부 기준이 여러 값 칸이면 True — **막대의 합이 total 보다 클 수 있다.**
     한 행이 여러 막대에 들기 때문이다. 화면이 그 사실을 적는다."""

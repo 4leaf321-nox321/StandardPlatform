@@ -30,7 +30,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
-from app.modules.objects import conditions
+from app.modules.objects import conditions, sublists
 
 if TYPE_CHECKING:
     from app.modules.ontology.models import PropertyDef
@@ -45,6 +45,8 @@ _TYPE_KEYS = ("q", "status", "as_of", "types")
 _INTERFACE_KEYS = ("q", "types")
 #: 통계 설정 — `group=1` 과 함께면 타입 목록이 처음 열 때 이것으로 통계를 편다.
 SUMMARY_KEYS = ("group_by", "split_by", "metric", "metric_field", "order", "grain")
+#: 통계의 문턱 — 막대를 거르는데 화면은 주소로 안 받는다(빠졌다고 적는다).
+SUMMARY_CUTS = ("min_value", "max_value")
 #: 줄 집합을 안 바꾸거나(이어진 칸) 화면이 1쪽부터 연다(쪽) — 버린다.
 _DROPPED = frozenset({"limit", "offset", "columns"})
 #: 하나만 받는 인자 — API 는 같은 키가 여럿이면 **마지막 것**을 쓴다(`QueryParams.get`).
@@ -109,7 +111,17 @@ def list_link(
     seen: set[str] = set()
     seen_fields: set[str] = set()
     for key, value in pairs:
+        if sublists.is_key(key):
+            # 부분 목록(`s<번호>.…`) — 화면은 아직 못 받는다. 그 값을 쓰는 조건도 함께 빠진다.
+            head = key.split(".", 1)[0]
+            if head not in seen:
+                seen.add(head)
+                missing.append(head)
+            continue
         if is_condition_key(key):
+            if sublists.reference(value) is not None:
+                missing.append(key)
+                continue
             out.append((key, value))
             continue
         if key.startswith("p."):
@@ -120,6 +132,11 @@ def list_link(
                     out.append((f"{conditions.PREFIX}{field}.eq", equals[field]))
                 else:
                     missing.append(key)
+            continue
+        if key in SUMMARY_CUTS:
+            if summary and key not in seen:
+                seen.add(key)
+                missing.append(key)
             continue
         if key in _DROPPED or key not in _SCALARS or key in seen:
             continue

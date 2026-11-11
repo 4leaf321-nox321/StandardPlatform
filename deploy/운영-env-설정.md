@@ -345,7 +345,7 @@ Claude 에서 목록 하나를 물어 답의 `url` 이 그 값으로 시작하�
 | 읽기 안전장치 | `READ_QUERY_SECONDS=60` · `READ_WORK_MEM=64MB` · `READ_PARALLEL_WORKERS=4` · `READ_TEMP_LIMIT=5GB` · `LONG_READ_SECONDS=120` · `WHOLE_SLOTS=2` | `READ_QUERY_SECONDS` 는 **MCP 의 읽기 대기(90초)보다 짧게** — 길면 AI 는 안내 대신 끊긴 연결을 받는다. `READ_WORK_MEM` · `READ_TEMP_LIMIT` 은 비우면 서버 설정을 따른다(이 둘은 빈 값이 뜻이 있다) |
 | 느린 요청 | `SLOW_REQUEST_P95_SECONDS=3` · `SLOW_REQUEST_MIN_CALLS=5` · `LARGE_RESPONSE_MB=5` | 홈 「남은 일」 이 잡음이 되면 올린다 |
 | 그래프 지도 | `GRAPH_MAP_NIGHT_HOUR=4` · `GRAPH_MAP_AUTO=true` · `GRAPH_MAP_MAX_RECORDS=50000000` · `GRAPH_MAP_TEMP_LIMIT=20GB` | 지도 계산이 서버를 버겁게 하면 `GRAPH_MAP_AUTO=false` |
-| 밤 그래프 계산(ADR 0067) | `GRAPH_CALC_NIGHT_HOUR=5` · `GRAPH_CALC_AUTO=true` · `GRAPH_CALC_ENGINE=auto` · `GRAPH_CALC_THREADS=0` | `ENGINE` 은 `auto`(GPU 가 보이면 GPU) · `cpu` · `gpu`(못 쓰면 실패 — 말없이 CPU 로 돌지 않는다). GPU 는 **GPU 판 번들**이어야 한다(워커가 `--nv` 로 뜬다). `THREADS=0` 은 코어 전부 — DB · 웹이 버거우면 줄인다 |
+| 밤 그래프 계산(ADR 0067) | `GRAPH_CALC_NIGHT_HOUR=5` · `GRAPH_CALC_AUTO=true` · `GRAPH_CALC_ENGINE=auto` · `GRAPH_CALC_THREADS=0` · `GRAPH_CALC_WHOLE_RELATIONS=`(비움) | `ENGINE` 은 `auto`(GPU 가 보이면 GPU) · `cpu` · `gpu`(못 쓰면 실패 — 말없이 CPU 로 돌지 않는다). GPU 는 **GPU 판 번들**이어야 한다(워커가 `--nv` 로 뜬다). `THREADS=0` 은 코어 전부 — DB · 웹이 버거우면 줄인다. `WHOLE_RELATIONS` 는 무리 · 다리 역할을 지을 선(쉼표 — 관계 slug, 참조 칸은 `<타입>.<칸>`, 비우면 전부). 전부면 공급사 중심, 구성만이면 제품군으로 묶인다. 모르는 이름이면 계산이 실패하고 아는 이름을 말한다 |
 | 로그인 · 토큰 | `ACCESS_TOKEN_MINUTES=720` · `REFRESH_TOKEN_DAYS=30` · `LOGIN_DELAY_AFTER=5` · `LOGIN_DELAY_STEP_SECONDS=2` · `LOGIN_DELAY_MAX_SECONDS=30` · `LOGIN_FAILURE_WINDOW_MINUTES=15` | 잠그지 않고 늦추기만 한다(관리자 복구가 서버 콘솔뿐이라) |
 | **적지 않는 것** | `REFRESH_COOKIE_NAME` · `FRONTEND_DIST` · `PIPELINE_KIT` · `LOG_DIR` · `FILESTORE_DIR` · `CORS_ORIGINS` | slug 에서 나오거나 이미지가 정한다 |
 

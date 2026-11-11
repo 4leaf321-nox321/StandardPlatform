@@ -2080,6 +2080,65 @@ def test_밤에_센_그래프_지표의_길과_인자가_그대로_건너간다(
     assert "action" in asyncio.run(server.graph_metrics(ctx, "뭐지"))["error"]
 
 
+def test_통계의_문턱과_쪽이_그대로_건너간다() -> None:
+    """「8건 이상인 모델 전부」 — 문턱 · 쪽을 서버에 넘긴다(원본을 받아 세지 않게). 쪽은
+    500 까지."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"buckets": []}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(
+        server.objects_summary(
+            ctx, "test", group_by="model", min_value=8, max_value=20, limit=900, offset=500
+        )
+    )
+    asyncio.run(server.objects_summary(ctx, "test", group_by="model"))
+    sent = dict(seen[0].url.params)
+    assert (sent["min_value"], sent["max_value"], sent["limit"], sent["offset"]) == (
+        "8",
+        "20",
+        "500",
+        "500",
+    )
+    assert not {"min_value", "max_value", "limit", "offset"} & set(seen[1].url.params)
+
+
+def test_부분_목록과_긴_읽기가_그대로_건너간다() -> None:
+    """조건의 `from` 은 부분 목록(`@<번호>` + `s<번호>.…`)으로 — 서버가 같은 요청 안에서
+    세운다. 쿼리가 길면 같은 쿼리를 몸통에 실어 POST(`X-HTTP-Method-Override: GET`)로
+    보낸다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 3}))
+    ctx = _ctx("Bearer t")
+    eu = {"field": "out.sold_in", "op": "eq", "value": "eu1"}
+    asyncio.run(
+        server.objects_list(
+            ctx,
+            "part",
+            conditions=[
+                {"field": "id", "op": "under", "from": {"type": "model", "conditions": [eu]}},
+                {"field": "in.supplies", "op": "in", "from": {"type": "vendor", "q": "한국"}},
+            ],
+        )
+    )
+    sent = list(seen[0].url.params.multi_items())
+    assert ("f.id.under", "@1") in sent and ("f.in.supplies.in", "@2") in sent
+    assert ("s1.type", "model") in sent and ("s1.f.out.sold_in.eq", "eu1") in sent
+    assert ("s2.type", "vendor") in sent and ("s2.q", "한국") in sent
+    assert seen[0].method == "GET"
+
+    many = "|".join(f"00000000-0000-0000-0000-{n:012d}" for n in range(300))
+    asyncio.run(
+        server.objects_summary(
+            ctx, "part", conditions=[{"field": "id", "op": "in", "value": many}]
+        )
+    )
+    long_one = seen[1]
+    assert long_one.method == "POST" and long_one.url.path == "/api/objects/part/summary"
+    assert long_one.headers["x-http-method-override"] == "GET"
+    assert long_one.headers["content-type"] == "application/x-www-form-urlencoded"
+    body = httpx.QueryParams(long_one.content.decode())
+    assert body["f.id.in"] == many and body["group_by"] == "status"
+    assert not long_one.url.params
+
+
 def test_관계의_유효_기간과_기준일이_그대로_건너간다() -> None:
     """유효 기간(ADR 0039) — 맺기 · 고치기가 기간을 싣고(안 준 것은 안 보내고, 빈 글자는
     비움), 읽는 도구가 기준일을 쿼리에 싣는다. 안 실으면 서버는 오늘로 보고, 「3월 기준」 을

@@ -44,7 +44,10 @@ describe('그래프 지표', () => {
         },
       ],
     }
-    graphCalcApi.object.mockResolvedValue(found)
+    graphCalcApi.object.mockResolvedValue({
+      ...found,
+      run: { ...run, stats: { whole_relations: ['bom'] } },
+    })
     const { GraphMetricsPanel } = await import('@/modules/graph/GraphMetricsPanel')
     render(
       <MemoryRouter>
@@ -56,6 +59,7 @@ describe('그래프 지표', () => {
     expect(screen.getByText(/279,076개 중 1위 · 상위 1% 안/)).toBeInTheDocument()
     expect(screen.getByText(/가장 큰 다리 대비 37%/)).toBeInTheDocument()
     expect(screen.getByText(/무리 14 「시장 EU」/)).toBeInTheDocument()
+    expect(screen.getByText(/구성\(으\)로 지음/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'MD-01601' })).toHaveAttribute('href', '/o/model/md2')
     expect(screen.getByText(/기준 · 밤에 센 값\(CPU\)/)).toBeInTheDocument()
     expect(graphCalcApi.object).toHaveBeenCalledWith('p1')

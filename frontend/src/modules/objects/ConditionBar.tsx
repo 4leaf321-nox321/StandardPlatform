@@ -57,6 +57,10 @@ const OP_LABEL: Record<ConditionOp, string> = {
   empty: '비어 있음',
   notempty: '비어 있지 않음',
   under: '하위 전체(자신 포함)',
+  above: '위 전부(자신 포함)',
+  count_eq: '개수가',
+  count_gte: '개수가 이상',
+  count_lte: '개수가 이하',
 }
 
 const OP_SIGN: Record<ConditionOp, string> = {
@@ -72,20 +76,29 @@ const OP_SIGN: Record<ConditionOp, string> = {
   empty: '= ∅',
   notempty: '≠ ∅',
   under: '⊆',
+  above: '⊇',
+  count_eq: '=',
+  count_gte: '≥',
+  count_lte: '≤',
 }
+
+/** 이어진 것의 개수 — 값이 객체가 아니라 0 이상의 정수다. */
+const COUNT_OPS: ConditionOp[] = ['count_eq', 'count_gte', 'count_lte']
+export const isCountOp = (op: ConditionOp): boolean => COUNT_OPS.includes(op)
 
 /** 목록의 객체 **자신**에 거는 칸 — 트리가 있는 타입만(`f.id.under`). */
 const SELF_KEY = 'id'
 
 /**
  * 칸 종류별 연산 — 서버 `ops_for` 와 같은 표. `tree` 면 가리키는 타입에 트리가 있어 「하위
- * 전체」 를 더한다(서버도 트리가 없으면 거절한다). 목록 자신(`self`)은 「하위 전체」 하나뿐이다.
+ * 전체」 를 더한다(서버도 트리가 없으면 거절한다). 목록 자신(`self`)은 「하위 전체」 · 「위
+ * 전부」 다. 참조 칸 · 관계는 「개수」 도 — 「공급사가 하나뿐인 부품」.
  */
 export function opsFor(
   dataType: DataType | 'fixed' | 'relation',
   { tree = false, self = false }: { tree?: boolean; self?: boolean } = {},
 ): ConditionOp[] {
-  if (self) return ['under']
+  if (self) return ['under', 'above']
   const any: ConditionOp[] = ['empty', 'notempty']
   if (dataType === 'number' || dataType === 'date' || dataType === 'datetime') {
     return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', ...any]
@@ -99,9 +112,10 @@ export function opsFor(
     return ['eq', 'ne', 'contains', 'starts', 'in', ...any]
   }
   if (dataType === 'object_ref')
-    return ['eq', 'ne', 'in', ...(tree ? ['under' as const] : []), ...any]
+    return ['eq', 'ne', 'in', ...(tree ? ['under' as const] : []), ...any, ...COUNT_OPS]
   if (dataType === 'enum') return ['eq', 'ne', 'in', ...any]
   if (dataType === 'bool') return ['eq', ...any]
+  if (dataType === 'relation') return [...any, ...COUNT_OPS]
   return any
 }
 
@@ -199,11 +213,15 @@ function edgesOf(conditions: Condition[], exclude: number): number[] {
 }
 
 /**
- * 관계 걸음(`out.<관계>` · `in.<관계>`)을 지나는 주소인가 — 같은 관계 묶음으로 묶을 수 있는 칸.
- * 나를 가리키는 것(`in.<타입>:<칸>`)은 선이 아니라 걸음이 아니다.
+ * 관계 걸음(`out.<관계>` · `in.<관계>`) 또는 나를 가리키는 걸음(`in.<타입>:<칸>`)을 지나는
+ * 주소인가 — 같은 관계 묶음으로 묶을 수 있는 칸. 관계면 같은 선 하나, 나를 가리키는 것이면
+ * (관계 걸음이 없는 묶음에서) 같은 기록 하나에서 함께 맞는다 — 「불합격인 시험이 8건 이상」.
  */
 export function bindable(field: string): boolean {
-  return /(^|\.)(out|in)\.[a-z][a-z0-9_]*(~|\.|$)/.test(field)
+  return (
+    /(^|\.)(out|in)\.[a-z][a-z0-9_]*(~|\.|$)/.test(field) ||
+    /(^|\.)in\.[a-z][a-z0-9_]*:[a-z][a-z0-9_]*(\.|$)/.test(field)
+  )
 }
 
 export function ConditionBar({
@@ -244,9 +262,11 @@ export function ConditionBar({
     for (const one of conditions) {
       const field = byKey.get(one.field)
       if (field?.data_type !== 'object_ref' || !field.ref_type_slug) continue
-      if (one.op === 'empty' || one.op === 'notempty') continue
+      if (one.op === 'empty' || one.op === 'notempty' || isCountOp(one.op)) continue
       const values =
-        one.op === 'in' || one.op === 'under' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
+        one.op === 'in' || one.op === 'under' || one.op === 'above'
+          ? one.value.split(CONDITION_MULTI_SEP)
+          : [one.value]
       for (const value of values) {
         if (!value || refLabels[value] || known[value] || asked.current.has(value)) continue
         asked.current.add(value)
@@ -283,10 +303,14 @@ export function ConditionBar({
     }
     const label = fieldLabel(one)
     if (one.op === 'empty' || one.op === 'notempty') return `${label} ${OP_SIGN[one.op]}`
+    if (isCountOp(one.op)) return `${label} 개수 ${OP_SIGN[one.op]} ${one.value}`
     const values =
-      one.op === 'in' || one.op === 'under' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
+      one.op === 'in' || one.op === 'under' || one.op === 'above'
+        ? one.value.split(CONDITION_MULTI_SEP)
+        : [one.value]
     const shown = values.map((value) => refLabels[value] ?? known[value] ?? value).join(', ')
     if (one.op === 'under') return `${label}: ${shown} 하위 전체`
+    if (one.op === 'above') return `${label}: ${shown} 위 전부`
     return `${label} ${OP_SIGN[one.op]} ${shown}`
   }
 
@@ -484,7 +508,15 @@ function ConditionEditor({
       </label>
       <label className="block space-y-1">
         <span className="text-muted-foreground text-xs">연산</span>
-        <Select value={op} onValueChange={(next) => setOp(next as ConditionOp)}>
+        <Select
+          value={op}
+          onValueChange={(next) => {
+            const picked = next as ConditionOp
+            // 개수 ↔ 객체 값은 모양이 다르다 — 남은 값을 비운다.
+            if (isCountOp(picked) !== isCountOp(op)) setValue('')
+            setOp(picked)
+          }}
+        >
           <SelectTrigger size="sm" className="w-full">
             <SelectValue />
           </SelectTrigger>
@@ -502,15 +534,28 @@ function ConditionEditor({
           <span className="text-muted-foreground text-xs">
             값{multi ? ' — 여럿 선택하면 「그 중 하나」' : ''}
           </span>
-          <ValueInput
-            field={field}
-            onNames={onNames}
-            multi={multi}
-            value={value}
-            picked={picked}
-            onValue={setValue}
-            onPicked={setPicked}
-          />
+          {isCountOp(op) ? (
+            <Input
+              type="number"
+              min={0}
+              step={1}
+              inputMode="numeric"
+              aria-label="개수"
+              className="h-8"
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          ) : (
+            <ValueInput
+              field={field}
+              onNames={onNames}
+              multi={multi}
+              value={value}
+              picked={picked}
+              onValue={setValue}
+              onPicked={setPicked}
+            />
+          )}
         </div>
       )}
       {groups && (

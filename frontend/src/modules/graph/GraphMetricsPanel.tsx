@@ -39,6 +39,11 @@ export function GraphMetricsPanel({
   const bridge = data.scores.find((one) => one.metric === 'bridge')
   if (!depends.length && !bridge && !data.cluster && !data.similar.length) return null
   const name = (slug: string) => relationLabels[slug] ?? slug
+  // 무리를 지은 선(`GRAPH_CALC_WHOLE_RELATIONS`) — 비면 참조 칸 · 관계 전부. 고른 선에 따라 무리의
+  // 뜻이 바뀌므로(공급사 중심 · 제품군) 고른 것이 있으면 적는다.
+  const whole = Array.isArray(data.run.stats.whole_relations)
+    ? (data.run.stats.whole_relations as string[])
+    : []
 
   return (
     <section className="space-y-3 rounded-md border p-4" aria-label="그래프 지표">
@@ -80,7 +85,8 @@ export function GraphMetricsPanel({
               {data.cluster.label && ` 「${data.cluster.label}」`}{' '}
               <span className="text-muted-foreground text-xs">
                 ({data.cluster.size != null && `${number.format(data.cluster.size)}개 · `}이 안{' '}
-                {number.format(data.cluster.rank)}번째로 이음이 많음)
+                {number.format(data.cluster.rank)}번째로 이음이 많음
+                {whole.length > 0 && ` · ${whole.map(name).join(', ')}(으)로 지음`})
               </span>
             </dd>
           </>

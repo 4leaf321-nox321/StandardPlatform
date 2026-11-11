@@ -603,6 +603,10 @@ def http_app() -> Any:
     return _RememberToken(mcp.streamable_http_app())
 
 
+#: 이보다 긴 쿼리는 몸통으로 보낸다 — 주소 전체가 8KB(nginx 머리 상한) 안에 들게 넉넉히.
+_LONG_QUERY = 4000
+
+
 async def _get(
     ctx: Context,
     path: str,
@@ -612,6 +616,16 @@ async def _get(
     # 같거나 짧으면 백엔드가 「좁히거나 지표로」 를 504 로 내기 전에 여기서 끊겨, AI 는 그
     # 안내 대신 맨 시간 초과를 받는다.
     async with _client(_READ_WAIT_SECONDS) as client:
+        query = str(httpx.QueryParams(params or []))
+        if len(query) > _LONG_QUERY:
+            # 긴 읽기 — 주소는 프록시가 끊는다(nginx 머리 8KB). 같은 쿼리를 몸통에 실어 같은
+            # GET 경로로(서버의 `X-HTTP-Method-Override: GET`).
+            headers = {
+                **_forward_headers(ctx),
+                "X-HTTP-Method-Override": "GET",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            return _unwrap(await client.post(path, content=query, headers=headers))
         return _unwrap(await client.get(path, params=params, headers=_forward_headers(ctx)))
 
 
@@ -1406,6 +1420,20 @@ async def objects_list(
       숫자·날짜 `eq ne gt gte lt lte in` · 글자 `eq ne contains starts in` ·
       선택·참조 `eq ne in` · 참/거짓 `eq` · 모두 `empty notempty`. 참조 칸 · 자신(`id`)에는
       `under`(하위 전체 — 그 객체이거나 트리로 그 아래 전부, 트리가 있는 타입만).
+      자신(`id`)에는 `above`(**위 전부** — 그 객체이거나 그 위 전부: 「부품 X 를 담은 모델」 은
+      모델 목록에 `{"field": "id", "op": "above", "value": <X id>}`, 트리는 X 의 타입의 것)와
+      `in` 도. **이어진 것의 개수** — 참조 칸 · 관계 자체(`out.<관계>` · `in.<관계>`) · 나를
+      가리키는 것(`in.<타입>:<칸>`)에 `count_eq` · `count_gte` · `count_lte`(값은 정수, 서로
+      다른 상대의 수): 「공급사가 하나뿐인 부품」 은 `{"field": "in.supplies", "op":
+      "count_eq", "value": "1"}`. 같은 `"edge"` 묶음에 넣으면 **묶음의 다른 조건에 맞는 것만**
+      센다 — 「불합격 시험이 8건 이상인 모델」 은 `[{"field": "in.test:model", "op":
+      "count_gte", "value": "8", "edge": 1}, {"field": "in.test:model.result", "op": "eq",
+      "value": "불합격", "edge": 1}]`. **부분 목록** — 값 대신 `"from": {"type": <slug>,
+      "conditions": [...], "q", "status"}` 를 주면 그 목록의 결과가 값이 된다(`in` · `under` ·
+      `above` 만, 10만 개까지): 「EU 판매 모델에 든 부품 전부」 는 `{"field": "id", "op":
+      "under", "from": {"type": "model", "conditions": [{"field": "out.sold_in", "op": "eq",
+      "value": <EU id>}]}}`. **앞 목록의 id 를 받아 다시 넣지 않는다** — 서버가 같은 요청
+      안에서 세운다. 부분 목록 안에 부분 목록은 안 된다.
       `in` 의 값은 `|` 로 잇는다(`"A|B"`). `field` 는 속성 키 또는 `label`·`key`·`status`.
       **다른 타입의 칸**도 된다 — `ref.vendor.country`(참조 칸이 가리키는 것의 칸),
       `out.used_by`(관계로 이어진 것 자체), `in.resells.country`. 주소는 `object_fields`
@@ -1507,12 +1535,27 @@ def _filter_params(
         params.append(("status", status))
     for key, value in (properties or {}).items():
         params.append((f"p.{key}", value))
+    subs: list[tuple[str, Any]] = []
     for one in conditions or []:
         field, op, value = (
             one.get("field", ""),
             one.get("op", "eq"),
             one.get("value", ""),
         )
+        source = one.get("from")
+        if isinstance(source, dict):
+            # 부분 목록 — 다른 목록의 결과를 값으로(`@<번호>` + `s<번호>.…`). 서버가 같은 요청
+            # 안에서 세운다: id 를 받아 다시 넣지 않는다.
+            number = len({key.split(".", 1)[0] for key, _v in subs}) + 1
+            value = f"@{number}"
+            inner = _filter_params(
+                source.get("q"),
+                source.get("status"),
+                source.get("properties"),
+                source.get("conditions"),
+            )
+            subs.append((f"s{number}.type", source.get("type", "")))
+            subs += [(f"s{number}.{key}", item) for key, item in inner]
         # 제외 묶음(ADR 0015) — 같은 번호끼리 AND 로 묶어 뺀다. 지표 건 보기의 `nf<번호>.` 키.
         # 같은 관계 묶음(ADR 0043) — 같은 번호끼리 같은 선 하나에서 맞는다(`fe<번호>.`).
         group = str(one.get("exclude") or "").strip()
@@ -1521,7 +1564,7 @@ def _filter_params(
         if edge and edge != "0":
             head += f"fe{edge}."
         params.append((f"{head or 'f.'}{field}.{op}", value))
-    return params
+    return params + subs
 
 
 @tool()
@@ -1831,6 +1874,10 @@ async def objects_summary(
     as_of: str | None = None,
     year: int | None = None,
     types: list[str] | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> Any:
     """**통계** — 「부서별 몇 건」 「개발사 국가별 툴 수」. 화면의 「통계」 와 같다.
 
@@ -1860,6 +1907,12 @@ async def objects_summary(
       추이」 는 `grain="month", order="key"`. 날짜 칸의 `buckets[].key` 는 그 기간의
       **시작일**이고 `range` 가 `{gte, lt}` 다 — 그 칸을 보려면 `objects_list` 에
       `{field: <칸>, op: "gte"}` 와 `{op: "lt"}` 둘을 건다(`eq` 는 0건).
+    - **문턱 · 쪽** — 「불합격 8건 이상인 모델 **전부**」 는 `group_by` 를 그 모델 칸으로,
+      `min_value=8`(막대의 값 — 건수 또는 `metric` — 이 이상)·`max_value`(이하). 막대는 기본
+      30개에서 접힌다 — 전부가 필요하면 `limit`(500 까지)·`offset` 으로 넘긴다:
+      `offset + len(buckets) < groups` 면 다음 쪽이 있다. 문턱에 못 미친 막대는
+      `below_groups` · `below_count` 다(「그 밖에」 가 아니다). **원본 기록을 받아 직접 세지
+      않는다.**
 
     사용자에게 옮길 때 **빼먹지 않는다**:
     - `freshness`(수집 현황) — 원천의 최종 수집 시각 · 수집 실패 · 수집 지연 · 적재 진행 중.
@@ -1884,6 +1937,14 @@ async def objects_summary(
         params.append(("metric_field", metric_field))
     if grain:
         params.append(("grain", grain))
+    if min_value is not None:
+        params.append(("min_value", min_value))
+    if max_value is not None:
+        params.append(("max_value", max_value))
+    if limit is not None:
+        params.append(("limit", max(1, min(limit, 500))))
+    if offset:
+        params.append(("offset", offset))
     params += _filter_params(q, status, properties, conditions, as_of, year, types)
     return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
 

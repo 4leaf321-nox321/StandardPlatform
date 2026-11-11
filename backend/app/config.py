@@ -328,6 +328,11 @@ class Settings(BaseSettings):
     graph_calc_threads: int = 0
     """CPU 엔진(NetworKit)이 쓸 스레드 — 0 이면 서버의 코어 전부. 같은 서버의 DB · 웹이
     버거우면 줄인다."""
+    graph_calc_whole_relations: str = ""
+    """무리 · 다리 역할을 지을 선 — 쉼표로 가른 관계 slug, 참조 칸은 `<타입 slug>.<칸 키>`.
+    비우면 전부(기준정보끼리의 참조 칸 + 오늘 유효한 관계). 무리는 고른 선에 따라 뜻이 바뀐다 —
+    전부로 지으면 공급사 중심, 구성(BOM)만이면 제품군으로 묶였다(견주기, ADR 0067). 모르는
+    이름이 있으면 계산이 실패하고 아는 이름을 말한다."""
 
     embedding_backend: Literal["ollama", "off"] = "ollama"
     """글을 뜻의 자리(숫자 1,024개)로 바꾸는 임베딩 모델을 어디서 돌리나(ADR 0050).

@@ -319,6 +319,41 @@ class Resolver:
         tree = self.tree_of(type_slug)
         return None if tree is None else graph.subtree_ids(self.db, tree, roots, at=self.at)
 
+    def supertree_of(
+        self, type_slug: str | None, leaves: list[uuid.UUID]
+    ) -> list[uuid.UUID] | None:
+        """leaves 와 그 위 전부 — 조건의 「위 전부」(`above`). 트리는 **값(아래의 것)의
+        타입**의 것이다: 「이 부품을 담은 모델」 은 부품의 트리(구성)로 올라간다 — 모델
+        타입에는 트리가 없어도 된다. 값의 타입에 트리가 없으면 `type_slug`(목록의 타입)의
+        트리로, 그것도 없으면 None."""
+        if not leaves:
+            return []
+        rows = self.db.execute(
+            select(ObjectInstance.id, ObjectType.slug)
+            .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+            .where(graph.any_of(ObjectInstance.id, leaves))
+        )
+        by_type: dict[str, list[uuid.UUID]] = {}
+        for one_id, slug in rows:
+            by_type.setdefault(slug, []).append(one_id)
+        found: list[uuid.UUID] = []
+        orphans: list[uuid.UUID] = []
+        for slug, ids in by_type.items():
+            tree = self.tree_of(slug)
+            if tree is None:
+                orphans += ids
+            else:
+                found += graph.supertree_ids(self.db, tree, ids, at=self.at)
+        if orphans:
+            own = self.tree_of(type_slug)
+            if own is not None:
+                found += graph.supertree_ids(self.db, own, orphans, at=self.at)
+            elif not found:
+                return None
+            else:
+                found += orphans
+        return list(dict.fromkeys(found))
+
     def ref_kinds(self) -> dict[str, refedges.RefKind]:
         """이 설치의 참조 칸 전부 — 걸음의 상대에서 다시 걸을 때도 한 번만 읽는다."""
         if self._kinds is None:

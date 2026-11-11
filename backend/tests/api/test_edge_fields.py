@@ -580,3 +580,180 @@ def test_지표가_묶음으로_거르고_증분이_선의_칸_변경을_잡는�
         assert _listed(client, admin, product, cell["drill"]["params"]) == cell["count"]
     # 아무것도 안 바뀌면 다시 증분.
     assert _recount(client, admin, slug)["mode"] == "incremental"
+
+
+# --- 위 전부 · 이어진 것의 개수 ---------------------------------------------------------
+
+
+def test_위_전부는_값의_트리로_올라간다(
+    client: TestClient, admin: Signed, world: dict[str, Any]
+) -> None:
+    """「이 부품을 담은 제품」 — 부품마다 「어디에 쓰였나」 를 따로 부르지 않고 조건 하나로.
+    트리는 값(부품)의 타입의 것이라 제품 타입에는 트리가 없어도 된다."""
+    product, part, kind, parts = world["product"], world["part"], world["kind"], world["parts"]
+    x, y = parts["X"], parts["Y"]
+    # 트리가 없으면 말한다(조용히 0건이 아니다).
+    assert "위 전부" in _refused(client, admin, product, {"f.id.above": x})
+    tree = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"list_view": {"tree": {"relation": kind, "parent": "src"}}},
+        headers=admin.headers,
+    )
+    assert tree.status_code == 200, tree.text
+    assert _names(client, admin, product, {"f.id.above": x}) == ["P1", "P2", "P4"]
+    assert _names(client, admin, product, {"f.id.above": f"{x}|{y}"}) == [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+    ]
+    # 자기 자신도 든다(「하위 전체」 의 거울) — 부품 목록이면 X 그 자체.
+    assert _names(client, admin, part, {"f.id.above": x}) == ["X"]
+    # 다른 조건과 AND — X 를 담은 것 중 Y 도 담은 것.
+    assert _names(client, admin, product, {"f.id.above": x, f"f.out.{kind}.eq": y}) == ["P1"]
+
+
+def test_이어진_것의_개수로_거른다(
+    client: TestClient, admin: Signed, world: dict[str, Any]
+) -> None:
+    """「공급사가 하나뿐인 부품」 「부품이 둘 이상인 제품」 — 하나씩 열어 세지 않게. 서로 다른
+    상대를 센다(P4 는 X 와의 선이 기간 둘이지만 X 하나)."""
+    product, part, vendor, kind = (
+        world["product"],
+        world["part"],
+        world["vendor"],
+        world["kind"],
+    )
+    rel = f"out.{kind}"
+    assert _names(client, admin, product, {f"f.{rel}.count_eq": "1"}) == ["P3", "P4"]
+    assert _names(client, admin, product, {f"f.{rel}.count_gte": "2"}) == ["P1", "P2"]
+    assert _names(client, admin, product, {f"f.{rel}.count_eq": "0"}) == ["P5"]
+    assert _names(client, admin, product, {f"f.{rel}.count_lte": "1"}) == ["P3", "P4", "P5"]
+    # 나를 가리키는 것의 수 — 부품 둘(X · Z)이 가리키는 한국 업체.
+    back = f"in.{part}:vendor"
+    assert _names(client, admin, vendor, {f"f.{back}.count_gte": "2"}) == ["한국 업체"]
+    # 참조 칸 자체도.
+    assert _names(client, admin, part, {"f.vendor.count_eq": "1"}) == ["X", "Y", "Z"]
+
+    # 같은 관계 묶음 안이면 **묶음의 다른 조건에 맞는 것만** 센다 — 한국 업체 부품이 둘 이상.
+    korean = {f"fe1.{rel}.count_gte": "2", f"fe1.{rel}.ref.vendor.country.eq": "KR"}
+    assert _names(client, admin, product, korean) == ["P2"]
+    # 나를 가리키는 것으로 묶으면 같은 기록 하나 — 「Z 라는 부품」 이 하나 가리키는 업체.
+    named = {f"fe1.{back}.count_eq": "1", f"fe1.{back}.label.eq": "Z"}
+    assert _names(client, admin, vendor, named) == ["한국 업체"]
+    # 제외 묶음과도 — 부품이 둘 이상인 제품은 뺀다.
+    assert _names(client, admin, product, {f"nf1.{rel}.count_gte": "2"}) == ["P3", "P4", "P5"]
+
+    assert "0 이상의 정수" in _refused(client, admin, product, {f"f.{rel}.count_eq": "-1"})
+    assert "0 이상의 정수" in _refused(client, admin, product, {f"f.{rel}.count_gte": "둘"})
+    beyond = {f"fe1.{rel}.label.count_eq": "1", f"fe1.{rel}.eq": world["parts"]["X"]}
+    assert "count_eq" in _refused(client, admin, product, beyond)
+    # 개수는 모양이 다르다 — 글자 칸에는 못 건다.
+    assert "count_eq" in _refused(client, admin, vendor, {"f.country.count_eq": "1"})
+
+
+# --- 부분 목록 · 긴 읽기 ------------------------------------------------------------------
+
+
+def test_다른_목록의_결과를_조건의_값으로_쓴다(
+    client: TestClient, admin: Signed, world: dict[str, Any]
+) -> None:
+    """「한국 업체 부품이 든 제품」 · 「1 · 2월 출시 제품에 든 부품 전부」 — 앞 목록의 id 를
+    받아 다시 주소에 넣지 않는다(수천 개면 주소가 4만 자를 넘어 끊긴다)."""
+    product, part, vendor, kind = (
+        world["product"],
+        world["part"],
+        world["vendor"],
+        world["kind"],
+    )
+    korean = {"s1.type": part, "s1.f.ref.vendor.country.eq": "KR"}
+    assert _names(client, admin, product, {f"f.out.{kind}.in": "@1", **korean}) == [
+        "P1",
+        "P2",
+        "P4",
+    ]
+    # 나를 가리키는 것 · 목록의 자신에도.
+    named_x = {"s1.type": part, "s1.f.label.eq": "X"}
+    assert _names(client, admin, vendor, {f"f.in.{part}:vendor.in": "@1", **named_x}) == [
+        "한국 업체"
+    ]
+    assert _names(client, admin, part, {"f.id.in": "@1", **korean}) == ["X", "Z"]
+    # 하위 전체 · 위 전부의 값으로 — 트리는 부품의 구성.
+    tree = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"list_view": {"tree": {"relation": kind, "parent": "src"}}},
+        headers=admin.headers,
+    )
+    assert tree.status_code == 200, tree.text
+    early = {"s1.type": product, "s1.f.launched.lte": "2026-02-28"}
+    assert _names(client, admin, part, {"f.id.under": "@1", **early}) == ["X", "Y", "Z"]
+    assert _names(client, admin, product, {"f.id.above": "@1", **korean}) == ["P1", "P2", "P4"]
+    # 빈 부분 목록은 아무것도 안 가리킨다(전부가 아니다).
+    nobody = {"s1.type": part, "s1.f.label.eq": "없는 이름"}
+    assert _names(client, admin, product, {f"f.out.{kind}.in": "@1", **nobody}) == []
+
+    # 통계도 같은 거르기 — 화면은 부분 목록을 아직 못 받는다고 적는다.
+    counted = client.get(
+        f"/api/objects/{product}/summary",
+        params={"group_by": "status", f"f.out.{kind}.in": "@1", **korean},
+        headers=admin.headers,
+    )
+    assert counted.status_code == 200, counted.text
+    assert counted.json()["total"] == 3
+    assert "s1" in counted.json()["link_missing"]
+    assert f"f.out.{kind}.in" in counted.json()["link_missing"]
+
+    # 틀린 모양은 무엇이 틀렸는지 말한다.
+    assert "s1.type" in _refused(client, admin, product, {f"f.out.{kind}.in": "@1"})
+    assert "부분 목록 @1" in _refused(
+        client, admin, product, {f"f.out.{kind}.in": "@1", "s1.type": "없는타입"}
+    )
+    assert "in · under · above" in _refused(
+        client, admin, product, {f"f.out.{kind}.eq": "@1", **korean}
+    )
+    nested = {f"f.out.{kind}.in": "@1", "s1.type": part, "s1.s2.type": vendor}
+    assert "부분 목록 안에" in _refused(client, admin, product, nested)
+
+
+def test_긴_읽기는_POST_로_같은_경로를_탄다(
+    client: TestClient, admin: Signed, world: dict[str, Any]
+) -> None:
+    """id 수천 개를 넣은 조건 — 주소로는 프록시가 끊는다(nginx 8KB). 같은 몸통을 POST 로 보내면
+    같은 GET 경로 · 같은 거르기다. 값 여럿은 자리표 하나(배열)로 넘긴다 — 수천 개도 된다."""
+    from urllib.parse import urlencode
+
+    product, kind, parts = world["product"], world["kind"], world["parts"]
+    strangers = [str(uuid.uuid4()) for _ in range(5000)]
+    wanted = "|".join([*strangers, parts["X"]])
+    body = urlencode({f"f.out.{kind}.in": wanted})
+    assert len(body) > 100_000
+    got = client.post(
+        f"/api/objects/{product}",
+        content=body,
+        headers={
+            **admin.headers,
+            "X-HTTP-Method-Override": "GET",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    assert got.status_code == 200, got.text
+    assert sorted(one["label"] for one in got.json()["items"]) == ["P1", "P2", "P4"]
+    # 주소의 쿼리와 몸통이 함께 — 주소에 limit, 몸통에 조건.
+    paged = client.post(
+        f"/api/objects/{product}/summary?group_by=status",
+        content=body,
+        headers={
+            **admin.headers,
+            "X-HTTP-Method-Override": "GET",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    assert paged.status_code == 200 and paged.json()["total"] == 3, paged.text
+    # 몸통 모양이 다르면 415 — 조용히 조건 없는 목록을 주지 않는다.
+    wrong = client.post(
+        f"/api/objects/{product}",
+        json={f"f.out.{kind}.in": wanted},
+        headers={**admin.headers, "X-HTTP-Method-Override": "GET"},
+    )
+    assert wrong.status_code == 415
+    assert "x-www-form-urlencoded" in wrong.json()["error"]["message"]

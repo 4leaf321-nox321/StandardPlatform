@@ -455,6 +455,12 @@ export type ConditionOp =
   | 'notempty'
   /** 하위 전체 — 그 객체이거나 그 타입의 트리로 아래 전부(ADR 0035). */
   | 'under'
+  /** 위 전부 — 목록의 자신이 그 객체이거나 그 위 전부(「이 부품을 담은 모델」). */
+  | 'above'
+  /** 이어진 것의 개수 — 참조 칸 · 관계 자체 · 나를 가리키는 것(서로 다른 상대의 수). */
+  | 'count_eq'
+  | 'count_gte'
+  | 'count_lte'
 
 /** 값 여럿(`in`)의 구분자. 서버와 같다. */
 export const CONDITION_MULTI_SEP = '|'

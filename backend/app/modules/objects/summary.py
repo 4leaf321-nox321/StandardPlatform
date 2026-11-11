@@ -31,7 +31,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import Select, func, nulls_last, or_, select
+from sqlalchemy import Select, and_, func, nulls_last, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -84,6 +84,12 @@ MAX_SPLITS = 12
 #: 한 번에 돌려줄 그룹 수. 넘는 것은 「그 밖에」 한 줄로 접는다 — 막대 200개는
 #: 읽을 수 없고, 그림이 아니라 벽이 된다.
 MAX_BUCKETS = 30
+#: 쪽으로 넘겨 받을 때(`limit` · `offset`) 한 쪽의 상한 — 「불합격 8건 이상인 모델 전부」 처럼
+#: 막대가 그림이 아니라 **목록**일 때다. 그림(화면)은 `MAX_BUCKETS` 그대로.
+MAX_BUCKET_PAGE = 500
+#: 문턱 인자의 설명 — 통계 · 통계 파일이 같은 글을 쓴다.
+MIN_VALUE = "막대의 값(건수 또는 metric)이 이 이상인 것만 — 「8건 이상인 모델」"
+MAX_VALUE = "막대의 값이 이 이하인 것만"
 
 
 @dataclass
@@ -134,6 +140,13 @@ class Summary:
     같은 자리에 선다."""
     other_splits: int = 0
     """상한을 넘어 빠진 세부 기준 값의 수."""
+    offset: int = 0
+    """이 쪽이 몇 번째 막대부터인가(0 부터)."""
+    groups: int = 0
+    """문턱(`min_value` · `max_value`)을 넘은 막대의 **전체** 수 — 쪽으로 넘길 끝."""
+    below_groups: int = 0
+    below_count: int = 0
+    """문턱에 못 미쳐 뺀 막대의 수와 그 건수. 문턱이 없으면 0."""
     group_multi: bool = False
     split_multi: bool = False
     """기준·세부 기준이 여러 값 칸이면 True — **한 행이 여러 막대에 든다.** 막대의 합이
@@ -272,6 +285,10 @@ def summarize(
     grain: str | None = None,
     viewer: User | None = None,
     at: edge_rule.AtArg = "today",
+    min_value: float | None = None,
+    max_value: float | None = None,
+    limit: int = MAX_BUCKETS,
+    offset: int = 0,
 ) -> Summary:
     """목록과 **같은 거르기** 위에서 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
@@ -284,6 +301,12 @@ def summarize(
     **여럿으로 이어지는 기준은 객체마다 한 번 센다**(ADR 0017) — 같은 증상의 기록이 300건인
     모델은 그 막대에서 1 이다(이어진 줄마다 세면 300 이었다). 합계 · 평균도 객체마다 한 번.
     `viewer` 는 들어오는 참조 걸음이 그 사람이 볼 수 있는 객체만 잇게 한다.
+
+    **문턱과 쪽**(`min_value` · `max_value` · `limit` · `offset`) — 막대의 값(건수 또는
+    `metric`)이 문턱 안인 것만 남기고 쪽으로 넘긴다. 「불합격 8건 이상인 모델 전부」 는
+    막대가 그림이 아니라 목록이다 — 30개에서 접으면 원본 기록을 전부 받아 직접 세게 된다
+    (합성 견주기 2.8만 줄). 문턱에 못 미친 막대는 「그 밖에」 가 아니라 `below_groups` ·
+    `below_count` 로 따로 센다.
     """
     if metric not in METRICS:
         raise AppError(
@@ -320,24 +343,55 @@ def summarize(
     # **한 번에 센다** — 그룹 수와 합을 창 함수로 같이 낸다. 예전에는 같은 조인을 두 번 돌았고,
     # 참조 너머 칸으로 묶으면 기록 200만 건에서 그 한 번이 3초였다(실측, ADR 0010).
     every = grouped.order_by(None).subquery()
-    measured = every.c.n if value_expr is None else every.c.v
+    limit = max(1, min(limit, MAX_BUCKET_PAGE))
+    offset = max(0, offset)
+    # 문턱 전의 막대 수 · 건수를 먼저 창 함수로 달고, 그 위에서 문턱으로 거른다 — 「문턱에 못
+    # 미쳐 뺀 것」 을 같은 한 번으로 센다.
+    whole = select(
+        every,
+        func.count().over().label("all_groups"),
+        func.sum(every.c.n).over().label("all_rows_before"),
+    ).subquery()
+    measured = whole.c.n if value_expr is None else whole.c.v
+    bounds = [
+        *([measured >= min_value] if min_value is not None else []),
+        *([measured <= max_value] if max_value is not None else []),
+    ]
     if order == "key":
-        ordering = every.c.k.asc()
+        ordering = whole.c.k.asc()
     else:
         ordering = measured.asc() if order == "asc" else measured.desc()
     rows = list(
         db.execute(
             select(
-                every,
+                whole,
                 func.count().over().label("groups"),
-                func.sum(every.c.n).over().label("all_rows"),
+                func.sum(whole.c.n).over().label("all_rows"),
             )
-            .order_by(nulls_last(ordering), every.c.k)
-            .limit(MAX_BUCKETS)
+            .where(*bounds)
+            .order_by(nulls_last(ordering), whole.c.k)
+            .offset(offset)
+            .limit(limit)
         )
     )
-    distinct = int(rows[0].groups) if rows else 0
-    counted_rows = int(rows[0].all_rows or 0) if rows else 0
+    if rows:
+        distinct = int(rows[0].groups)
+        counted_rows = int(rows[0].all_rows or 0)
+        all_groups = int(rows[0].all_groups)
+        all_rows_before = int(rows[0].all_rows_before or 0)
+    else:
+        # 쪽 끝을 넘었거나 문턱을 넘은 막대가 없다 — 수만 한 번 더 센다(줄은 안 읽는다).
+        passed = and_(*bounds) if bounds else true()
+        tally = db.execute(
+            select(
+                func.count().filter(passed),
+                func.coalesce(func.sum(whole.c.n).filter(passed), 0),
+                func.count(),
+                func.coalesce(func.sum(whole.c.n), 0),
+            ).select_from(whole)
+        ).one()
+        distinct, counted_rows = int(tally[0]), int(tally[1])
+        all_groups, all_rows_before = int(tally[2]), int(tally[3])
 
     keys = [str(row.k) for row in rows if row.k is not None]
     names = axes.labels(db, group, keys)
@@ -394,7 +448,12 @@ def summarize(
         metric_field=metric_field,
         metric_label=METRIC_LABELS[metric],
         total=total,
+        offset=offset,
+        groups=distinct,
+        below_groups=max(0, all_groups - distinct),
+        below_count=max(0, all_rows_before - counted_rows),
         buckets=buckets,
+        # 이 쪽에 없는 막대(앞 쪽 · 뒤 쪽) — 문턱에 못 미친 것은 `below_*` 로 따로.
         other_groups=max(0, int(distinct) - len(buckets)),
         other_count=max(0, int(counted_rows) - shown),
         group_multi=group.multi,

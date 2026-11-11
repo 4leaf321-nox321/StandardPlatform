@@ -84,20 +84,41 @@ def subtree_ids(
     백여 줄) 아래가 큰데도 한 줄씩 견주는 길을 골랐다(기록 200만, 모델 1,555개 아래 5초 ·
     전부 19초). 뽑은 것을 배열 하나로 넘기면 개수를 알고 고른다(같은 것이 0.6초 · 0.9초, 실측).
     """
-    if not roots:
+    return _tree_walk(db, tree, roots, at=at, up=False)
+
+
+def supertree_ids(
+    db: Session, tree: Tree, leaves: list[uuid.UUID], *, at: date | None
+) -> list[uuid.UUID]:
+    """leaves 와 **그 위 전부**(깊이 MAX_DEPTH) — 조건의 「위 전부」(`above`). 「이 부품을 담은
+    모델」 을 조건으로 건다 — 부품마다 「어디에 쓰였나」 를 따로 부르지 않게. 「하위 전체」 의
+    거울이고 같은 까닭으로 뽑아서 넘긴다."""
+    return _tree_walk(db, tree, leaves, at=at, up=True)
+
+
+def _tree_walk(
+    db: Session, tree: Tree, starts: list[uuid.UUID], *, at: date | None, up: bool
+) -> list[uuid.UUID]:
+    """starts 와 트리로 아래(`up=False`) 또는 위(`up=True`) 전부."""
+    if not starts:
         return []
     seed = select(
-        func.unnest(literal(list(roots), ARRAY(PgUUID(as_uuid=True)))).label("id"),
+        func.unnest(literal(list(starts), ARRAY(PgUUID(as_uuid=True)))).label("id"),
         literal(0).label("depth"),
     )
-    walk = seed.cte("subtree", recursive=True)
+    walk = seed.cte("supertree" if up else "subtree", recursive=True)
+    # 위로는 **(노드, 깊이) 를 한 번씩**(`UNION`) — 공용 나사처럼 널리 쓰인 것은 위로 가는 길이
+    # 수천 갈래로 갈라져, 길마다 한 줄이면 줄이 길의 수만큼 불어난다. 아래로는 예전 그대로.
+    join = walk.union if up else walk.union_all
     if refedges.is_ref(tree.relation):
         key = tree.relation[len(refedges.PREFIX) :].split(".", 1)[1]
         step = aliased(ObjectRef)
         parent_col, child_col = {"dst": ("dst_id", "src_id"), "src": ("src_id", "dst_id")}[
             tree.parent_end
         ]
-        walk = walk.union_all(
+        if up:
+            parent_col, child_col = child_col, parent_col
+        walk = join(
             select(getattr(step, child_col), walk.c.depth + 1).where(
                 step.key == key,
                 step.src_type_id == tree.type_id,
@@ -108,7 +129,9 @@ def subtree_ids(
     else:
         step_rel = aliased(ObjectRelation)
         parent_col, child_col = _ends(tree.parent_end)
-        walk = walk.union_all(
+        if up:
+            parent_col, child_col = child_col, parent_col
+        walk = join(
             select(getattr(step_rel, child_col), walk.c.depth + 1).where(
                 step_rel.relation == tree.relation,
                 getattr(step_rel, parent_col) == walk.c.id,

@@ -67,11 +67,14 @@ from datetime import date
 from typing import Any
 
 from sqlalchemy import (
+    ARRAY,
     Numeric,
     String,
     and_,
+    any_,
     case,
     cast,
+    distinct,
     false,
     func,
     literal,
@@ -98,6 +101,13 @@ OPS_ANY: tuple[str, ...] = ("empty", "notempty")
 #: 「하위 전체」(ADR 0035) — 그 객체이거나, 그 타입의 트리(`list_view.tree`)로 그 아래 전부.
 #: 값은 객체 id, 여럿이면 `|`(어느 하나의 아래). 목록의 객체 **자신**에 걸 때는 칸이 `id` 다.
 OPS_TREE: tuple[str, ...] = ("under",)
+#: 「위 전부」 — 그 객체이거나, **값의 타입의 트리**로 그 위 전부(「이 부품을 담은 모델」).
+#: 목록의 객체 자신(`id`)에만 건다. 값은 객체 id, 여럿이면 `|`(어느 하나의 위).
+OPS_UP: tuple[str, ...] = ("above",)
+#: 「이어진 것의 개수」 — 참조 칸 · 관계 자체(`out.<관계>` · `in.<관계>`) · 나를 가리키는 것
+#: (`in.<타입>:<칸>`)에. 값은 0 이상의 정수, 서로 다른 상대를 센다. 같은 관계 묶음(`edge`)에
+#: 넣으면 **묶음의 다른 조건에 맞는 것만** 센다 — 「불합격 시험이 8건 이상인 모델」.
+OPS_COUNT: tuple[str, ...] = ("count_eq", "count_gte", "count_lte")
 SELF_FIELD = "id"
 #: 「낡은 것만」(ADR 0041) — 목록의 객체 **자신**이 계보로 낡았나. 값은
 #: `lineage.CONDITION_VALUES`. 그 타입에 같은 키의 속성이 있으면 속성이 이긴다(예전 조건이 안
@@ -150,7 +160,7 @@ def ops_for(data_type: str) -> tuple[str, ...]:
     elif data_type in ("text", "text_long", "url"):
         base = OPS_TEXT
     elif data_type == "object_ref":
-        base = (*OPS_CHOICE, *OPS_TREE)
+        base = (*OPS_CHOICE, *OPS_TREE, *OPS_COUNT)
     elif data_type == "enum":
         base = OPS_CHOICE
     elif data_type == "bool":
@@ -281,6 +291,8 @@ def clause(
         )
 
     if data_type == "object_ref":
+        if op in OPS_COUNT:
+            return _ref_clause(entity, field, op, raw, label=label)
         _refuse_names(raw, op, label, definition)
         if op in OPS_TREE:
             assert definition is not None
@@ -421,6 +433,7 @@ def _ref_clause(
     raw: str,
     *,
     subtree: list[uuid.UUID] | None = None,
+    label: str = "",
 ) -> Any:
     """참조 칸 — **참조 색인**으로 묻는다(ADR 0010). JSONB 를 펴서 견주면 그 타입을 통째로
     읽는다(200만 건에서 1.3초, 실측) — 색인은 (누가 · 칸 · 누구를) 인덱스 하나다.
@@ -428,6 +441,8 @@ def _ref_clause(
     단일값 · 여러 값이 같은 모양이다(색인에는 원소마다 한 줄). 「다름」 은 비어 있는 것도
     포함한다 — 화면의 다른 칸과 같은 뜻."""
     linked = select(literal(1)).where(ObjectRef.src_id == entity.id, ObjectRef.key == field)
+    if op in OPS_COUNT:
+        return count_clause(linked, ObjectRef.dst_id, op, raw, label or field)
     if op == "empty":
         return ~linked.exists()
     if op == "notempty":
@@ -439,8 +454,34 @@ def _ref_clause(
     if op == "under":
         assert subtree is not None
         return linked.where(graph.any_of(ObjectRef.dst_id, subtree)).exists()
-    hit = linked.where(ObjectRef.dst_id.in_(wanted)).exists()
+    # 값 여럿은 배열 하나로(`any_of`) — 부분 목록(`@<번호>`)이면 id 가 수만 개다.
+    hit = linked.where(graph.any_of(ObjectRef.dst_id, wanted)).exists()
     return ~hit if op == "ne" else hit
+
+
+def count_number(label: str, raw: str) -> int:
+    """「개수」 의 값 — 0 이상의 정수."""
+    try:
+        number = int(raw.strip())
+    except ValueError:
+        number = -1
+    if number < 0:
+        raise InvalidValue(
+            code("OBJECTS", 71), f"{label}: 개수는 0 이상의 정수여야 합니다: {raw!r}"
+        )
+    return number
+
+
+def count_clause(linked: Any, far: Any, op: str, raw: str, label: str) -> Any:
+    """`linked`(이어진 것을 찾는 몸통 — `select(1) …`)가 닿는 **서로 다른 상대**(`far`)의 수를
+    견준다. 0 도 된다 — 「공급사가 없는 부품」 은 `count_eq 0`(= `empty`)."""
+    number = count_number(label, raw)
+    counted = linked.with_only_columns(func.count(distinct(far))).scalar_subquery()
+    return {
+        "count_eq": counted == number,
+        "count_gte": counted >= number,
+        "count_lte": counted <= number,
+    }[op]
 
 
 def _refuse_names(raw: str, op: str, label: str, definition: PropertyDef | None) -> None:
@@ -601,14 +642,33 @@ def _one(
 
 def _self_clause(resolver: paths.Resolver | None, condition: Condition, index: int) -> Any:
     """목록의 객체 **자신**이 그 객체이거나 그 아래 전부인가 — `f.id.under=<id>`. 목록의
-    「하위 포함」 과 같은 뜻을 조건으로 — 통계 · 지표 · 저장된 뷰에도 걸린다."""
-    if condition.op not in OPS_TREE:
+    「하위 포함」 과 같은 뜻을 조건으로 — 통계 · 지표 · 저장된 뷰에도 걸린다.
+
+    `f.id.above=<id>` 는 거울이다 — 그 객체이거나 그 **위** 전부(「이 부품을 담은 모델」).
+    트리는 값의 타입의 것이라(부품의 구성) 목록의 타입(모델)에 트리가 없어도 된다."""
+    if condition.op not in (*OPS_TREE, *OPS_UP, "in"):
         raise InvalidValue(
             code("OBJECTS", 72),
-            f"객체 자신(id)에는 「하위 전체」(under)만 걸립니다: {condition.op}",
+            "객체 자신(id)에는 「하위 전체」(under) · 「위 전부」(above) · 「그 중 하나」(in)"
+            f"만 걸립니다: {condition.op}",
         )
     scope_type = resolver.scope.object_type if resolver else None
     roots = _ids(_values(condition.value))
+    if condition.op == "in":
+        return graph.any_of(ObjectInstance.id, roots)
+    if condition.op in OPS_UP:
+        if resolver is None:
+            raise InvalidValue(
+                code("OBJECTS", 72), "「위 전부」 는 목록 · 통계 · 지표에서만 걸립니다."
+            )
+        above = resolver.supertree_of(scope_type.slug if scope_type else None, roots)
+        if above is None:
+            raise InvalidValue(
+                code("OBJECTS", 72),
+                "「위 전부」 는 트리가 정의된 타입의 객체에만 걸립니다 — 값(아래의 것)의 타입 "
+                "또는 이 목록의 타입의 「목록 화면」 에서 트리로 쓸 관계를 선택하세요.",
+            )
+        return graph.any_of(ObjectInstance.id, above)
     found = _subtree_or_refuse(
         resolver.subtree_of(scope_type.slug, roots) if resolver and scope_type else None,
         scope_type.label if scope_type else "이 목록",
@@ -754,7 +814,9 @@ def _chain_clause(
     if whole:
         # 관계로 이어진 것 자체 — 누구와 이어졌나, 또는 이어져 있기는 한가.
         allowed = (
-            (*OPS_CHOICE, *OPS_TREE, *OPS_ANY) if chain.data_type == "object_ref" else OPS_ANY
+            (*OPS_CHOICE, *OPS_TREE, *OPS_ANY, *OPS_COUNT)
+            if chain.data_type == "object_ref"
+            else (*OPS_ANY, *OPS_COUNT)
         )
         if op not in allowed:
             raise InvalidValue(
@@ -787,15 +849,19 @@ def _chain_clause(
                 code("OBJECTS", 72),
                 f"{chain.label}: 나를 가리키는 것에는 「하위 전체」 를 못 겁니다.",
             )
+        if op in OPS_COUNT:
+            return count_clause(linked, walked.back.src_id, op, raw, chain.label)
         if op == "empty":
             return ~linked.exists()
         if op == "notempty":
             return linked.exists()
         picked = _ids(_values(raw) if op == "in" else [raw])
-        hit = linked.where(walked.back.src_id.in_(picked)).exists() if picked else false()
+        hit = linked.where(graph.any_of(walked.back.src_id, picked)).exists()
         return ~hit if op == "ne" else hit
     if whole:
         assert walked.edges is not None
+        if op in OPS_COUNT:
+            return count_clause(linked, walked.edges.c.other, op, raw, chain.label)
         if op == "empty":
             return ~linked.exists()
         if op == "notempty":
@@ -833,7 +899,7 @@ def _other_clause(
             resolver.subtree_of(far.slug, roots) if far else None,
             far.label if far else chain.label,
         )
-        return linked.where(graph.any_of(edges.c.other, found)).exists()
+        return linked.where(_other_any(edges.c.other, found)).exists()
     # 사람이 준 값(id 글자)과 견준다 — 선은 uuid 라 글자로 바꿔 본다(id 가 아닌 글자도
     # 오류 없이 「안 맞음」 이 되게).
     other = cast(edges.c.other, String)
@@ -841,8 +907,7 @@ def _other_clause(
         return linked.where(other == raw).exists()
     if op == "ne":
         return ~linked.where(other == raw).exists()
-    values = _values(raw)
-    return linked.where(other.in_(values)).exists() if values else false()
+    return linked.where(_other_any(edges.c.other, _ids(_values(raw)))).exists()
 
 
 def _other_match(
@@ -863,14 +928,24 @@ def _other_match(
             resolver.subtree_of(far.slug, roots) if far else None,
             far.label if far else chain.label,
         )
-        return graph.any_of(edges.c.other, found)
+        return _other_any(edges.c.other, found)
     other = cast(edges.c.other, String)
     if op == "eq":
         return other == raw
     if op == "ne":
         return other != raw
-    values = _values(raw)
-    return other.in_(values) if values else false()
+    return _other_any(edges.c.other, _ids(_values(raw)))
+
+
+def _other_any(column: Any, picked: list[uuid.UUID]) -> Any:
+    """선의 저쪽 끝이 그 중 하나인가 — 배열 하나로. 끝이 **글자**인 선(방향 없는 관계 · 원 표와
+    섞인 끝 — `Resolver.edges`)은 글자 배열과, uuid 인 선은 uuid 배열과 견준다(형이 다르면
+    Postgres 가 `character varying = uuid` 로 거절한다)."""
+    if not picked:
+        return false()
+    if isinstance(column.type, String):
+        return column == any_(literal([str(one) for one in picked], ARRAY(String)))
+    return graph.any_of(column, picked)
 
 
 def require_edge_usable(chain: paths.Chain) -> None:
@@ -958,20 +1033,26 @@ def _bound_clause(
         and len({one[common] for one in paths_of}) == 1
     ):
         common += 1
-    at = next(
-        (depth for depth in range(common - 1, -1, -1) if chains[0].hops[depth].is_relation),
-        None,
-    )
+    # 묶음이 함께 지나는 **마지막 관계 걸음** — 같은 선 하나. 관계 걸음이 없으면 마지막
+    # **나를 가리키는 걸음**(`in.<타입>:<칸>`) — 같은 기록 하나(「불합격 시험이 8건 이상」 의
+    # 「불합격인 같은 시험」). 관계가 있으면 늘 관계다 — 예전에 저장된 묶음(관계 걸음 뒤에 나를
+    # 가리키는 걸음이 이어지는 것)의 뜻이 바뀌지 않게. 관계도 그것도 없는 묶음은 예전에
+    # 거절했다.
+    hops = chains[0].hops
+    at = next((depth for depth in range(common - 1, -1, -1) if hops[depth].is_relation), None)
+    if at is None:
+        at = next((depth for depth in range(common - 1, -1, -1) if hops[depth].is_back), None)
     if at is None:
         said = ", ".join(condition.field for _index, condition in members)
         raise InvalidValue(
             code("OBJECTS", 146),
             f"같은 관계 묶음 {number}: 조건들이 함께 지나는 관계 걸음이 없습니다({said}) — "
-            "묶음의 주소는 같은 관계 걸음(out.<관계> · in.<관계>)으로 시작해야 같은 선을 "
-            "가리킵니다.",
+            "묶음의 주소는 같은 관계 걸음(out.<관계> · in.<관계>) 또는 같은 나를 가리키는 "
+            "것(in.<타입>:<칸>)으로 시작해야 같은 선 · 같은 기록을 가리킵니다.",
         )
     depth = at + 1
     head = chains[0]
+    back = head.hops[at].is_back
     # 상대 객체가 필요한 조건(상대의 칸 · 그 너머)이 있을 때만 상대를 잇는다 — 선의 칸 · 관계
     # 자체만이면 선만 본다(묶지 않은 조건과 같은 질의).
     needs_target = any(
@@ -988,7 +1069,18 @@ def _bound_clause(
         edge=True,
     )
     parts: list[Any] = []
+    counts: list[tuple[str, str, str]] = []
     for (index, condition), chain in zip(members, chains, strict=True):
+        if condition.op in OPS_COUNT:
+            if len(chain.hops) != depth or chain.field is not None:
+                raise InvalidValue(
+                    code("OBJECTS", 146),
+                    f"같은 관계 묶음 {number}: 개수({condition.op})는 묶음이 함께 지나는 "
+                    "걸음 자체(그 관계 · 나를 가리키는 것)에 겁니다 — "
+                    f"{condition.field} 는 그 너머의 칸입니다.",
+                )
+            counts.append((condition.op, condition.value, chain.label))
+            continue
         if len(chain.hops) > depth:
             assert walked.target is not None
             parts.append(
@@ -1011,7 +1103,7 @@ def _bound_clause(
                 )
             )
         elif chain.field is None:
-            if chain.data_type != "object_ref" or chain.hop.is_back:
+            if back or chain.data_type != "object_ref" or chain.hop.is_back:
                 raise InvalidValue(
                     code("OBJECTS", 146),
                     f"{chain.label}: 상대가 하나로 정해지지 않은 관계 · 나를 가리키는 것 "
@@ -1036,6 +1128,12 @@ def _bound_clause(
                     subtree_of=resolver.subtree_of,
                 )
             )
+    if counts:
+        # 묶음의 다른 조건에 맞는 선(기록)만 — 그 상대의 수를 센다.
+        assert back or walked.edges is not None
+        far = walked.back.src_id if back else walked.edges.c.other
+        body = walked.linked.where(and_(*parts)) if parts else walked.linked
+        return and_(*[count_clause(body, far, op, raw, label) for op, raw, label in counts])
     return walked.linked.where(and_(*parts)).exists()
 
 

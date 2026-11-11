@@ -177,3 +177,30 @@ def test_타이머는_처음_판을_넣고_실패한_뒤에는_멈춘다(
     _calc(client, admin)
     with SessionLocal() as session:
         assert calc.paused(session) is None
+
+
+def test_무리는_고른_관계로만_짓고_모르는_이름이면_말한다(
+    client: TestClient,
+    admin: Signed,
+    world: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """무리는 고른 선에 따라 뜻이 바뀐다 — 기준정보 전체면 공급사 중심, 구성만이면 제품군
+    (견주기). 고른 것을 판에 적는다. 모르는 이름은 조용히 빼지 않는다."""
+    monkeypatch.setattr(get_settings(), "graph_calc_whole_relations", f" {world['kind']} ,")
+    result = _calc(client, admin)
+    assert result["whole_relations"] == [world["kind"]]
+    ids = world["ids"]
+    m1 = client.get(f"/api/graph/calc/object/{ids['M1']}", headers=admin.headers).json()
+    assert m1["cluster"] is not None and m1["run"]["stats"]["whole_relations"] == [
+        world["kind"]
+    ]
+
+    monkeypatch.setattr(get_settings(), "graph_calc_whole_relations", "없는_관계")
+    made = client.post("/api/graph/calc/run", headers=admin.headers)
+    failed = finish_job(client, admin, made.json())
+    assert failed["status"] == "failed"
+    assert "없는_관계" in failed["error"] and world["kind"] in failed["error"]
+    # 비우면 전부 — 예전 그대로.
+    monkeypatch.setattr(get_settings(), "graph_calc_whole_relations", "")
+    assert _calc(client, admin)["whole_relations"] == []

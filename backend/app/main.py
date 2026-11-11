@@ -80,6 +80,7 @@ from app.schema_version import warn_if_behind
 from app.shared import events, extensions, ops, public_url, scopes, system_sources
 from app.shared.access_log import AccessLogMiddleware
 from app.shared.errors import NotFound, code, register_error_handlers
+from app.shared.read_override import ReadOverrideMiddleware
 from app.shared.request_context import RequestIdMiddleware
 
 logger = logging.getLogger(__name__)
@@ -527,6 +528,9 @@ def create_app() -> FastAPI:
     # 순서가 중요하다. add_middleware 는 **나중에 더한 것이 바깥**이므로 아래 두
     # 줄은 RequestId(바깥) -> AccessLog(안쪽) 이 된다. 접근 로그가 요청 id 를
     # 읽으려면 그 id 가 먼저 설정돼 있어야 한다.
+    # 맨 안쪽 — 긴 읽기(POST + `X-HTTP-Method-Override: GET`)를 같은 GET 경로로 돌린다. 접근
+    # 로그 · 요청 id 는 바깥에서 온 그대로(POST) 본다.
+    app.add_middleware(ReadOverrideMiddleware, api_prefix=API_PREFIX)
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIdMiddleware)
     # 맨 바깥 — 접근 로그도 접두어가 붙은 한 가지 모양으로 본다.

@@ -757,3 +757,54 @@ def test_기간_단위는_날짜_칸에만_모르는_단위는_거절(
         headers=admin.headers,
     )
     assert bad_view.status_code == 422
+
+
+def test_문턱을_넘은_막대만_쪽으로_넘겨_받는다(client: TestClient, admin: Signed) -> None:
+    """「불합격 8건 이상인 모델 전부」 — 막대가 그림이 아니라 목록일 때. 30개에서 접으면 원본
+    기록을 전부 받아 직접 센다(합성 견주기 2.8만 줄). 문턱에 못 미친 것은 「그 밖에」 가 아니라
+    따로 센다 — 섞으면 「다음 쪽에 더 있다」 로 읽힌다."""
+    part = _parts(client, admin)
+    found = _summary(client, admin, part, group_by="properties.grade", min_value=2)
+    assert [(one["label"], one["count"]) for one in found["buckets"]] == [("A", 2)]
+    assert found["groups"] == 1 and found["offset"] == 0
+    assert (found["below_groups"], found["below_count"]) == (3, 3)
+    assert (found["other_groups"], found["other_count"]) == (0, 0)
+    assert found["total"] == 5  # 거른 객체 수는 그대로 — 문턱은 막대만 거른다
+    # 화면은 문턱을 주소로 못 받는다 — 빠졌다고 적는다.
+    assert "min_value" in found["link_missing"]
+
+    # 쪽 — 같은 값이면 키 순, 빈 값은 끝.
+    first = _summary(client, admin, part, group_by="properties.grade", limit=2)
+    second = _summary(client, admin, part, group_by="properties.grade", limit=2, offset=2)
+    assert [one["label"] for one in first["buckets"]] == ["A", "B"]
+    assert [one["label"] for one in second["buckets"]] == ["C", "(비어 있음)"]
+    assert first["groups"] == second["groups"] == 4
+    assert (second["offset"], second["other_groups"], second["other_count"]) == (2, 2, 3)
+    assert "link_missing" not in first or "limit" not in first["link_missing"]
+
+    # 쪽 끝을 넘어도 수는 맞다(줄 없이 다시 센다).
+    past = _summary(client, admin, part, group_by="properties.grade", offset=9)
+    assert (past["buckets"], past["groups"], past["below_groups"]) == ([], 4, 0)
+    none = _summary(client, admin, part, group_by="properties.grade", min_value=99)
+    assert (none["groups"], none["below_groups"], none["below_count"]) == (0, 4, 5)
+
+    # 합계에도 같은 문턱 — 무게 합이 35 이상인 등급(A 30 · B 30 · C 40 · 빈 값 50).
+    heavy = _summary(
+        client,
+        admin,
+        part,
+        group_by="properties.grade",
+        metric="sum",
+        metric_field="properties.weight",
+        min_value=35,
+        max_value=45,
+    )
+    assert [(one["label"], one["value"]) for one in heavy["buckets"]] == [("C", 40.0)]
+
+    # 한 쪽은 500 까지.
+    too_many = client.get(
+        f"/api/objects/{part}/summary",
+        params={"group_by": "properties.grade", "limit": 501},
+        headers=admin.headers,
+    )
+    assert too_many.status_code == 422

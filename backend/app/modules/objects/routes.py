@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from fastapi import (
@@ -23,6 +24,7 @@ from fastapi import (
 from fastapi.responses import Response
 from sqlalchemy import false, or_, select, true
 from sqlalchemy.orm import Session
+from starlette.datastructures import QueryParams
 
 from app.database import get_db
 from app.modules.accounts.models import User
@@ -60,6 +62,7 @@ from app.modules.objects import (
     resolve,
     rollup,
     similar,
+    sublists,
     system,
     watches,
 )
@@ -788,6 +791,15 @@ def summary(
     grain: str | None = Query(
         default=None, description="날짜 축의 기간 단위 — day·week·month·quarter·year(기본)"
     ),
+    min_value: float | None = Query(default=None, description=summary_service.MIN_VALUE),
+    max_value: float | None = Query(default=None, description=summary_service.MAX_VALUE),
+    limit: int = Query(
+        default=summary_service.MAX_BUCKETS,
+        ge=1,
+        le=summary_service.MAX_BUCKET_PAGE,
+        description="막대를 몇 개까지(쪽) — 기본 30, 쪽으로 넘길 때 500 까지",
+    ),
+    offset: int = Query(default=0, ge=0, description="몇 번째 막대부터(0 부터)"),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -839,6 +851,10 @@ def summary(
         grain=grain,
         viewer=user,
         at=edges.at(as_of),
+        min_value=min_value,
+        max_value=max_value,
+        limit=limit,
+        offset=offset,
     )
     defs = scope.defs
     # 같은 조건의 화면 — 답을 받은 AI 가 사람에게 내밀어, 눌러서 같은 통계를 확인하게 한다.
@@ -887,6 +903,10 @@ def summary(
         ],
         other_groups=found.other_groups,
         other_count=found.other_count,
+        offset=found.offset,
+        groups=found.groups,
+        below_groups=found.below_groups,
+        below_count=found.below_count,
         overlap=found.group_multi or found.split_multi,
         group_options=[
             GroupOptionOut(
@@ -1001,6 +1021,12 @@ def summary_export(
     order: str = Query(default="desc"),
     metric_field: str | None = Query(default=None),
     grain: str | None = Query(default=None),
+    min_value: float | None = Query(default=None, description=summary_service.MIN_VALUE),
+    max_value: float | None = Query(default=None, description=summary_service.MAX_VALUE),
+    limit: int = Query(
+        default=summary_service.MAX_BUCKETS, ge=1, le=summary_service.MAX_BUCKET_PAGE
+    ),
+    offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -1045,6 +1071,10 @@ def summary_export(
         grain=grain,
         viewer=user,
         at=edges.at(as_of),
+        min_value=min_value,
+        max_value=max_value,
+        limit=limit,
+        offset=offset,
     )
     header, rows = summary_service.summary_table(found)
     return sheets.file_response(
@@ -1313,17 +1343,70 @@ def _filtered(
     }
     if filters:
         stmt = apply_property_filters(stmt, filters)
-    # 조건 거르기 — `f.<칸>.<연산>=<값>`. 칸 안 OR, 칸끼리 AND.
+    # 조건 거르기 — `f.<칸>.<연산>=<값>`. 조건끼리는 AND(한 칸의 「또는」 은 `in`).
     asked = [
         one
         for index, one in enumerate(conditions.parse(request.query_params))
         if _condition_name(one, index) != omit
     ]
+    # 부분 목록(`@<번호>` + `s<번호>.…`) — 다른 목록의 결과를 값으로.
+    asked = _with_sublists(db, user, request, asked, as_of=as_of)
     if asked:
         stmt = conditions.apply(
             stmt, scope.defs, asked, paths.Resolver(db, scope, viewer=user, at=day)
         )
     return stmt
+
+
+def _with_sublists(
+    db: Session,
+    user: User,
+    request: Request,
+    asked: list[conditions.Condition],
+    *,
+    as_of: date | None,
+) -> list[conditions.Condition]:
+    """조건 값의 `@<번호>` 를 그 부분 목록(`s<번호>.…`)의 id 들로 바꾼다 — 부분 목록은 **같은
+    거르기**(이 함수가 부르는 `_filtered`)로 세운다. 보는 사람 · 기준일도 같다."""
+    numbers = sublists.wanted(asked)
+    if not numbers:
+        return asked
+    found = sublists.collect(list(request.query_params.multi_items()))
+    resolved: dict[int, list[str]] = {}
+    for number in sorted(numbers):
+        pairs = found.get(number) or []
+        inner = QueryParams(pairs)
+        slug = inner.get("type")
+        if not slug:
+            raise sublists.missing_type(number)
+        try:
+            scope = _scope(db, slug)
+        except AppError as caught:
+            raise InvalidValue(
+                code("OBJECTS", 153), f"부분 목록 @{number}: {caught.message}"
+            ) from caught
+        stmt = _filtered(
+            db,
+            user,
+            scope,
+            SimpleNamespace(query_params=inner),  # type: ignore[arg-type]
+            q=inner.get("q") or None,
+            status=inner.get("status") or None,
+            year=None,
+            cap=False,
+            as_of=as_of,
+        )
+        ids = list(
+            db.scalars(
+                stmt.with_only_columns(ObjectInstance.id)
+                .order_by(None)
+                .limit(sublists.MAX_IDS + 1)
+            )
+        )
+        if len(ids) > sublists.MAX_IDS:
+            raise sublists.too_many(number, scope.label)
+        resolved[number] = [str(one) for one in ids]
+    return sublists.substitute(asked, resolved)
 
 
 def _condition_name(one: conditions.Condition, index: int) -> str:

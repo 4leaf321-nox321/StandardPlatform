@@ -443,7 +443,11 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
     Boolean(asOf) ||
     grouping ||
     conditions.some(
-      (one) => one.op === 'under' || one.field.startsWith('out.') || one.field.startsWith('in.'),
+      (one) =>
+        one.op === 'under' ||
+        one.op === 'above' ||
+        one.field.startsWith('out.') ||
+        one.field.startsWith('in.'),
     )
   const columns = useMemo(
     () =>

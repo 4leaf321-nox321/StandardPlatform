@@ -154,7 +154,7 @@ def run(
     seconds: dict[str, float] = {}
     progress("그래프 읽기", 0, 4)
     mark = time.monotonic()
-    loaded = calcload.load(db)
+    loaded = calcload.load(db, whole=settings.graph_calc_whole_relations.split(","))
     seconds["load"] = round(time.monotonic() - mark, 2)
     n = loaded.n
     stats: dict[str, Any] = {
@@ -162,6 +162,8 @@ def run(
         "gpu_name": seen.gpu_name if engine.name == "gpu" else None,
         "nodes": n,
         "pairs": len(loaded.a),
+        # 무리 · 다리 역할을 지은 선 — 비면 전부(`GRAPH_CALC_WHOLE_RELATIONS`).
+        "whole_relations": loaded.whole,
         "relations": {},
         "seconds": seconds,
         "skipped": {},
