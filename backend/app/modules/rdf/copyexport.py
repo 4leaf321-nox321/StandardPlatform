@@ -156,61 +156,80 @@ def _stream(db: Session, sql: str, params: dict[str, Any] | None = None) -> Iter
         yield from cur
 
 
-def _alive_objects(alias: str) -> str:
+def alive_objects(alias: str) -> str:
     return f"{alias}.deleted_at IS NULL AND {alias}.merged_into_id IS NULL"
 
 
-def write(db: Session, out: IO[str]) -> Written:
-    """데이터 트리플을 `out` 에 — 객체 · 값 · 별칭 · 참조 · 오늘 유효한 관계(기간 · 고정이
-    있으면 구체화한 진술). 정의(OWL)는 `schema` 가 따로.
+@dataclass
+class Shape:
+    """정의에서 한 번 읽는 것 — 타입 · 인터페이스 · 칸 · 술어. 통째로 내보내기와 바뀐 것만
+    고치기(`copystate`)가 같은 것을 쓴다(같은 글이 나와야 둘이 같은 사본이 된다)."""
 
-    줄마다는 평범한 사전 · 튜플만 만진다(ORM 개체 · 이름 붙은 튜플은 줄마다 비싸다 — 견주기
-    84만 객체에서 시간의 절반이었다)."""
-    started = time.monotonic()
-    iris = _Iris()
-    names = iris.names
-    done = Written(
-        copied_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), sp_version=version.current()
-    )
-    rows = db.query(ObjectType).all()
-    slug_of = {row.id: row.slug for row in rows}
-    catalog = interfaces.load(db)
-    extends_of = catalog.extends_of()
-    #: 타입마다 처음 쓰는 줄들(타입 · 인터페이스) — 객체마다 같다.
-    heads = {
-        row.id: [iris.type_(row.slug)]
-        + [
-            iris.type_(slug)
-            for slug in interfaces.closure(row.interface_slugs or [], extends_of)
-        ]
-        for row in rows
-    }
-    defs = {row.id: properties_of(db, row.id) for row in rows}
+    iris: _Iris
+    slug_of: dict[Any, str]
+    #: 타입마다 처음 쓰는 술어들(타입 · 인터페이스) — 객체마다 같다.
+    heads: dict[Any, list[str]]
     #: 타입마다 (칸 키, 칸 종류, 술어) — 참조 칸은 참조 색인이 따로.
-    values_of = {
-        type_id: [
-            (one.key, one.data_type, iris.prop(slug_of[type_id], one.key))
-            for one in found
-            if one.data_type != "object_ref"
-        ]
-        for type_id, found in defs.items()
-    }
+    values_of: dict[Any, list[tuple[str, str, str]]]
     #: 지금 정의에 있는 참조 칸만 — 지운 칸의 색인 줄이 남아 있어도 메모리 그래프처럼 안 낸다.
-    ref_pred = {
-        (type_id, one.key): iris.prop(slug_of[type_id], one.key)
-        for type_id, found in defs.items()
-        for one in found
-        if one.data_type == "object_ref"
-    }
-    write_line = out.write
-    count = 0
-    individual = iris.individual
+    ref_pred: dict[tuple[Any, str], str]
 
-    # 1) 객체 — 타입 · 인터페이스 · 이름 · 식별자 · 설명 · 값
+    @classmethod
+    def load(cls, db: Session) -> Shape:
+        iris = _Iris()
+        rows = db.query(ObjectType).all()
+        slug_of = {row.id: row.slug for row in rows}
+        extends_of = interfaces.load(db).extends_of()
+        defs = {row.id: properties_of(db, row.id) for row in rows}
+        return cls(
+            iris=iris,
+            slug_of=slug_of,
+            heads={
+                row.id: [iris.type_(row.slug)]
+                + [
+                    iris.type_(slug)
+                    for slug in interfaces.closure(row.interface_slugs or [], extends_of)
+                ]
+                for row in rows
+            },
+            values_of={
+                type_id: [
+                    (one.key, one.data_type, iris.prop(slug_of[type_id], one.key))
+                    for one in found
+                    if one.data_type != "object_ref"
+                ]
+                for type_id, found in defs.items()
+            },
+            ref_pred={
+                (type_id, one.key): iris.prop(slug_of[type_id], one.key)
+                for type_id, found in defs.items()
+                for one in found
+                if one.data_type == "object_ref"
+            },
+        )
+
+    def node(self, type_id: Any, key: str | None, object_id: Any) -> str | None:
+        """객체의 IRI(`<…>`) — 모르는 타입이면 None(내보내지 않는다)."""
+        slug = self.slug_of.get(type_id)
+        return None if slug is None else self.iris.individual(slug, key, object_id)
+
+
+#: 부분 내보내기의 거르기 — (SQL 조각, 값). 비우면 전부.
+Where = tuple[str, dict[str, Any]]
+_ALL: Where = ("", {})
+
+
+def object_blocks(db: Session, shape: Shape, where: Where = _ALL) -> Iterator[tuple[str, int]]:
+    """객체마다 (줄들, 트리플 수) — 타입 · 인터페이스 · 이름 · 식별자 · 설명 · 값. `where` 는
+    `o` 에 건다."""
+    heads, values_of, individual = shape.heads, shape.values_of, shape.iris.individual
+    slug_of = shape.slug_of
+    sql, params = where
     for object_id, type_id, key, label, description, properties in _stream(
         db,
         "SELECT id, type_id, key, label, description, properties FROM objects o "
-        f"WHERE {_alive_objects('o')}",
+        f"WHERE {alive_objects('o')}{sql}",
+        params,
     ):
         slug = slug_of.get(type_id)
         if slug is None:
@@ -229,60 +248,91 @@ def write(db: Session, out: IO[str]) -> Written:
                     continue
                 for one in value if isinstance(value, list) else (value,):
                     lines.append(f"{node} {predicate} {literal(data_type, one)} .\n")
-        write_line("".join(lines))
-        count += len(lines)
-        done.objects += 1
+        yield "".join(lines), len(lines)
 
-    # 2) 별칭(사람이 붙인 것) — 메모리 그래프의 `aliases.human_of` 와 같은 것
+
+def alias_lines(db: Session, shape: Shape, where: Where = _ALL) -> Iterator[str]:
+    """별칭(사람이 붙인 것) — 메모리 그래프의 `aliases.human_of` 와 같은 것. `where` 는 `a`
+    에 건다."""
+    sql, params = where
     for type_id, key, object_id, value in _stream(
         db,
         "SELECT o.type_id, o.key, o.id, a.value FROM object_aliases a "
-        f"JOIN objects o ON o.id = a.object_id AND {_alive_objects('o')} "
-        "WHERE a.kind = %(human)s",
-        {"human": aliases.HUMAN},
+        f"JOIN objects o ON o.id = a.object_id AND {alive_objects('o')} "
+        f"WHERE a.kind = %(human)s{sql}",
+        {"human": aliases.HUMAN, **params},
     ):
-        slug = slug_of.get(type_id)
-        if slug is not None:
-            write_line(f"{individual(slug, key, object_id)} {_ALT} {_ko(value)} .\n")
-            count += 1
+        node = shape.node(type_id, key, object_id)
+        if node is not None:
+            yield f"{node} {_ALT} {_ko(value)} .\n"
 
-    # 3) 참조 칸 — 참조 색인(가리키는 것이 살아 있을 때만)
+
+def ref_lines(db: Session, shape: Shape, where: Where = _ALL) -> Iterator[str]:
+    """참조 칸 — 참조 색인(가리키는 것이 살아 있을 때만). `where` 는 `f` 에 건다."""
+    ref_pred, node = shape.ref_pred, shape.node
+    sql, params = where
     for st, sk, si, dt, dk, di, field in _stream(
         db,
         "SELECT s.type_id, s.key, s.id, d.type_id, d.key, d.id, f.key FROM object_refs f "
-        f"JOIN objects s ON s.id = f.src_id AND {_alive_objects('s')} "
-        f"JOIN objects d ON d.id = f.dst_id AND {_alive_objects('d')}",
+        f"JOIN objects s ON s.id = f.src_id AND {alive_objects('s')} "
+        f"JOIN objects d ON d.id = f.dst_id AND {alive_objects('d')}"
+        + (f" WHERE TRUE{sql}" if sql else ""),
+        params,
     ):
         ref = ref_pred.get((st, field))
-        holder, pointed = slug_of.get(st), slug_of.get(dt)
+        holder, pointed = node(st, sk, si), node(dt, dk, di)
         if ref is None or holder is None or pointed is None:
             continue
-        write_line(f"{individual(holder, sk, si)} {ref} {individual(pointed, dk, di)} .\n")
-        count += 1
+        yield f"{holder} {ref} {pointed} .\n"
 
-    # 4) 관계 — 오늘 유효한 선만, 기간 · 고정이 있으면 구체화한 진술(빈 노드는 선의 id 로)
-    alive = edge_rule.alive_sql("r", edge_rule.today())
+
+def alive_relations(today: Any) -> str:
+    """오늘 유효한 선 — 두 끝이 살아 있는 것(`r` · `s` · `d`)."""
+    return (
+        "FROM object_relations r "
+        f"JOIN objects s ON s.id = r.src_object_id AND {alive_objects('s')} "
+        f"JOIN objects d ON d.id = r.dst_object_id AND {alive_objects('d')} "
+        f"WHERE {edge_rule.alive_sql('r', today)}"
+    )
+
+
+def relation_blocks(
+    db: Session,
+    shape: Shape,
+    where: Where = _ALL,
+    *,
+    today: Any = None,
+    seen: set[Any] | None = None,
+) -> Iterator[tuple[str, int]]:
+    """관계 — 오늘 유효한 선만, 기간 · 고정이 있으면 구체화한 진술(빈 노드는 선의 id 로).
+    `where` 는 `r` 에 건다. `seen` 을 주면 이미 낸 선(id)은 건너뛴다 — 부분 내보내기가 같은
+    선을 두 번 내면 구체화한 진술이 둘이 된다(싣기마다 빈 노드 이름을 새로 짓는다)."""
+    names = shape.iris.names
     pinned_revision, pinned_at = f"<{names.pinned_revision}>", f"<{names.pinned_at}>"
     valid_from, valid_to = f"<{names.valid_from}>", f"<{names.valid_to}>"
+    relation_of, node = shape.iris.relation, shape.node
+    sql, params = where
     for rid, relation, vfrom, vto, prev, pat, st, sk, si, dt, dk, di in _stream(
         db,
         "SELECT r.id, r.relation, r.valid_from, r.valid_to, r.pinned_revision, r.pinned_at, "
-        "s.type_id, s.key, s.id, d.type_id, d.key, d.id FROM object_relations r "
-        f"JOIN objects s ON s.id = r.src_object_id AND {_alive_objects('s')} "
-        f"JOIN objects d ON d.id = r.dst_object_id AND {_alive_objects('d')} "
-        f"WHERE {alive}",
+        "s.type_id, s.key, s.id, d.type_id, d.key, d.id "
+        f"{alive_relations(edge_rule.today() if today is None else today)}{sql}",
+        params,
     ):
-        source, target = slug_of.get(st), slug_of.get(dt)
-        if source is None or target is None:
+        if seen is not None:
+            if rid in seen:
+                continue
+            seen.add(rid)
+        src, dst = node(st, sk, si), node(dt, dk, di)
+        if src is None or dst is None:
             continue
-        src, dst = individual(source, sk, si), individual(target, dk, di)
-        predicate = iris.relation(relation)
-        write_line(f"{src} {predicate} {dst} .\n")
-        count += 1
+        predicate = relation_of(relation)
         if vfrom is None and vto is None and pat is None:
+            yield f"{src} {predicate} {dst} .\n", 1
             continue
         said = f"_:r{rid.hex}"
         lines = [
+            f"{src} {predicate} {dst} .\n",
             f"{said} {_TYPE} {_STATEMENT} .\n",
             f"{said} {_SUBJECT} {src} .\n",
             f"{said} {_PREDICATE} {predicate} .\n",
@@ -296,18 +346,46 @@ def write(db: Session, out: IO[str]) -> Written:
             lines.append(f"{said} {valid_from} {_typed(vfrom.isoformat(), XSD.date)} .\n")
         if vto is not None:
             lines.append(f"{said} {valid_to} {_typed(vto.isoformat(), XSD.date)} .\n")
-        write_line("".join(lines))
-        count += len(lines)
+        yield "".join(lines), len(lines)
+
+
+def write(
+    db: Session, out: IO[str], shape: Shape | None = None, *, today: Any = None
+) -> Written:
+    """데이터 트리플을 `out` 에 — 객체 · 값 · 별칭 · 참조 · 오늘 유효한 관계(기간 · 고정이
+    있으면 구체화한 진술). 정의(OWL)는 `schema` 가 따로.
+
+    줄마다는 평범한 사전 · 튜플만 만진다(ORM 개체 · 이름 붙은 튜플은 줄마다 비싸다 — 견주기
+    84만 객체에서 시간의 절반이었다)."""
+    started = time.monotonic()
+    shape = shape or Shape.load(db)
+    done = Written(
+        copied_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), sp_version=version.current()
+    )
+    write_line = out.write
+    count = 0
+    for text, n in object_blocks(db, shape):
+        write_line(text)
+        count += n
+        done.objects += 1
+    for line in alias_lines(db, shape):
+        write_line(line)
+        count += 1
+    for line in ref_lines(db, shape):
+        write_line(line)
+        count += 1
+    for text, n in relation_blocks(db, shape, today=today):
+        write_line(text)
+        count += n
     done.triples = count
     done.seconds = round(time.monotonic() - started, 2)
     return done
 
 
-def schema(db: Session, path: Path) -> int:
+def schema_text(db: Session) -> tuple[str, int]:
     """정의(OWL) — 메모리 그래프의 `schema_graph` 그대로(작다), 바탕만 사본의 것."""
     graph = export.schema_graph(db, export.Names(COPY_BASE))
-    path.write_text(graph.serialize(format="nt"), encoding="utf-8")
-    return len(graph)
+    return graph.serialize(format="nt"), len(graph)
 
 
 def manifest(written: Written, path: Path) -> None:

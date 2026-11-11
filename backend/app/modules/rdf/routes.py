@@ -386,7 +386,10 @@ def _sparql_text(request_query: str | None, body: bytes, content_type: str) -> s
     )
 
 
-@router.api_route("/sparql", methods=["GET", "POST"])
+# GET · POST 를 따로 단다 — 한 `api_route` 에 둘을 주면 메서드가 집합이라 operationId 가
+# 프로세스마다 `_get` · `_post` 로 흔들린다(openapi.json 최신성 검사가 CI 에서만 깨졌다).
+@router.get("/sparql", operation_id="sparql_protocol_get")
+@router.post("/sparql", operation_id="sparql_protocol_post")
 async def sparql_protocol(
     request: Request,
     query: str | None = Query(default=None, description="SPARQL(SELECT · ASK) — GET 일 때"),

@@ -299,10 +299,16 @@ def test_그래프_사본_드라이버는_질의_문_한_곳에서만_부른다(
 
 
 def test_SPARQL_사본_라이브러리는_싣기와_질의_프로세스에서만_부른다() -> None:
-    """**pyoxigraph 는 `rdf/copycli.py`(싣기) · `rdf/storeq.py`(따로 도는 질의)에서만**(ADR
-    0070). 그 질의에는 시간 상한이 없다 — 웹 프로세스 안에서 부르면 잘못 쓴 질의 하나가 그
-    프로세스를 붙잡는다. 질의 프로세스는 앱을 import 하지 않는다(뜨는 시간)."""
-    allowed = {MODULES / "rdf" / "copycli.py", MODULES / "rdf" / "storeq.py"}
+    """**pyoxigraph 는 `rdf/copycli.py`(싣기) · `rdf/copyapply.py`(바뀐 것만 고치기 — 밤
+    작업) · `rdf/storeq.py`(따로 도는 질의)에서만**(ADR 0070 · 0071). 그 질의에는 시간
+    상한이 없다 — 웹 프로세스 안에서 부르면 잘못 쓴 질의 하나가 그 프로세스를 붙잡는다. 질의
+    프로세스는 앱을 import 하지 않는다(뜨는 시간). 웹이 부르는 모듈은 밤 작업 모듈을 import
+    하지 않는다."""
+    allowed = {
+        MODULES / "rdf" / "copycli.py",
+        MODULES / "rdf" / "copyapply.py",
+        MODULES / "rdf" / "storeq.py",
+    }
     offenders = [
         f"{path.relative_to(BACKEND)} -> {name}"
         for path in (BACKEND / "app").rglob("*.py")
@@ -314,3 +320,33 @@ def test_SPARQL_사본_라이브러리는_싣기와_질의_프로세스에서만
         name for name in _imports(MODULES / "rdf" / "storeq.py") if name.startswith("app")
     ]
     assert not child, f"질의 프로세스가 앱을 부릅니다: {child}"
+    nightly = {"app.modules.rdf.copycli", "app.modules.rdf.copyapply"}
+    web = [
+        f"{path.relative_to(BACKEND)} -> {name}"
+        for path in (BACKEND / "app").rglob("*.py")
+        for name in _imports(path)
+        if name in nightly and path not in allowed
+    ]
+    assert not web, "밤 작업 모듈을 부릅니다: " + ", ".join(web)
+
+
+def test_한_경로_함수에_메서드를_여럿_주지_않는다() -> None:
+    """`api_route(…, methods=["GET", "POST"])` 는 메서드를 집합으로 들고 있어, 프로세스마다
+    operationId 가 `_get` · `_post` 로 흔들린다 — openapi.json 최신성 검사가 CI 에서만
+    깨진다(v0.4.81). 메서드마다 따로 달고 `operation_id` 를 박는다."""
+    offenders = []
+    for path in (BACKEND / "app").rglob("*.py"):  # 확장 번들도 app/ 아래
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("api_route", "add_api_route")
+            ):
+                continue
+            words = {one.arg: one.value for one in node.keywords}
+            methods = words.get("methods")
+            listed = isinstance(methods, (ast.List, ast.Tuple, ast.Set))
+            many = listed and len(methods.elts) > 1  # type: ignore[union-attr]
+            if many and "operation_id" not in words:
+                offenders.append(f"{path.relative_to(BACKEND)}:{node.lineno}")
+    assert not offenders, "메서드 여럿을 한 경로 함수에: " + ", ".join(offenders)

@@ -2,8 +2,10 @@
 Description=@@APP_NAME@@ SPARQL 사본 다시 싣기 (쉬는 쪽에 싣고 바꿔 끼운다)
 After=@@APP_SLUG@@.service
 
-# SPARQL 사본(ADR 0070) — PostgreSQL → N-Triples → 쉬는 쪽 폴더에 Oxigraph 로 통째로 싣고 `active` 를
-# 바꿔 끼운다. 웹은 다음 질의부터 새 판을 읽는다(다시 띄울 것이 없다). 실패하면 앞 판이 그대로 답한다.
+# SPARQL 사본(ADR 0070 · 0071) — 되면 **바뀐 것만**(지난 판의 지문과 견줘 지금 판의 체크포인트에 고친다),
+# 아니면 통째로(PostgreSQL → N-Triples 를 파이프로 흘려 쉬는 쪽 폴더에 Oxigraph 로 — 임시 파일 없음). 어느
+# 쪽이든 `active` 를 바꿔 끼운다. 웹은 다음 질의부터 새 판을 읽는다(다시 띄울 것이 없다). 실패하면 앞 판이
+# 그대로 답한다.
 [Service]
 Type=oneshot
 User=@@USER@@

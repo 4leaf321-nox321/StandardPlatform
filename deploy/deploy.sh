@@ -1405,6 +1405,14 @@ setup_rdfstore() {
 cmd_rdf_copy() {
     [[ "$RDFSTORE_ENABLED" == "1" ]] || err "SPARQL 사본이 꺼져 있습니다(RDFSTORE_ENABLED=0)"
     [[ -f "$RDFCOPY_SERVICE_UNIT" ]] || err "SPARQL 사본이 깔려 있지 않습니다 — sudo ./deploy.sh update"
+    case "${1:-}" in
+        "") ;;
+        --full)
+            # 다음 싣기를 통째로(ADR 0071) — 싣기가 이 표식을 보고 통째로 싣고, 다 실으면 지운다.
+            install -o "$OPERATOR" -g "$OPERATOR" -m 644 /dev/null "$RDFSTORE_HOST_DIR/full-next"
+            info "이번 싣기는 통째로(바뀐 것만 고치지 않는다)" ;;
+        *) err "rdf-copy 는 --full 만 받습니다: $1" ;;
+    esac
     info "SPARQL 사본 다시 싣기 — 끝날 때까지 기다린다(앞 판이 그동안 답한다)"
     systemctl start "$RDFCOPY_SERVICE_NAME"
     journalctl -u "$RDFCOPY_SERVICE_NAME" -n 6 --no-pager || true
@@ -1995,7 +2003,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
   graph-copy  그래프 사본을 지금 다시 싣는다(끝날 때까지 기다린다 — 앞 판이 그동안 답한다)
   RDFSTORE    = $RDFSTORE_ENABLED   (SPARQL 사본 · $RDFSTORE_HOST_DIR — 웹은 읽기 전용)
   NIGHTLY_SLOTS = $NIGHTLY_SLOTS   (서버 하나의 밤 작업 자리 — 설치 모두가 함께, 빈 자리를 잡은 것만 돈다)
-  rdf-copy    SPARQL 사본을 지금 다시 싣는다(끝날 때까지 기다린다)
+  rdf-copy    SPARQL 사본을 지금 다시 싣는다(끝날 때까지 기다린다 — 되면 바뀐 것만, --full 이면 통째로)
   HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST LB_MODE=$LB_MODE${WEB_VIP:+ WEB_VIP=$WEB_VIP}
 
   HWAX 포털에 붙이기 — sudo PORTAL_JWKS_URL=<포털 JWKS> PORTAL_LAUNCH_URL=<포털>/launch/<id> ./deploy.sh update
@@ -2030,7 +2038,7 @@ case "${1:-}" in
     render)         cmd_render ;;
     hwax-request)   cmd_hwax_request ;;
     graph-copy)     cmd_graph_copy ;;
-    rdf-copy)       cmd_rdf_copy ;;
+    rdf-copy)       shift; cmd_rdf_copy "$@" ;;
     ""|auto)        cmd_auto    ;;
     -h|--help|help) usage       ;;
     *)              usage; exit 1 ;;

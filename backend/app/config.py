@@ -343,7 +343,8 @@ class Settings(BaseSettings):
     rdf_store_dir: str = ""
     """SPARQL 사본(Oxigraph — 디스크에 세운 RDF 저장소, ADR 0070)의 폴더 — 그 안의 `active` 가
     지금 판. 비우면 사본이 없다 — SPARQL 은 질의마다 메모리에 그래프를 세운다(객체 5만 개
-    상한). 배포(`deploy.sh`)가 `/data/rdfstore` 로 적고 밤마다 다시 싣는다."""
+    상한). 배포(`deploy.sh`)가 `/data/rdfstore` 로 적고 밤마다 고치거나 다시 싣는다(ADR
+    0071)."""
     rdf_query_seconds: int = 60
     """사본에 묻는 SPARQL 하나의 시간 상한(초) — 넘으면 그 질의를 돌리던 프로세스를 끊는다."""
     rdf_query_memory_mb: int = 4096
@@ -352,6 +353,14 @@ class Settings(BaseSettings):
     """바깥 시스템용 SPARQL 창구(`/api/rdf/sparql`)가 한 번에 돌려줄 줄의 상한."""
     rdf_concurrency: int = 2
     """웹 프로세스 하나가 동시에 돌리는 SPARQL(사본) 수 — 넘는 것은 기다린다."""
+    rdf_copy_changes: bool = True
+    """밤의 SPARQL 사본을 **바뀐 것만** 고친다(ADR 0071) — 지난 판의 지문과 지금 DB 를 견줘
+    바뀐 객체 · 선의 줄만 지우고 다시 넣는다. 끄면 밤마다 통째로 싣는다(예전과 같다). 켜도
+    정의 · SP 판이 바뀐 날, 주 1회(`RDF_COPY_FULL_WEEKDAY`), 바뀐 것이 10% 를 넘는 날, 고친 뒤
+    개수가 어긋난 날은 통째로."""
+    rdf_copy_full_weekday: str = "sun"
+    """SPARQL 사본을 통째로 다시 싣는 요일(`mon` ~ `sun`) — 바뀐 것만 고치는 사이 혹시 어긋난
+    것을 바로잡고 저장소를 다진다. 비우면 요일로는 안 하고, 통째로 한 지 7일이 지나면 한다."""
     graph_calc_whole_relations: str = ""
     """무리 · 다리 역할을 지을 선 — 쉼표로 가른 관계 slug, 참조 칸은 `<타입 slug>.<칸 키>`.
     비우면 전부(기준정보끼리의 참조 칸 + 오늘 유효한 관계). 무리는 고른 선에 따라 뜻이 바뀐다 —
