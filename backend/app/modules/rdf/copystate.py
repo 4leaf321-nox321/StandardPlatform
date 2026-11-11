@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import sqlite3
 import uuid
@@ -234,12 +235,17 @@ class ObjectChange:
     old: str | None
     new: str | None
     digest: bytes | None = None
+    #: IRI 를 다른 객체와 함께 쓴다 — 그 IRI 에 닿는 줄을 모두 지우고 함께 쓰는 것을 모두 다시
+    #: 낸다.
+    widen: bool = False
+    #: 안 바뀌었는데 IRI 를 함께 써서 끼운 것 — 지문 파일은 고치지 않는다.
+    extra: bool = False
 
     @property
     def moved(self) -> bool:
-        """IRI 가 달라졌다(생김 · 사라짐 · 식별자나 타입이 바뀜) — 이것을 가리키는 줄까지
-        고친다."""
-        return self.old != self.new
+        """IRI 가 달라졌다(생김 · 사라짐 · 식별자나 타입이 바뀜) 또는 IRI 를 함께 쓴다 — 이것을
+        가리키는 줄까지 고친다."""
+        return self.old != self.new or self.widen
 
 
 #: 선의 열쇠 — (출발 id, 종류, 도착 id). 같은 열쇠의 선이 여럿이면 사본의 줄 하나를 함께 쓴다.
@@ -367,6 +373,92 @@ def diff(db: Session, shape: Shape, path: Path, *, today: Any, limit: int) -> Pl
     return plan
 
 
+def _tail(alias: str) -> str:
+    """IRI 의 끝 — 식별자가 있으면 식별자, 없으면 id(`_Iris.individual` 과 같다)."""
+    return (
+        f"CASE WHEN coalesce({alias}.key, '') = '' THEN {alias}.id::text ELSE {alias}.key END"
+    )
+
+
+def _alive_at(db: Session, shape: Shape, iris: set[str]) -> Iterator[tuple[str, bytes]]:
+    """그 IRI 를 지금 쓰는 살아 있는 객체 — (IRI, id). 식별자 색인(`key, type_id`)을 탄다."""
+    type_of = {slug: type_id for type_id, slug in shape.slug_of.items()}
+    asked: list[tuple[Any, str]] = []
+    for iri in iris:
+        split = shape.iris.split(iri)
+        if split is not None and split[0] in type_of:
+            asked.append((type_of[split[0]], split[1]))
+    for start in range(0, len(asked), ASK):
+        part = asked[start : start + ASK]
+        ids = []
+        for _type_id, tail in part:
+            with contextlib.suppress(ValueError):
+                ids.append(str(uuid.UUID(tail)))
+        rows = list(
+            db.execute(
+                text(
+                    "SELECT o.id, o.type_id, o.key FROM unnest(CAST(:t AS uuid[]), "
+                    "CAST(:k AS text[])) AS q(type_id, tail) "
+                    "JOIN objects o ON o.key = q.tail AND o.type_id = q.type_id "
+                    f"WHERE {alive_objects('o')}"
+                ),
+                {"t": [str(one[0]) for one in part], "k": [one[1] for one in part]},
+            )
+        )
+        if ids:
+            rows += db.execute(
+                text(
+                    "SELECT o.id, o.type_id, o.key FROM objects o "
+                    f"WHERE o.id = ANY(CAST(:ids AS uuid[])) AND {alive_objects('o')} "
+                    "AND coalesce(o.key, '') = ''"
+                ),
+                {"ids": ids},
+            ).all()
+        for object_id, type_id, key in rows:
+            node = shape.node(type_id, key, object_id)
+            if node is not None and node[1:-1] in iris:
+                yield node[1:-1], object_id.bytes
+
+
+def widen(db: Session, shape: Shape, plan: Plan, path: Path) -> int:
+    """**IRI 를 함께 쓰는 객체**를 계획에 끼운다 — 끼운 수.
+
+    사본의 IRI 는 타입과 식별자로 짓는다. 식별자를 부서마다 따로 쓰는
+    타입(`key_scope=workspace`)에서는 두 부서의 「M-1」 이 사본에서 IRI 하나다(예전부터
+    그렇다 — 메모리 그래프도 같다). 그 IRI 의 줄을 지우면 안 바뀐 쪽의 줄까지 지워진다. 그래서
+    바뀐 것이 닿는 IRI(바뀐 객체의 옛 · 새 IRI, 바뀐 선의 두 끝)를 함께 쓰는 객체가 있으면
+    **모두** IRI 가 바뀐 것처럼 다룬다 — 그 IRI 에 닿는 줄을 다 지우고, 함께 쓰는 것을 모두
+    다시 낸다."""
+    changed = {one.id: one for one in plan.objects}
+    keys = plan.keys()
+    ends = {one[0] for one in keys} | {one[2] for one in keys}
+    old = old_iris(path, ends)
+    members: dict[str, set[bytes]] = {}
+    for one in plan.objects:
+        for iri in (one.old, one.new):
+            if iri:
+                members.setdefault(iri, set()).add(one.id)
+    for end in ends:
+        for iri in (old.get(end), changed[end].new if end in changed else old.get(end)):
+            if iri:
+                members.setdefault(iri, set()).add(end)
+    for iri, object_id in _alive_at(db, shape, set(members)):
+        members[iri].add(object_id)
+    added = 0
+    for iri, ids in members.items():
+        if len(ids) < 2:
+            continue
+        for object_id in ids:
+            found = changed.get(object_id)
+            if found is None:
+                found = ObjectChange(id=object_id, old=iri, new=iri, extra=True)
+                plan.objects.append(found)
+                changed[object_id] = found
+                added += 1
+            found.widen = True
+    return added
+
+
 def old_iris(path: Path, ids: set[bytes]) -> dict[bytes, str]:
     """지난 판에서 그 객체들의 IRI — 바뀐 선의 옛 줄을 지울 때 쓴다."""
     out: dict[bytes, str] = {}
@@ -390,11 +482,15 @@ def advance(path: Path, plan: Plan, meta: dict[str, str]) -> None:
         for batch in _chunks(iter(plan.objects)):
             con.executemany(
                 "DELETE FROM objects WHERE id = ?",
-                [(one.id,) for one in batch if one.new is None],
+                [(one.id,) for one in batch if one.new is None and not one.extra],
             )
             con.executemany(
                 "INSERT OR REPLACE INTO objects VALUES (?, ?, ?)",
-                [(one.id, one.digest, one.new) for one in batch if one.new is not None],
+                [
+                    (one.id, one.digest, one.new)
+                    for one in batch
+                    if one.new is not None and not one.extra
+                ],
             )
         for batch_r in _chunks(iter(plan.relations)):
             con.executemany(
@@ -497,23 +593,58 @@ class Expected:
 
 def expected(db: Session, shape: Shape, *, today: Any) -> Expected:
     """타입 · 인터페이스마다 객체 수, 관계 종류마다 (출발, 도착) 짝 수, 참조 칸마다 줄 수,
-    구체화한 진술 수, 별칭 수 — 내보내기와 같은 거르기."""
+    구체화한 진술 수, 별칭 수 — 내보내기와 같은 거르기.
+
+    식별자를 부서마다 따로 쓰는 타입(`key_scope` 가 `global` 이 아닌 것)에 닿는 줄은 **서로
+    다른 IRI** 로 센다 — 두 부서의 같은 식별자는 사본에서 하나다(`widen`). 나머지는 그냥
+    센다(전부를 DISTINCT 로 세면 2,000만 객체에서 무겁다). 전사 범위 타입에 뜻밖의 겹침이
+    있으면 개수가 어긋나 그 밤은 통째로 — 느려질 뿐 틀리지 않는다."""
     out = Expected()
-    for type_id, count in db.execute(
-        text(
-            f"SELECT o.type_id, count(*) FROM objects o WHERE {alive_objects('o')} "
-            "GROUP BY o.type_id"
+    shared = [
+        str(type_id)
+        for (type_id,) in db.execute(
+            text("SELECT id FROM object_types WHERE key_scope <> 'global'")
         )
-    ):
+    ]
+    ask = {"shared": shared}
+    one_side = "o.type_id = ANY(CAST(:shared AS uuid[]))"
+    either = "ANY(CAST(:shared AS uuid[]))"
+    two_sides = f"(s.type_id = {either} OR d.type_id = {either})"
+    alive = alive_objects("o")
+    counts = list(
+        db.execute(
+            text(
+                f"SELECT o.type_id, count(*) FROM objects o WHERE {alive} AND NOT {one_side} "
+                "GROUP BY o.type_id"
+            ),
+            ask,
+        )
+    )
+    if shared:
+        counts += db.execute(
+            text(
+                f"SELECT o.type_id, count(DISTINCT {_tail('o')}) FROM objects o "
+                f"WHERE {alive} AND {one_side} GROUP BY o.type_id"
+            ),
+            ask,
+        ).all()
+    for type_id, count in counts:
         for head in shape.heads.get(type_id, []):
             out.classes[head[1:-1]] = out.classes.get(head[1:-1], 0) + count
-    for relation, count in db.execute(
-        text(
-            "SELECT x.relation, count(*) FROM (SELECT DISTINCT r.src_object_id, r.relation, "
-            f"r.dst_object_id {alive_relations(today)}) x GROUP BY x.relation"
+    pairs = [
+        f"SELECT x.relation, count(*) FROM (SELECT DISTINCT r.src_object_id, r.relation, "
+        f"r.dst_object_id {alive_relations(today)} AND NOT {two_sides}) x GROUP BY x.relation"
+    ]
+    if shared:
+        pairs.append(
+            f"SELECT x.relation, count(*) FROM (SELECT DISTINCT s.type_id, {_tail('s')}, "
+            f"r.relation, d.type_id, {_tail('d')} {alive_relations(today)} AND {two_sides}) "
+            "x(a, b, relation, c, e) GROUP BY x.relation"
         )
-    ):
-        out.relations[shape.iris.relation(relation)[1:-1]] = count
+    for sql in pairs:
+        for relation, count in db.execute(text(sql), ask):
+            iri = shape.iris.relation(relation)[1:-1]
+            out.relations[iri] = out.relations.get(iri, 0) + count
     out.statements = int(
         db.execute(
             text(
@@ -522,25 +653,52 @@ def expected(db: Session, shape: Shape, *, today: Any) -> Expected:
             )
         ).scalar_one()
     )
-    for type_id, key, count in db.execute(
-        text(
-            "SELECT s.type_id, f.key, count(*) FROM object_refs f "
-            f"JOIN objects s ON s.id = f.src_id AND {alive_objects('s')} "
-            f"JOIN objects d ON d.id = f.dst_id AND {alive_objects('d')} "
-            "GROUP BY s.type_id, f.key"
+    refs = (
+        "FROM object_refs f "
+        f"JOIN objects s ON s.id = f.src_id AND {alive_objects('s')} "
+        f"JOIN objects d ON d.id = f.dst_id AND {alive_objects('d')} "
+    )
+    ref_counts = list(
+        db.execute(
+            text(
+                f"SELECT s.type_id, f.key, count(*) {refs} WHERE NOT {two_sides} "
+                "GROUP BY s.type_id, f.key"
+            ),
+            ask,
         )
-    ):
+    )
+    if shared:
+        ref_counts += db.execute(
+            text(
+                f"SELECT x.a, x.k, count(*) FROM (SELECT DISTINCT s.type_id, {_tail('s')}, "
+                f"f.key, d.type_id, {_tail('d')} {refs} WHERE {two_sides}) x(a, b, k, c, e) "
+                "GROUP BY x.a, x.k"
+            ),
+            ask,
+        ).all()
+    for type_id, key, count in ref_counts:
         predicate = shape.ref_pred.get((type_id, key))
         if predicate is not None:
             out.refs[predicate[1:-1]] = out.refs.get(predicate[1:-1], 0) + count
+    names = (
+        "FROM object_aliases a "
+        f"JOIN objects o ON o.id = a.object_id AND {alive_objects('o')} "
+        "WHERE a.kind = :human"
+    )
     out.aliases = int(
         db.execute(
-            text(
-                "SELECT count(*) FROM object_aliases a "
-                f"JOIN objects o ON o.id = a.object_id AND {alive_objects('o')} "
-                "WHERE a.kind = :human"
-            ),
-            {"human": aliases.HUMAN},
+            text(f"SELECT count(*) {names} AND NOT {one_side}"),
+            {**ask, "human": aliases.HUMAN},
         ).scalar_one()
     )
+    if shared:
+        out.aliases += int(
+            db.execute(
+                text(
+                    f"SELECT count(*) FROM (SELECT DISTINCT o.type_id, {_tail('o')}, a.value "
+                    f"{names} AND {one_side}) x"
+                ),
+                {**ask, "human": aliases.HUMAN},
+            ).scalar_one()
+        )
     return out

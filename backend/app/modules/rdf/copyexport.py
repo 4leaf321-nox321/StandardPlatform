@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import IO, Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from rdflib import DCTERMS, RDF, RDFS, SKOS, XSD
 from sqlalchemy.orm import Session
@@ -129,6 +129,13 @@ class _Iris:
         else:
             tail = quote(key, safe="-._~")
         return f"<{self._objects}{type_slug}/{tail}>"
+
+    def split(self, iri: str) -> tuple[str, str] | None:
+        """객체 IRI(꺾쇠 없이) → (타입 slug, 끝 — 식별자 또는 id). 객체 IRI 가 아니면 None."""
+        if not iri.startswith(self._objects):
+            return None
+        slug, _, tail = iri[len(self._objects) :].partition("/")
+        return (slug, unquote(tail)) if slug and tail else None
 
     def _term(self, local: str) -> str:
         found = self._cache.get(local)

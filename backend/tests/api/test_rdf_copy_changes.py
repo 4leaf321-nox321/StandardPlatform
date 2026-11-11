@@ -33,6 +33,7 @@ from app.modules.rdf import copyapply, copycli, copyexport, copystate, store
 from tests.api.conftest import Signed
 from tests.api.test_aliases import _aliases
 from tests.api.test_edge_fields import _bom_kind
+from tests.api.test_object_integrity import _other
 from tests.api.test_ontology import _link, _make_object, _make_property, _make_type
 
 Shape = tuple[set[tuple[str, str, str]], Counter[frozenset[tuple[str, str]]]]
@@ -247,6 +248,72 @@ def test_바뀐_것만_고친_사본은_통째로_내보낸_것과_같다(
     assert done["mode"] == "changes" and done["changed_objects"] == 0, done
     assert done["changed_relations"] == 0
     _same(tmp_path, db, later)
+
+
+def test_IRI_를_함께_쓰는_객체가_있어도_고친_사본이_같다(
+    client: TestClient, admin: Signed, db: Session, tmp_path: Path
+) -> None:
+    """식별자를 부서마다 따로 쓰는 타입 — 두 부서의 「M-1」 은 사본에서 IRI 하나다. 한쪽만
+    고쳐도 다른 쪽의 줄(값 · 들어오는 참조 · 선 · 구체화한 진술)이 남아야 하고, 한쪽의 식별자를
+    바꾸면 둘이 갈라져야 한다(`copystate.widen`). 개수 견주기도 서로 다른 IRI 로 센다 —
+    그것만으로는 이 빠짐을 못 잡는다(같은 IRI 라 수가 그대로다, 2026-11-11 확인)."""
+    other = _other(db)
+    machine = _make_type(
+        client, admin, label="설비", key_policy="optional", key_scope="workspace"
+    )
+    _make_property(client, admin, machine, key="note", label="메모", data_type="text")
+    line = _make_type(client, admin, label="라인", key_policy="optional")
+    _make_property(
+        client,
+        admin,
+        line,
+        key="machine",
+        label="설비",
+        data_type="object_ref",
+        ref_type_slug=machine,
+    )
+    kind = _bom_kind(client, admin, line, machine)
+    here = _make_object(
+        client, admin, machine, label="여기", key="M-1", properties={"note": "a"}
+    )
+    there = _make_object(
+        client,
+        admin,
+        machine,
+        label="저기",
+        key="M-1",
+        workspace_slug=other.slug,
+        properties={"note": "b"},
+    )
+    owner = _make_object(
+        client, admin, line, label="L", key="L-1", properties={"machine": there["id"]}
+    )
+    for target, extra in ((here, {}), (there, {"valid_from": "2026-01-01"})):
+        made = _link(client, admin, line, owner["id"], kind, target["id"], **extra)
+        assert made.status_code == 201, made.text
+    assert copycli.load(tmp_path) == 0
+    _same(tmp_path, db, edges.today())
+
+    # 한쪽만 고친다 — 같은 IRI 의 다른 쪽 줄이 남아야 한다.
+    got = client.patch(
+        f"/api/objects/{machine}/{here['id']}",
+        json={"properties": {"note": "c"}},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert copycli.load(tmp_path) == 0
+    done = _manifest(tmp_path)
+    assert done["mode"] == "changes" and done["shared_objects"] >= 1, done
+    _same(tmp_path, db, edges.today())
+
+    # 한쪽의 식별자를 바꾼다 — 둘이 갈라진다.
+    got = client.patch(
+        f"/api/objects/{machine}/{there['id']}", json={"key": "M-2"}, headers=admin.headers
+    )
+    assert got.status_code == 200, got.text
+    assert copycli.load(tmp_path) == 0
+    assert _manifest(tmp_path)["mode"] == "changes", _manifest(tmp_path)
+    _same(tmp_path, db, edges.today())
 
 
 def test_정의가_바뀌면_그날은_통째로(

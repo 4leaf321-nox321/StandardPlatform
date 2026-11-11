@@ -292,9 +292,11 @@ def _changes(root: Path, current: str | None, slot: str, started: float) -> None
             raise _Full(f"바뀐 것이 많음({why})") from why
         except copystate.OutOfOrder as why:
             raise _Full(f"지문의 차례가 어긋남({why})") from why
+        changed = len(plan.objects)
+        shared = copystate.widen(db, shape, plan, state)
         _log(
-            f"바뀐 것: 객체 {len(plan.objects):,} · 선 {len(plan.relations):,} "
-            f"(지문 견주기 {time.monotonic() - mark:.1f}초)"
+            f"바뀐 것: 객체 {changed:,} · 선 {len(plan.relations):,} · IRI 를 함께 써 끼운 "
+            f"객체 {shared:,} (지문 견주기 {time.monotonic() - mark:.1f}초)"
         )
         mark = time.monotonic()
         copyapply.checkpoint(active, target)
@@ -349,7 +351,8 @@ def _changes(root: Path, current: str | None, slot: str, started: float) -> None
         "triples": int(previous.get("triples") or 0) - counted.removed + counted.added,
         "mode": "changes",
         "reason": "",
-        "changed_objects": len(plan.objects),
+        "changed_objects": changed,
+        "shared_objects": shared,
         "changed_relations": len(plan.relations),
         "removed_triples": counted.removed,
         "added_triples": counted.added,
