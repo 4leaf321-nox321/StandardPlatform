@@ -81,6 +81,7 @@ TOOLS = {
     "graph_path",
     "graph_overview",
     "graph_metrics",
+    "graph_query",
     "bulk_edit",
     "bulk_edit_undo",
     "audit_recent",
@@ -2137,6 +2138,31 @@ def test_부분_목록과_긴_읽기가_그대로_건너간다() -> None:
     body = httpx.QueryParams(long_one.content.decode())
     assert body["f.id.in"] == many and body["group_by"] == "status"
     assert not long_one.url.params
+
+
+def test_그래프_사본_질의의_길과_인자가_그대로_건너간다() -> None:
+    """`graph_query`(4단계) — 상태 · 모양은 GET, 질의는 몸통(`query` · `params` ·
+    `limit`)으로."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"rows": []}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(server.graph_query(ctx))
+    asyncio.run(server.graph_query(ctx, "schema"))
+    cypher = "MATCH (m:model {key: $k}) RETURN m"
+    asyncio.run(server.graph_query(ctx, "query", query=cypher, params={"k": "M1"}, limit=9000))
+    assert [one.url.path for one in seen] == [
+        "/api/graph/cypher",
+        "/api/graph/cypher/schema",
+        "/api/graph/cypher",
+    ]
+    assert seen[2].method == "POST"
+    assert json.loads(seen[2].content) == {
+        "query": cypher,
+        "params": {"k": "M1"},
+        "limit": 5000,
+    }
+    assert "query" in asyncio.run(server.graph_query(ctx, "query"))["error"]
+    assert "action" in asyncio.run(server.graph_query(ctx, "뭐지"))["error"]
+    assert len(seen) == 3
 
 
 def test_관계의_유효_기간과_기준일이_그대로_건너간다() -> None:

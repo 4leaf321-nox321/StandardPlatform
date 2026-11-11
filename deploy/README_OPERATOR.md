@@ -585,6 +585,33 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - CUDA 런타임은 **NVIDIA 독점 라이선스(CUDA EULA)** 다 — 앱에 담아 배포하는 것은 그 조건 안에서 허용된다
   (`THIRD_PARTY_NOTICES.md`). CPU 판에는 들어 있지 않다.
 
+## 5d-2c. 그래프 사본 — 설치마다 Neo4j 무료판 (ADR 0069)
+
+관계 여럿을 엮는 물음(「불합격 8건 이상 모델의 BOM 중 최근 설계 변경 부품의 공급사 순위」)을 AI 가 Cypher 한 문장으로
+묻는 **읽기용 사본**이다. SP 를 밤마다 통째로 싣는다 — 사본은 SP 를 고치지 않고, SP 가 정본이다.
+
+| | |
+| --- | --- |
+| 무엇이 도나 | `<slug>-graphdb`(Neo4j 무료판 2026.10.1 — 이미지 안 `/opt/neo4j`, 127.0.0.1:**앱 포트 +3** 의 bolt 만, HTTP 없음) · `<slug>-graphcopy.timer`(매일 05:30, 대기 서버는 06:00) |
+| 어디에 | 이 서버의 `$INSTALL_DIR/graphdb` — `conf/neo4j.conf`(deploy.sh 가 쓴다) · `slot-a` · `slot-b` · `active`(지금 도는 쪽) · `logs/` |
+| 앱이 붙는 길 | `.env` 의 `GRAPHDB_URL` · `GRAPHDB_PASSWORD`(설치 때 deploy.sh 가 적는다 — 무료판에는 역할이 없어 비밀번호가 같은 서버의 다른 설치를 막는다) |
+| 다시 싣기 | `graphcopy.sh` — PostgreSQL → CSV → **쉬는 쪽 폴더**에 `neo4j-admin import` → 바꿔 끼우고 다시 띄움(수십 초) → 색인. 싣는 동안 앞 판이 답한다. 새 판이 안 뜨면 앞 판으로 되돌린다 |
+| 손으로 | `sudo ./deploy.sh graph-copy`(끝까지 기다린다) · 보기 `journalctl -u <slug>-graphcopy -f` |
+| 백업 | 하지 않는다 — 망가지면 다시 싣는다 |
+
+- **설치 · update 가 갖춘다** — `update` 때마다 새 이미지로 한 번 다시 싣는다(뒤에서). 첫 설치는 다 실은 뒤에야 사본이 뜬다.
+- **메모리** — 기본은 힙 2g · 페이지 캐시 2g(설치가 셋이면 셋 다). 큰 DB 면 올린다:
+  `sudo GRAPHDB_HEAP=8g GRAPHDB_PAGECACHE=32g ./deploy.sh update`(설치 기록에 남아 다음 update 도 그 값). 질의 하나의 거래
+  메모리는 1g · 모두 합해 2g, 거래 시간은 앱이 30초(`GRAPHDB_QUERY_SECONDS`)로 끊는다.
+- **크기 어림(합성 견주기)** — 객체 84만 · 선 133만: 내보내기 4.6초 · 싣기 6초 · 디스크 약 0.5GB, 색인 4초. 2,000만
+  객체면 싣기 수 분 · 디스크 수십 GB 로 어림한다(두 폴더 몫).
+- **이중화** — 두 서버가 각자 자기 사본을 싣는다(같은 `.env` · 같은 비밀번호). 사본은 서버 밖으로 열리지 않는다.
+- **끄기** — `sudo GRAPHDB_ENABLED=0 ./deploy.sh update`(유닛을 멈추고 `.env` 의 주소를 비운다 — 데이터 폴더는 둔다).
+- **라이선스** — Neo4j 무료판은 **GPL-3.0** 이다(고치지 않고 따로 도는 프로그램으로 담는다 — `THIRD_PARTY_NOTICES.md`).
+  사내 배포 전에 법무 확인을 권한다.
+- **안 되면** — 앱의 「그래프 사본」 상태(`GET /api/graph/cypher`)가 `reachable: false` 와 까닭을 말한다. `systemctl status
+  <slug>-graphdb` · `$INSTALL_DIR/graphdb/logs/neo4j.log` · `journalctl -u <slug>-graphcopy`.
+
 ## 5d-3. 뜻으로 찾기의 바탕 — pgvector · 임베딩 모델 (ADR 0050)
 
 글을 **뜻의 자리**(숫자 1,024개)로 바꿔 DB 에 담아 두면, 낱말이 달라도(「냉각수 누설」 과 「쿨런트 샘」) 뜻이

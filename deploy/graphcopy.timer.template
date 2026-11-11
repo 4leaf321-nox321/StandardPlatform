@@ -1,0 +1,10 @@
+[Unit]
+Description=@@APP_NAME@@ 그래프 사본 다시 싣기 — 매일 @@AT@@
+
+[Timer]
+OnCalendar=*-*-* @@AT@@:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

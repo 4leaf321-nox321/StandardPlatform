@@ -56,3 +56,7 @@ tabulate==0.10.0
 python-pptx==1.0.2
 lxml==6.1.3
 XlsxWriter==3.3.0
+# 그래프 사본(4단계 — 설치마다 Neo4j 무료판)의 드라이버. Apache-2.0. `graph/cypher.py` 한 곳에서만
+# 부른다(구조 시험). pytz 는 그 의존.
+neo4j==6.4.1
+pytz==2026.6

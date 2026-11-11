@@ -2484,6 +2484,48 @@ async def graph_metrics(
 
 
 @tool()
+async def graph_query(
+    ctx: Context,
+    action: str = "status",
+    query: str | None = None,
+    params: dict[str, Any] | None = None,
+    limit: int = 200,
+) -> Any:
+    """**그래프 사본에 Cypher 로 묻기**(4단계 — 설치마다 Neo4j, 밤에 SP 를 통째로 실은 사본).
+
+    관계 **여럿을 엮는 물음** 한 문장 — 「불합격 8건 이상 모델의 BOM 중 최근 설계 변경 부품의
+    공급사 순위」 「이 공급사 부품이 든 모델이 팔리는 시장」. 한 객체에서 출발하는 물음 · 수
+    세기는 SP 도구가 먼저다(`objects_list` 의 개수 · 위 전부 · 부분 목록, `objects_summary`,
+    `graph_reach`, `object_explode`) — 그것은 **지금** 값이다.
+
+    - `status` — 사본이 있나 · 닿나 · **언제 실었나**(`copy.copied_at`) · 상한. 처음엔 이것.
+    - `schema` — 라벨(타입 slug) · 관계 종류(관계 slug · 참조 칸 `ref_<칸>`) · 속성과 규칙.
+      **이름을 추측하지 말고 이것을 본다.**
+    - `query` — `query`(읽기 한 문장) · `params`(`$이름` 값 — 글 안에 값을 박지 않는다) ·
+      `limit`(줄, 설정 상한 안). 노드는 `{_node, id, type, key, label, props}` — `id` 는 SP 의
+      id 라 상세는 `object_get(type, id)`. `truncated` 면 전부가 아니다 — `count()` 로 다시.
+
+    규칙(`schema.rules`): 모든 노드에 `Obj` + 타입 라벨, 관계는 **오늘 유효한 선만**, 날짜는
+    ISO 글자, 이어지는 관계는 `*1..20` 처럼 **걸음 상한을 꼭** 둔다. 읽기만 — 쓰기 · `LOAD CSV`
+    · `dbms.` · `apoc.cypher` 등은 거절된다. 시간 상한을 넘으면 끊긴다(출발점을 좁힌다).
+
+    **사본이다** — 답에 `copy.copied_at`(언제 실은 것인지)을 함께 말한다. 그 뒤의 변경은 없다.
+    사본이 없는 설치 · 다시 싣는 중이면 SP 도구로 묻는다. 부서로 좁힌 설치에서는 모든 부서를
+    보는 사람만 묻는다."""
+    if action == "status":
+        return await _get(ctx, "/api/graph/cypher")
+    if action == "schema":
+        return await _get(ctx, "/api/graph/cypher/schema")
+    if action == "query":
+        if not query or not query.strip():
+            return {"error": 'query(Cypher 읽기 한 문장)를 줍니다 — 먼저 action="schema".'}
+        body: dict[str, Any] = {"query": query, "params": params or {}}
+        body["limit"] = max(1, min(limit, 5000))
+        return await _post(ctx, "/api/graph/cypher", body)
+    return {"error": f"모르는 action: {action} — status · schema · query"}
+
+
+@tool()
 async def bulk_edit(
     ctx: Context,
     type_slug: str,

@@ -7,7 +7,7 @@
 #                                          더 담는다(약 5GB 더). 이름 끝에 `-gpu`.
 #
 # 산출물: release/<slug>-<버전>[-gpu].tar.gz
-#   app.sif · deploy.sh · ha.sh · pg-ha.sh · pg-tune.sh · backup.sh · restore.sh · *.template · .env.example
+#   app.sif · deploy.sh · ha.sh · pg-ha.sh · pg-tune.sh · backup.sh · restore.sh · graphcopy.sh · *.template · .env.example
 #   · BUILD_INFO · README.md · CHANGES.md(판 기록) · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ · pgvector_debs/ (폐쇄망용)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
@@ -157,6 +157,11 @@ cp deploy/metrics.service.template   "$STAGE/"
 cp deploy/metrics.timer.template     "$STAGE/"
 cp deploy/backup.service.template    "$STAGE/"
 cp deploy/backup.timer.template      "$STAGE/"
+# 그래프 사본(4단계 — 설치마다 Neo4j) — 유닛 둘 · 타이머 · 밤에 다시 싣는 스크립트.
+cp deploy/graphdb.service.template   "$STAGE/"
+cp deploy/graphcopy.service.template "$STAGE/"
+cp deploy/graphcopy.timer.template   "$STAGE/"
+cp deploy/graphcopy.sh               "$STAGE/"
 # 이중화 — deploy.sh 가 source 하는 ha.sh 와, 서버에 /usr/local/sbin/pg-ha 로 깔리는 pg-ha.sh.
 # **ha.sh 가 없으면 deploy.sh 가 단독 서버에서도 안 돈다**(첫 줄에서 찾는다).
 cp deploy/ha.sh                      "$STAGE/"

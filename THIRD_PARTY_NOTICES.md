@@ -3,7 +3,8 @@
 Standard Platform 자체는 [LICENSE](LICENSE)(무단 사용 금지)를 따른다. 이 소프트웨어가 쓰거나 함께 배포하는 제3자 구성
 요소는 **각자의 라이선스**를 따르며, LICENSE 는 그것들에 적용되지 않는다. 이 문서는 그 구성 요소와 라이선스 전문이
 있는 자리를 적는다(2026-11-08 점검 — 막는 라이선스는 없었다: GPL · AGPL · SSPL · 비상업 · 라이선스 없음이 앱이 쓰는
-라이브러리에 없다).
+라이브러리에 없다). 2026-11-11 부터 이미지에 **따로 도는 프로그램** Neo4j 무료판(GPLv3)과 OpenJDK(GPLv2 + Classpath
+Exception)가 든다 — 그래프 사본(ADR 0069). 앱이 링크하는 것이 아니라 127.0.0.1 의 포트로 말을 거는 별도 프로세스다.
 
 ## 어디에 전문이 있나
 
@@ -15,6 +16,10 @@ Standard Platform 자체는 [LICENSE](LICENSE)(무단 사용 금지)를 따른�
 | 밤 그래프 계산의 CPU 엔진 NetworKit 11.3 · tabulate(ADR 0067) | MIT | 이미지 안 venv 의 `*.dist-info/licenses/` |
 | **GPU 판 번들만** — 밤 그래프 계산의 GPU 엔진 pylibcugraph · rmm · raft · cuvs · kvikio(RAPIDS 26.10) · cupy · cuda-bindings | Apache-2.0 · MIT | 이미지 안 venv 의 `*.dist-info/licenses/` |
 | **GPU 판 번들만** — CUDA 12.9 런타임 라이브러리(`nvidia-*` 휠: cudart · cublas · cusparse · cusolver · cufft · curand · nvrtc · nvjitlink · cufile · nccl) | **NVIDIA 독점(CUDA EULA)** — 무료, 앱에 담아 배포는 조건부 허용 | 각 휠의 `*.dist-info/licenses/License.txt`(EULA 전문 · 배포 가능한 파일은 그 Attachment A) |
+| 그래프 사본(ADR 0069) — Neo4j 무료판 2026.10.1(이미지 안 `/opt/neo4j`, 고치지 않고 그대로) | **GPL-3.0**(Neo4j Community Edition) | `/opt/neo4j/LICENSE.txt` · `ThirdPartyLicenses.txt` |
+| 그래프 사본의 APOC Core(Neo4j 압축본의 `labs/` 에 든 것 그대로) | Apache-2.0 | `/opt/neo4j/labs/` 의 `LICENSE` |
+| 그래프 사본을 돌리는 OpenJDK 21 JRE(Ubuntu 패키지 `openjdk-21-jre-headless`) | GPL-2.0 + Classpath Exception | `/usr/share/doc/openjdk-21-jre-headless/copyright` |
+| 그래프 사본의 파이썬 드라이버 neo4j 6.4.1 · pytz | Apache-2.0 · MIT | 이미지 안 venv 의 `*.dist-info/licenses/` |
 | MCP 서버 · 정제 키트의 파이썬 휠(mcp · httpx · openpyxl …) | MIT · BSD · Apache-2.0 · PSF, certifi 는 MPL-2.0 | 각 휠의 `*.dist-info/licenses/` · 키트의 내장 CPython 은 PSF-2.0 |
 | 이미지(SIF)의 OS 패키지(Ubuntu 24.04 · python3.12 · libpq5 …) | GPL · LGPL · MIT 등 패키지마다 | 릴리스 번들의 `os-packages.txt`(패키지 · 판) — 각 패키지의 `/usr/share/doc/<패키지>/copyright` |
 | 번들에 함께 넣는 `apptainer_debs/` · `pgvector_debs/` | Apptainer BSD-3, fuse-overlayfs · squashfs-tools 등 GPL-2, pgvector PostgreSQL License | 각 .deb 안의 `copyright` |
@@ -30,6 +35,12 @@ Standard Platform 자체는 [LICENSE](LICENSE)(무단 사용 금지)를 따른�
   (<https://snapshot.ubuntu.com> · `apt-get source <패키지>`)와 Apptainer PPA(<https://launchpad.net/~apptainer>)에 있다 —
   판은 `os-packages.txt` 와 각 .deb 이름에 있다.
 - **Geist 글꼴(OFL-1.1)** — 소프트웨어와 함께 묶는 것은 되고, 글꼴만 따로 팔지 않는다.
+- **Neo4j 무료판(GPL-3.0)** — 고치지 않고 받은 압축본 그대로(판과 지문을 이미지 정의에 박는다) 따로 도는 프로그램으로
+  담는다. 앱은 그것을 링크하지 않고 bolt 포트로 말을 건다(드라이버는 Apache-2.0). GPL-3.0 §6 에 따라 그 판의 소스를
+  받을 수 있는 자리를 알린다: <https://github.com/neo4j/neo4j>(태그 `2026.10.1`) — 요청하면 같은 판의 소스를 함께
+  건넨다. 상표 「Neo4j」 는 Neo4j, Inc. 의 것이다. 상용판(Enterprise) · GDS 는 담지 않는다(GDS 의 받은 jar 에 「평가
+  목적 · 운영 금지」 조항이 함께 있었다).
+- **OpenJDK(GPL-2.0 + Classpath Exception)** — Ubuntu 패키지 그대로. 소스는 `apt-get source openjdk-21`.
 - **CUDA 런타임(NVIDIA CUDA EULA, GPU 판만)** — 공개 소프트웨어가 아니다. EULA 1.1.2 의 조건으로 앱에 담아 배포한다:
   앱이 그것 말고도 기능이 있고, 그 파일은 이 앱만 쓰며, 고치지 않고(리눅스 판은 그대로 다시 배포 가능), 이 앱의 사용
   조건이 EULA(NVIDIA 의 지식재산 보호 포함)와 어긋나지 않는다. CPU 판 번들에는 들어 있지 않다.

@@ -1,0 +1,30 @@
+[Unit]
+Description=@@APP_NAME@@ 그래프 사본 (Neo4j 무료판 — 읽기용, 127.0.0.1)
+After=network-online.target
+Wants=network-online.target
+
+# 그래프 사본(4단계) — SP 를 밤마다 통째로 실은 읽기용 Neo4j. 이 설치의 앱만 붙는다(127.0.0.1 ·
+# 비밀번호는 .env 의 GRAPHDB_PASSWORD). 데이터는 이 서버의 @@GRAPHDB_DIR@@ — 백업하지 않는다
+# (망가지면 `systemctl start @@APP_SLUG@@-graphcopy` 로 다시 싣는다). 설정은 deploy.sh 가 conf/ 에 쓴다.
+[Service]
+Type=simple
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@INSTALL_DIR@@
+ExecStart=/usr/bin/apptainer exec \
+    --env NEO4J_CONF=/data/graphdb/conf \
+    --bind @@GRAPHDB_DIR@@:/data/graphdb \
+    @@INSTALL_DIR@@/app.sif \
+    /opt/neo4j/bin/neo4j console
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+LimitNOFILE=60000
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

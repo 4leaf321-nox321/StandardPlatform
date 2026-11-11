@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-11c
+GUIDE_VERSION: 2026-11-11d
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -58,6 +58,7 @@ GUIDE_VERSION: 2026-11-11c
 | **두 객체가 어떻게 이어져 있나** | `graph_path(source_id, target_id, max_depth=, relations=, types=)` | 가장 짧은 길들. **`truncated` 면 「없다」 가 아니라 「찾다가 멈춤」** — 좁혀서 다시 |
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
 | **전체를 훑는 그래프 물음** — 「가장 많은 모델이 기대는 부품」 「함께 엮이는 무리」 「구성이 비슷한 모델」 「빠지면 무리가 끊기는 다리」 | `graph_metrics(action="status")` → `top` · `object` · `clusters` · `cluster` | **밤에 센 사본**(ADR 0067) — `run.computed_at` 을 함께 말한다. 모델마다 펼쳐 세지 않는다(5,000번). 판이 없으면 「아직 안 셌다」 지 「없다」 가 아니다(`relations` 주제의 「밤에 센 그래프 지표」) |
+| **관계 여럿을 제멋대로 엮는 물음** — 「불합격 8건 이상 모델의 BOM 중 최근 설계 변경 부품의 공급사 순위」 「이 공급사 부품이 든 모델이 팔리는 시장의 서비스 건」 | `graph_query(action="status")` → `schema` → `query`(Cypher 읽기 한 문장) | **밤에 실은 사본**(설치마다 Neo4j) — `copy.copied_at` 을 함께 말한다. 한 객체에서 출발 · 조건으로 세기는 SP 도구가 먼저(지금 값). 이름은 `schema` 에서, 걸음 상한(`*1..20`)을 꼭 (`relations` 주제의 「그래프 사본」) |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 안 보이는 것은 수만(조회를 부서로 좁힌 설치) |
 | 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다. `weighted` 면 수량 반영(총수량만큼 셌다) |
 | **제품 하나에 이 부품이 몇 개** · 「이 부품은 어디에 쓰였나」 | `object_explode(mode="summary"·"indented"·"where_used", as_of=)` | 관계의 수량을 경로 따라 곱한다. `totals.missing`(수량 없음 — 1개로 셈) · `hidden` · `truncated` 를 함께 말한다. `quantity_key` 가 비었으면 「수량 칸이 없어 모두 1개로 셌다」 |
@@ -1032,6 +1033,47 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - 무리는 **엔진 · 판마다 조금 다를 수 있다**(무리 번호는 앞 판과 반 넘게 겹치면 이어받는다). 「무리 7 에 든다」 는
   사실로 말하고, 무리의 뜻(제품군 등)은 `cluster` 의 객체 · `types` 를 보고 말한다 — 짐작하지 않는다.
 - 조회를 부서로 좁힌 설치에서는 모든 부서를 보는 사람에게만 보인다(403 이면 그 까닭이다).
+
+### 그래프 사본에 Cypher 로 묻기 — `graph_query`
+
+SP 를 밤마다 통째로 실은 **읽기용 사본**(설치마다 Neo4j 무료판)에 Cypher 한 문장으로 묻는다. 관계를 셋
+넘게 엮거나 · 집합 위에서 몇 단계든 따라가는 물음이 SP 도구로는 여러 번 · 수만 줄이 될 때 쓴다.
+
+**먼저 SP 도구로 되나 본다** — 개수(`count_gte`) · 위 전부(`above`) · 부분 목록(`from`) · 통계
+문턱(`min_value`)으로 한두 번에 되면 그것이 **지금** 값이고 화면 주소(`url`)도 있다. 사본은 어젯밤 것이다.
+
+1. `graph_query(action="status")` — 있나 · 닿나 · `copy.copied_at` · 상한(시간 · 줄).
+2. `graph_query(action="schema")` — 라벨 · 관계 종류 · 속성 · `rules`. **이름을 추측하지 않는다.**
+3. `graph_query(action="query", query=…, params={…})`.
+
+| 규칙 | 뜻 |
+| --- | --- |
+| 라벨 | 모든 노드에 `Obj` + 타입 slug(`:gb_part`). 속성 `id`(SP id) · `key` · `label` · `status` · `ws` + 칸 |
+| 관계 | 관계 slug, 방향은 SP 의 출발 → 도착. **오늘 유효한 선만**(그 날의 구성은 SP 의 `as_of`) |
+| 참조 칸 | `ref_<칸>` — 가리키는 쪽 → 가리켜지는 쪽: `(t:gb_test)-[:ref_model]->(m:gb_model)` |
+| 날짜 | ISO 글자 — `e.date >= '2026-05-05'` |
+| 몇 단계든 | `-[:gb_bom*1..20]->` — **걸음 상한을 꼭** |
+| 값 | `$이름` 매개변수로(`params`). 한 번에 한 문장. 읽기만 |
+
+```cypher
+// 불합격 8건 이상 모델의 BOM 중 최근 설계 변경 부품 → 공급사 상위 10
+MATCH (t:gb_test {result: '불합격'})-[:ref_model]->(m:gb_model)
+WITH m, count(t) AS fails WHERE fails >= 8
+MATCH (m)-[:gb_bom*1..20]->(p:gb_part)
+WITH DISTINCT p
+WHERE EXISTS { MATCH (e:gb_eco)-[:gb_eco_affects]->(p) WHERE e.date >= $cut }
+MATCH (s:gb_supplier)-[:gb_supplies]->(p)
+RETURN s.key AS supplier, count(DISTINCT p) AS parts ORDER BY parts DESC LIMIT 10
+```
+
+- 노드는 `{_node, id, type, key, label, props}` 로 온다 — `id` 는 SP 의 id 그대로라 자세히는
+  `object_get(type, id)`, 사람에게는 SP 화면 주소로 옮긴다. 선은 `{_rel, start, end, props}`.
+- `truncated` 면 줄 상한에서 잘린 것이다 — 「전부」 로 말하지 말고 `count()` 로 다시 묻는다.
+- 시간 상한을 넘으면 끊긴다 — 출발점을 좁히고(`{key: $k}`) 걸음 상한을 줄인다. 같은 것을 다시
+  보내지 않는다.
+- 쓰기 · `LOAD CSV` · `dbms.` · `apoc.cypher` · `apoc.load` 는 거절된다. 고치기는 SP 에서.
+- 「사본이 없다」(이 설치에 안 깔림) · 「닿지 않는다」(새벽에 다시 싣는 중)면 SP 도구로 묻는다.
+- 답에는 **「어젯밤(○일 ○시) 사본 기준」** 을 붙인다. 지금 값이 꼭 필요하면 SP 도구로 확인한다.
 
 <!--@ sparql -->
 ## 질의어로 묻기 (SPARQL)

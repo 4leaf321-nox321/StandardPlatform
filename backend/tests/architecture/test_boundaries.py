@@ -282,3 +282,17 @@ def test_그래프_계산_라이브러리는_엔진_한_곳에서_늦게_부른�
     assert not offenders, "그래프 계산 라이브러리를 정한 자리 밖에서 부릅니다: " + ", ".join(
         offenders
     )
+
+
+def test_그래프_사본_드라이버는_질의_문_한_곳에서만_부른다() -> None:
+    """**`neo4j` 드라이버는 `graph/cypher.py` 에서만**(4단계). 사본에 묻는 길이 하나여야 읽기만
+    · 상한 · 보는 범위를 한 자리에서 지킨다 — 다른 곳에서 드라이버를 열면 그 자리는 쓰기 거래도
+    연다."""
+    allowed = MODULES / "graph" / "cypher.py"
+    offenders = [
+        f"{path.relative_to(BACKEND)} -> {name}"
+        for path in (BACKEND / "app").rglob("*.py")
+        for name in _imports(path)
+        if name.split(".")[0] == "neo4j" and path != allowed
+    ]
+    assert not offenders, "neo4j 드라이버를 정한 자리 밖에서 부릅니다: " + ", ".join(offenders)

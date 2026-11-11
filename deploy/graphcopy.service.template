@@ -1,0 +1,18 @@
+[Unit]
+Description=@@APP_NAME@@ 그래프 사본 다시 싣기 (쉬는 쪽에 싣고 바꿔 끼운다)
+After=@@APP_SLUG@@.service
+
+# root 로 돈다 — 그래프 사본 서비스를 껐다 켠다(systemctl). 내보내기 · 싣기는 운영 계정으로
+# 이미지 안에서(graphcopy.sh 의 runuser). 실패하면 앞 판이 그대로 돈다.
+[Service]
+Type=oneshot
+Environment=GC_USER=@@USER@@
+Environment=GC_SIF=@@INSTALL_DIR@@/app.sif
+Environment=GC_ENV_FILE=@@ENV_FILE@@
+Environment=GC_DIR=@@GRAPHDB_DIR@@
+Environment=GC_SERVICE=@@APP_SLUG@@-graphdb
+Environment=GC_PORT=@@GRAPHDB_PORT@@
+ExecStart=/bin/bash @@INSTALL_DIR@@/graphcopy.sh
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=idle

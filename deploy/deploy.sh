@@ -109,6 +109,11 @@ derive_unit_names() {
     BACKUP_SERVICE_NAME="${APP_SLUG}-backup"
     BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
     BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
+    GRAPHDB_SERVICE_NAME="${APP_SLUG}-graphdb"
+    GRAPHDB_SERVICE_UNIT="/etc/systemd/system/${GRAPHDB_SERVICE_NAME}.service"
+    GRAPHCOPY_SERVICE_NAME="${APP_SLUG}-graphcopy"
+    GRAPHCOPY_SERVICE_UNIT="/etc/systemd/system/${GRAPHCOPY_SERVICE_NAME}.service"
+    GRAPHCOPY_TIMER_UNIT="/etc/systemd/system/${GRAPHCOPY_SERVICE_NAME}.timer"
 }
 derive_unit_names
 
@@ -128,6 +133,10 @@ EXTENSIONS=$EXTENSIONS
 INSTALL_DIR=$INSTALL_DIR
 DATA_DIR=${DATA_DIR:-}
 BACKUP_HOST_DIR=${BACKUP_HOST_DIR:-}
+GRAPHDB_ENABLED=${GRAPHDB_ENABLED:-1}
+GRAPHDB_PORT=${GRAPHDB_PORT:-}
+GRAPHDB_HEAP=${GRAPHDB_HEAP:-}
+GRAPHDB_PAGECACHE=${GRAPHDB_PAGECACHE:-}
 EOF
     chmod 644 "$INSTANCES_DIR/$APP_SLUG.conf"
 }
@@ -239,20 +248,42 @@ mcp_shown_host() {
     esac
 }
 
+# ───────────────────────── 그래프 사본 (4단계 — 설치마다 Neo4j 무료판) ─────────────────────────
+# SP 를 밤마다 통째로 실은 읽기용 Neo4j — **이 설치의 앱만** 127.0.0.1 의 bolt 포트로 붙는다(HTTP 는 끈다).
+# 무료판의 「사용자 DB 하나」 는 프로세스마다라 설치마다 하나씩 띄운다. 데이터는 이 서버(로컬)의
+# $INSTALL_DIR/graphdb — 이중화면 두 서버가 각자 싣는다. 백업하지 않는다(다시 싣는다).
+# 포트는 **앱 포트 +3**(MCP 가 +2). 메모리는 작게 시작한다 — 큰 DB 면 GRAPHDB_HEAP · GRAPHDB_PAGECACHE 를
+# 올려 update(기록에 남는다). 끄기: GRAPHDB_ENABLED=0.
+GRAPHDB_ENABLED="${GRAPHDB_ENABLED:-$(instance_conf_get "$APP_SLUG" GRAPHDB_ENABLED)}"; GRAPHDB_ENABLED="${GRAPHDB_ENABLED:-1}"
+GRAPHDB_PORT="${GRAPHDB_PORT:-$(instance_conf_get "$APP_SLUG" GRAPHDB_PORT)}"; GRAPHDB_PORT="${GRAPHDB_PORT:-$((APP_PORT + 3))}"
+GRAPHDB_HEAP="${GRAPHDB_HEAP:-$(instance_conf_get "$APP_SLUG" GRAPHDB_HEAP)}"; GRAPHDB_HEAP="${GRAPHDB_HEAP:-2g}"
+GRAPHDB_PAGECACHE="${GRAPHDB_PAGECACHE:-$(instance_conf_get "$APP_SLUG" GRAPHDB_PAGECACHE)}"; GRAPHDB_PAGECACHE="${GRAPHDB_PAGECACHE:-2g}"
+GRAPHDB_HOST_DIR="$INSTALL_DIR/graphdb"
+# 그 인스턴스의 그래프 사본 포트(기록 > 앱 포트 +3)
+other_graphdb_port() {  # $1=slug
+    local got app
+    got="$(instance_conf_get "$1" GRAPHDB_PORT)"
+    app="$(instance_conf_get "$1" APP_PORT)"
+    [[ -z "$got" && -n "$app" ]] && got=$((app + 3))
+    printf '%s' "$got"
+}
+
 check_port_clash() {
-    local file slug oapp omcp mine
+    local file slug oapp omcp ograph mine
     for file in "$INSTANCES_DIR"/*.conf; do
         [[ -f "$file" ]] || continue
         slug="$(basename "$file" .conf)"
         [[ "$slug" == "$APP_SLUG" ]] && continue
         oapp="$(instance_conf_get "$slug" APP_PORT)"
         omcp="$(other_mcp_port "$slug")"
-        for mine in "$APP_PORT:앱" "$MCP_PORT:MCP"; do
+        ograph="$(other_graphdb_port "$slug")"
+        for mine in "$APP_PORT:앱" "$MCP_PORT:MCP" "$GRAPHDB_PORT:그래프 사본"; do
             local port="${mine%%:*}" what="${mine##*:}"
-            if [[ -n "$oapp" && "$port" == "$oapp" ]] || [[ -n "$omcp" && "$port" == "$omcp" ]]; then
+            if [[ -n "$oapp" && "$port" == "$oapp" ]] || [[ -n "$omcp" && "$port" == "$omcp" ]] \
+                || [[ -n "$ograph" && "$port" == "$ograph" ]]; then
                 err "$APP_SLUG 의 $what 포트 $port 가 이미 설치된 $slug 와 겹칩니다" \
-                    "($slug: 앱 ${oapp:-?} · MCP ${omcp:-?})." \
-                    "MCP 는 앱 포트 +2 로 딸려 옵니다 — 앱 포트를 10 이상 벌려 주세요:" \
+                    "($slug: 앱 ${oapp:-?} · MCP ${omcp:-?} · 그래프 사본 ${ograph:-?})." \
+                    "MCP 는 앱 포트 +2, 그래프 사본은 +3 으로 딸려 옵니다 — 앱 포트를 10 이상 벌려 주세요:" \
                     "sudo APP_SLUG=$APP_SLUG APP_PORT=<다른 포트> ./deploy.sh update"
             fi
         done
@@ -1014,6 +1045,8 @@ render_unit_paths() {  # $1=template
         -e "s|@@FILESTORE_DIR@@|$FILESTORE_HOST_DIR|g" \
         -e "s|@@LOG_DIR@@|$LOG_HOST_DIR|g" \
         -e "s|@@BACKUP_DIR@@|${BACKUP_HOST_DIR:-}|g" \
+        -e "s|@@GRAPHDB_DIR@@|${GRAPHDB_HOST_DIR:-}|g" \
+        -e "s|@@GRAPHDB_PORT@@|${GRAPHDB_PORT:-}|g" \
         -e "$backup_sed" \
         -e "$nv_sed" \
         "$1"
@@ -1171,6 +1204,108 @@ setup_backup_timer() {
         || warn "백업 타이머 기동 실패 — 'systemctl status ${BACKUP_SERVICE_NAME}.timer' 확인"
 }
 
+# ── 그래프 사본 (4단계) ──
+# 사본에 붙는 길을 .env 에 — 앱이 뜨기 전에(앱은 기동 때 설정을 읽는다). 비밀번호는 한 번 만들고 그대로
+# 둔다(이중화면 공용 .env 한 벌을 두 서버가 쓴다 — 두 사본이 같은 비밀번호). 끄면 주소를 비운다.
+GRAPHDB_ALLOWLIST="apoc.coll.*,apoc.map.*,apoc.text.*,apoc.path.*,apoc.agg.*,apoc.convert.*,apoc.number.*,apoc.date.*,apoc.temporal.*,apoc.meta.*,apoc.label.*,apoc.node.*,apoc.nodes.*,apoc.rel.*,db.*"
+
+sync_env_graphdb() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    if [[ "$GRAPHDB_ENABLED" != "1" ]]; then
+        env_file_set GRAPHDB_URL ""
+        return 0
+    fi
+    env_file_set GRAPHDB_URL "bolt://127.0.0.1:$GRAPHDB_PORT"
+    if [[ -z "$(env_file_get GRAPHDB_PASSWORD)" ]]; then
+        env_file_set GRAPHDB_PASSWORD "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+        info ".env: GRAPHDB_PASSWORD 를 만들었습니다(그래프 사본의 자물쇠)"
+    fi
+}
+
+# 이미지의 기본 설정(/opt/neo4j/conf/neo4j.conf — JVM 옵션이 거기 있다) 위에 이 설치의 값을 덮는다.
+# 같은 키는 기본에서 뺀다(두 번 적으면 Neo4j 가 거절한다).
+graphdb_conf() {
+    local conf="$GRAPHDB_HOST_DIR/conf/neo4j.conf" ours keys
+    ours="server.directories.data=/data/graphdb/active
+server.directories.logs=/data/graphdb/logs
+server.directories.run=/data/graphdb/run
+server.directories.import=/data/graphdb/import
+server.directories.plugins=/opt/neo4j/plugins
+server.default_listen_address=127.0.0.1
+server.bolt.enabled=true
+server.bolt.listen_address=127.0.0.1:$GRAPHDB_PORT
+server.bolt.advertised_address=127.0.0.1:$GRAPHDB_PORT
+server.http.enabled=false
+server.https.enabled=false
+server.memory.heap.initial_size=$GRAPHDB_HEAP
+server.memory.heap.max_size=$GRAPHDB_HEAP
+server.memory.pagecache.size=$GRAPHDB_PAGECACHE
+db.memory.transaction.max=1g
+dbms.memory.transaction.total.max=2g
+db.transaction.timeout=120s
+dbms.security.auth_enabled=true
+dbms.security.allow_csv_import_from_file_urls=false
+dbms.security.procedures.allowlist=$GRAPHDB_ALLOWLIST
+dbms.usage_report.enabled=false"
+    keys="$(printf '%s\n' "$ours" | sed -n 's/^\([a-z][a-z0-9_.]*\)=.*/\1/p' | sed 's/\./\\./g' | paste -sd'|')"
+    as_op mkdir -p "$GRAPHDB_HOST_DIR/conf"
+    {
+        as_op /usr/bin/apptainer exec "$INSTALL_DIR/app.sif" cat /opt/neo4j/conf/neo4j.conf \
+            | grep -Ev "^($keys)="
+        printf '\n# --- deploy.sh 가 덮는다(그래프 사본, 4단계) — 고치려면 GRAPHDB_* 로 update ---\n%s\n' "$ours"
+    } > "$conf.new"
+    chown "$OPERATOR:$OPERATOR" "$conf.new"
+    chmod 640 "$conf.new"
+    mv -f "$conf.new" "$conf"
+}
+
+setup_graphdb() {
+    local templates=("$HERE/graphdb.service.template" "$HERE/graphcopy.service.template" "$HERE/graphcopy.timer.template")
+    if [[ "$GRAPHDB_ENABLED" != "1" ]]; then
+        if [[ -f "$GRAPHDB_SERVICE_UNIT" ]]; then
+            info "그래프 사본 끔(GRAPHDB_ENABLED=0) — 유닛을 멈춘다(데이터 $GRAPHDB_HOST_DIR 는 둔다)"
+            systemctl disable --now "${GRAPHCOPY_SERVICE_NAME}.timer" "$GRAPHDB_SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+    local one
+    for one in "${templates[@]}" "$HERE/graphcopy.sh"; do
+        [[ -f "$one" ]] || { warn "$(basename "$one") 없음 — 그래프 사본 건너뜀"; return 0; }
+    done
+    if ! as_op /usr/bin/apptainer exec "$INSTALL_DIR/app.sif" test -x /opt/neo4j/bin/neo4j; then
+        warn "이 이미지에 Neo4j 가 없습니다 — 그래프 사본 건너뜀(0.4.80 앞 판의 이미지?)"
+        return 0
+    fi
+    info "그래프 사본(Neo4j 무료판) → 127.0.0.1:$GRAPHDB_PORT · 힙 $GRAPHDB_HEAP · 페이지 캐시 $GRAPHDB_PAGECACHE · $GRAPHDB_HOST_DIR"
+    install -d -o "$OPERATOR" -g "$OPERATOR" -m 750 "$GRAPHDB_HOST_DIR" \
+        "$GRAPHDB_HOST_DIR/logs" "$GRAPHDB_HOST_DIR/run" "$GRAPHDB_HOST_DIR/import"
+    graphdb_conf
+    install -o "$OPERATOR" -g "$OPERATOR" -m 755 "$HERE/graphcopy.sh" "$INSTALL_DIR/graphcopy.sh"
+    # 두 서버가 같은 시각에 DB 를 다 읽지 않게 — 대기(backup) 서버는 30분 뒤.
+    local at="05:30"; [[ "$HA_ROLE" == "backup" ]] && at="06:00"
+    render_unit_paths "$HERE/graphdb.service.template" > "$GRAPHDB_SERVICE_UNIT"
+    render_unit_paths "$HERE/graphcopy.service.template" > "$GRAPHCOPY_SERVICE_UNIT"
+    sed -e "s|@@APP_NAME@@|$APP_NAME|g" -e "s|@@AT@@|$at|g" "$HERE/graphcopy.timer.template" > "$GRAPHCOPY_TIMER_UNIT"
+    chmod 644 "$GRAPHDB_SERVICE_UNIT" "$GRAPHCOPY_SERVICE_UNIT" "$GRAPHCOPY_TIMER_UNIT"
+    systemctl daemon-reload
+    systemctl enable "$GRAPHDB_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl enable --now "${GRAPHCOPY_SERVICE_NAME}.timer" >/dev/null 2>&1 \
+        || warn "그래프 사본 타이머 기동 실패 — 'systemctl status ${GRAPHCOPY_SERVICE_NAME}.timer' 확인"
+    # **지금 한 번 싣는다** — 새 이미지(새 Neo4j · 새 내보내기)로. 다 실을 때까지 앞 판이 답하고, 기다리지
+    # 않는다(큰 DB 는 수십 분). 첫 설치면 다 실은 뒤에야 사본이 뜬다.
+    systemctl start --no-block "$GRAPHCOPY_SERVICE_NAME" \
+        || warn "그래프 사본 싣기를 못 시작했습니다 — sudo systemctl start $GRAPHCOPY_SERVICE_NAME"
+    info "그래프 사본 싣는 중(뒤에서) — 보기: journalctl -u $GRAPHCOPY_SERVICE_NAME -f"
+}
+
+cmd_graph_copy() {
+    [[ "$GRAPHDB_ENABLED" == "1" ]] || err "그래프 사본이 꺼져 있습니다(GRAPHDB_ENABLED=0)"
+    [[ -f "$GRAPHCOPY_SERVICE_UNIT" ]] || err "그래프 사본이 깔려 있지 않습니다 — sudo ./deploy.sh update"
+    info "그래프 사본 다시 싣기 — 끝날 때까지 기다린다(앞 판이 그동안 답한다)"
+    systemctl start "$GRAPHCOPY_SERVICE_NAME"
+    journalctl -u "$GRAPHCOPY_SERVICE_NAME" -n 8 --no-pager || true
+}
+
 health_check() {
     # 기동 직후에는 아직 안 뜬다. 몇 초 기다려 준다.
     local url="http://127.0.0.1:$APP_PORT/api/health"
@@ -1255,6 +1390,7 @@ cmd_install() {
     generate_env_if_missing
     sync_env_identity
     sync_env_portal
+    sync_env_graphdb
     place_sif
     # 마이그레이션 앞에서 — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
     require_vector
@@ -1271,6 +1407,7 @@ cmd_install() {
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
     setup_metrics_timer || warn "지표 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
+    setup_graphdb || warn "그래프 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 실패해도 앱은 돈다(서버 화면이 말한다).
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
     setup_lb
@@ -1296,6 +1433,7 @@ cmd_update() {
     ensure_dirs
     sync_env_identity
     sync_env_portal
+    sync_env_graphdb
     # **내리기 전에** — 패키지를 받는 동안(처음 한 번) 서비스가 서 있다. 못 갖추면 여기서 멈춘다(옛 판이
     # 그대로 돈다) — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
     require_vector
@@ -1332,6 +1470,7 @@ cmd_update() {
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
     setup_metrics_timer || warn "지표 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
+    setup_graphdb || warn "그래프 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 이미 있으면 확인만.
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
     setup_lb
@@ -1391,6 +1530,7 @@ units_of() {
     local list=("$SERVICE_NAME")
     [[ -f "$ETC$WORKER_SERVICE_UNIT" ]] && list+=("$WORKER_SERVICE_NAME")
     [[ -f "$ETC$MCP_SERVICE_UNIT" ]] && list+=("$MCP_SERVICE_NAME")
+    [[ -n "${GRAPHDB_SERVICE_UNIT:-}" && -f "$ETC$GRAPHDB_SERVICE_UNIT" ]] && list+=("$GRAPHDB_SERVICE_NAME")
     printf '%s\n' "${list[@]}"
 }
 
@@ -1513,6 +1653,7 @@ cmd_setup() {
     INSTALL_DIR="/home/$OPERATOR/apps/$APP_SLUG"; DB_NAME="$APP_SLUG"; DB_USER="$APP_SLUG"
     derive_unit_names
     MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
+    GRAPHDB_PORT=$((APP_PORT + 3)); GRAPHDB_HOST_DIR="$INSTALL_DIR/graphdb"
     [[ -n "$HA_ROLE" ]] && MCP_HOST="0.0.0.0"
     SELF_IP="${SELF_IP_GIVEN:-}"   # 상대 IP 를 이제 아니, 그쪽으로 나가는 내 주소를 다시 잰다
     ha_load
@@ -1589,6 +1730,7 @@ MSG
             v="$(sed -n 's|^EXTENSIONS=||p' "$ENV_FILE" | tail -n1)";  EXTENSIONS="$v"
             v="$(sed -n 's|^PORT=||p' "$ENV_FILE" | tail -n1)";        [[ -n "$v" ]] && APP_PORT="$v"
             MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
+            GRAPHDB_PORT=$((APP_PORT + 3))
             info "A 의 설정을 받았습니다 — $APP_NAME · 포트 $APP_PORT · 확장 기본값 ${EXTENSIONS:-없음}"
             cmd_db standby
             cmd_install
@@ -1624,7 +1766,8 @@ MSG
 
     local unit
     for unit in "$SERVICE_NAME.service" "$WORKER_SERVICE_NAME.service" "$MCP_SERVICE_NAME.service" "$SYNC_SERVICE_NAME.timer" \
-                "$SYNC_SERVICE_NAME.service" "$BACKUP_SERVICE_NAME.timer" "$BACKUP_SERVICE_NAME.service"; do
+                "$SYNC_SERVICE_NAME.service" "$BACKUP_SERVICE_NAME.timer" "$BACKUP_SERVICE_NAME.service" \
+                "$GRAPHCOPY_SERVICE_NAME.timer" "$GRAPHCOPY_SERVICE_NAME.service" "$GRAPHDB_SERVICE_NAME.service"; do
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
         rm -f "/etc/systemd/system/$unit"
     done
@@ -1661,14 +1804,17 @@ cmd_render() {
     mkdir -p "$ETC/etc/systemd/system"
     # 설정 파일도 그 아래에 — 실제 배포가 남길 것과 같은 모양을 본다.
     instance_save; ha_save
-    for tpl in app.service worker.service sync.service metrics.service backup.service; do
+    for tpl in app.service worker.service sync.service metrics.service backup.service \
+               graphdb.service graphcopy.service; do
         [[ -f "$HERE/$tpl.template" ]] || continue
         case "$tpl" in
-            app.service)     unit="$SERVICE_NAME.service" ;;
-            worker.service)  unit="$WORKER_SERVICE_NAME.service" ;;
-            sync.service)    unit="$SYNC_SERVICE_NAME.service" ;;
-            metrics.service) unit="$METRICS_SERVICE_NAME.service" ;;
-            *)              unit="$BACKUP_SERVICE_NAME.service" ;;
+            app.service)       unit="$SERVICE_NAME.service" ;;
+            worker.service)    unit="$WORKER_SERVICE_NAME.service" ;;
+            sync.service)      unit="$SYNC_SERVICE_NAME.service" ;;
+            metrics.service)   unit="$METRICS_SERVICE_NAME.service" ;;
+            graphdb.service)   unit="$GRAPHDB_SERVICE_NAME.service" ;;
+            graphcopy.service) unit="$GRAPHCOPY_SERVICE_NAME.service" ;;
+            *)                 unit="$BACKUP_SERVICE_NAME.service" ;;
         esac
         render_unit_paths "$HERE/$tpl.template" > "$ETC/etc/systemd/system/$unit"
     done
@@ -1732,6 +1878,8 @@ $APP_NAME 배포 스크립트 ($VERSION)
   DB_USER     = $DB_USER
   APP_PORT    = $APP_PORT
   MCP_ENABLED = $MCP_ENABLED   (MCP_HOST=$MCP_HOST MCP_PORT=$MCP_PORT MCP_API_BASE=$MCP_API_BASE)
+  GRAPHDB     = $GRAPHDB_ENABLED   (127.0.0.1:$GRAPHDB_PORT · 힙 $GRAPHDB_HEAP · 페이지 캐시 $GRAPHDB_PAGECACHE · $GRAPHDB_HOST_DIR)
+  graph-copy  그래프 사본을 지금 다시 싣는다(끝날 때까지 기다린다 — 앞 판이 그동안 답한다)
   HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST LB_MODE=$LB_MODE${WEB_VIP:+ WEB_VIP=$WEB_VIP}
 
   HWAX 포털에 붙이기 — sudo PORTAL_JWKS_URL=<포털 JWKS> PORTAL_LAUNCH_URL=<포털>/launch/<id> ./deploy.sh update
@@ -1765,6 +1913,7 @@ case "${1:-}" in
                     setup_embedding || err "임베딩 모델을 갖추지 못했습니다 — 위의 경고를 보세요" ;;
     render)         cmd_render ;;
     hwax-request)   cmd_hwax_request ;;
+    graph-copy)     cmd_graph_copy ;;
     ""|auto)        cmd_auto    ;;
     -h|--help|help) usage       ;;
     *)              usage; exit 1 ;;

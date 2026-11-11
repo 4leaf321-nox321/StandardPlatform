@@ -328,6 +328,18 @@ class Settings(BaseSettings):
     graph_calc_threads: int = 0
     """CPU 엔진(NetworKit)이 쓸 스레드 — 0 이면 서버의 코어 전부. 같은 서버의 DB · 웹이
     버거우면 줄인다."""
+    graphdb_url: str = ""
+    """그래프 사본(4단계 — 설치마다 Neo4j 무료판, `bolt://127.0.0.1:<포트>`). 비우면 사본이
+    없다 — Cypher 도구가 「이 설치에는 없다」 고 말한다. 배포(`deploy.sh`)가 설치마다 포트를
+    정해 적는다."""
+    graphdb_user: str = "neo4j"
+    graphdb_password: str = ""
+    """사본의 비밀번호 — 배포가 설치 때 만들어 적는다. 무료판에는 역할이 없어(모두 관리자) 같은
+    서버의 다른 설치 · 사용자가 붙지 못하게 하는 자물쇠다. 읽기만은 SP 가 지킨다."""
+    graphdb_query_seconds: int = 30
+    """Cypher 질의 하나의 시간 상한(초) — 넘으면 끊고 좁히라고 말한다."""
+    graphdb_rows: int = 1000
+    """Cypher 질의 하나가 돌려줄 줄의 상한(5,000 까지) — 넘으면 `truncated`."""
     graph_calc_whole_relations: str = ""
     """무리 · 다리 역할을 지을 선 — 쉼표로 가른 관계 slug, 참조 칸은 `<타입 slug>.<칸 키>`.
     비우면 전부(기준정보끼리의 참조 칸 + 오늘 유효한 관계). 무리는 고른 선에 따라 뜻이 바뀐다 —

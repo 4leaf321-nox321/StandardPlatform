@@ -8849,6 +8849,69 @@
             "description": "날짜 축의 기간 단위 — day·week·month·quarter·year(기본)"
           },
           {
+            "name": "min_value",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "막대의 값(건수 또는 metric)이 이 이상인 것만 — 「8건 이상인 모델」",
+              "title": "Min Value"
+            },
+            "description": "막대의 값(건수 또는 metric)이 이 이상인 것만 — 「8건 이상인 모델」"
+          },
+          {
+            "name": "max_value",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "막대의 값이 이 이하인 것만",
+              "title": "Max Value"
+            },
+            "description": "막대의 값이 이 이하인 것만"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "description": "막대를 몇 개까지(쪽) — 기본 30, 쪽으로 넘길 때 500 까지",
+              "default": 30,
+              "title": "Limit"
+            },
+            "description": "막대를 몇 개까지(쪽) — 기본 30, 쪽으로 넘길 때 500 까지"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "몇 번째 막대부터(0 부터)",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "몇 번째 막대부터(0 부터)"
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -9278,6 +9341,65 @@
                 }
               ],
               "title": "Grain"
+            }
+          },
+          {
+            "name": "min_value",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "막대의 값(건수 또는 metric)이 이 이상인 것만 — 「8건 이상인 모델」",
+              "title": "Min Value"
+            },
+            "description": "막대의 값(건수 또는 metric)이 이 이상인 것만 — 「8건 이상인 모델」"
+          },
+          {
+            "name": "max_value",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "막대의 값이 이 이하인 것만",
+              "title": "Max Value"
+            },
+            "description": "막대의 값이 이 이하인 것만"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 30,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
             }
           },
           {
@@ -18656,6 +18778,90 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/cypher": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Cypher Status",
+        "description": "사본이 이 설치에 있나 · 닿나 · 언제 실었나 · 상한. 닿지 않아도 200 —\n`reachable` 이 말한다.",
+        "operationId": "cypher_status_api_graph_cypher_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CypherStatusOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Cypher Query",
+        "description": "Cypher **읽기** 질의 하나 — 열 · 줄(상한까지, 넘으면 `truncated`) · 걸린 시간 ·\n사본의 판.\n\n노드는 `{_node, id, type, key, label, props}`(SP 의 id 그대로 — 상세는 SP 로), 선은\n`{_rel, start, end, props}`, 경로는 `{_path, nodes, rels}` 로 온다.",
+        "operationId": "cypher_query_api_graph_cypher_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CypherAsk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CypherAnswerOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/cypher/schema": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Cypher Schema",
+        "description": "사본의 라벨(타입) · 관계 종류(관계 · 참조 칸) · 속성과 쓰는 규칙 — SP 의 정의에서\n그대로. 질의를 쓰기 전에 본다(이름을 추측하지 않는다).",
+        "operationId": "cypher_schema_api_graph_cypher_schema_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CypherShapeOut"
                 }
               }
             }
@@ -31105,6 +31311,322 @@
         ],
         "title": "CutinTrendOut",
         "description": "적용 전의 흐름 — 기간마다의 변화(비율의 배수 - 1)와 그 p."
+      },
+      "CypherAnswerOut": {
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "items": {},
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "seconds": {
+            "type": "number",
+            "title": "Seconds"
+          },
+          "copy": {
+            "$ref": "#/components/schemas/CypherCopyOut"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "columns",
+          "rows",
+          "truncated",
+          "seconds",
+          "copy"
+        ],
+        "title": "CypherAnswerOut"
+      },
+      "CypherAsk": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 5000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "CypherAsk"
+      },
+      "CypherCopyOut": {
+        "properties": {
+          "copied_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copied At"
+          },
+          "sp_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sp Version"
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nodes"
+          },
+          "relationships": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationships"
+          }
+        },
+        "type": "object",
+        "title": "CypherCopyOut"
+      },
+      "CypherLabelOut": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "props": {
+            "items": {
+              "$ref": "#/components/schemas/CypherPropOut"
+            },
+            "type": "array",
+            "title": "Props"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "name",
+          "count",
+          "props"
+        ],
+        "title": "CypherLabelOut"
+      },
+      "CypherPropOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "kind"
+        ],
+        "title": "CypherPropOut"
+      },
+      "CypherRelOut": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "start": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Start"
+          },
+          "end": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "End"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "props": {
+            "items": {
+              "$ref": "#/components/schemas/CypherPropOut"
+            },
+            "type": "array",
+            "title": "Props"
+          },
+          "transitive": {
+            "type": "boolean",
+            "title": "Transitive",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "name",
+          "start",
+          "end",
+          "kind",
+          "props"
+        ],
+        "title": "CypherRelOut"
+      },
+      "CypherShapeOut": {
+        "properties": {
+          "labels": {
+            "items": {
+              "$ref": "#/components/schemas/CypherLabelOut"
+            },
+            "type": "array",
+            "title": "Labels"
+          },
+          "relationships": {
+            "items": {
+              "$ref": "#/components/schemas/CypherRelOut"
+            },
+            "type": "array",
+            "title": "Relationships"
+          },
+          "rules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "labels",
+          "relationships",
+          "rules"
+        ],
+        "title": "CypherShapeOut"
+      },
+      "CypherStatusOut": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "reachable": {
+            "type": "boolean",
+            "title": "Reachable"
+          },
+          "copy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CypherCopyOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "query_seconds": {
+            "type": "integer",
+            "title": "Query Seconds"
+          },
+          "max_rows": {
+            "type": "integer",
+            "title": "Max Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "reachable",
+          "query_seconds",
+          "max_rows"
+        ],
+        "title": "CypherStatusOut"
       },
       "DataSourceOut": {
         "properties": {
@@ -55346,6 +55868,26 @@
           "other_count": {
             "type": "integer",
             "title": "Other Count"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "default": 0
+          },
+          "groups": {
+            "type": "integer",
+            "title": "Groups",
+            "default": 0
+          },
+          "below_groups": {
+            "type": "integer",
+            "title": "Below Groups",
+            "default": 0
+          },
+          "below_count": {
+            "type": "integer",
+            "title": "Below Count",
+            "default": 0
           },
           "overlap": {
             "type": "boolean",

@@ -41,6 +41,7 @@ from app.modules.datasources import services as datasources_services
 from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
 from app.modules.graph import calcroutes as graph_calc_routes
+from app.modules.graph import cypherroutes as graph_cypher_routes
 from app.modules.graph import routes as graph_routes
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as jobs_services
@@ -138,6 +139,7 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(graph_routes.router)
     # 밤 그래프 계산(ADR 0067) — 기대는 수 · 군집 · 비슷한 것 · 다리 역할.
     router.include_router(graph_calc_routes.router)
+    router.include_router(graph_cypher_routes.router)
     # 정의 · 데이터를 RDF/OWL 로 — 추론은 바깥(또는 owlrl)이 한다. 플랫폼이 정본, RDF 는 사본.
     router.include_router(rdf_routes.router)
     router.include_router(search_routes.router)

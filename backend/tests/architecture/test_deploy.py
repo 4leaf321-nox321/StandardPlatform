@@ -1477,3 +1477,266 @@ def test_GPU_판은_이미지가_GPU_의존을_더_깔고_번들_이름에_gpu_�
     # cuGraph 전체(cudf · dask)는 안 담는다 — 7GB 를 넘는다.
     pins = [one.split("==")[0].lower() for one in gpu.splitlines() if "==" in one]
     assert not any(one.startswith(("cudf", "dask", "cugraph-")) for one in pins), pins
+
+
+# --- 그래프 사본(4단계 — 설치마다 Neo4j) ----------------------------------------------------
+#
+# 설치마다 Neo4j 무료판 하나(127.0.0.1 · 앱 포트 +3). 설정은 이미지의 기본(JVM 옵션) 위에 덮고,
+# 밤마다 쉬고 있는 쪽 폴더에 통째로 실어 바꿔 끼운다(`graphcopy.sh`).
+
+_STOCK_NEO4J_CONF = """\
+# 기본 설정(이미지의 /opt/neo4j/conf/neo4j.conf 모양)
+server.directories.import=import
+server.bolt.enabled=true
+server.http.enabled=true
+server.https.enabled=false
+server.jvm.additional=-XX:+UseG1GC
+server.jvm.additional=--add-opens=java.base/java.nio=ALL-UNNAMED
+"""
+
+
+@_no_bash
+def test_그래프_사본_설정은_이미지의_기본_위에_덮고_같은_키는_한_번만(tmp_path: Path) -> None:
+    """같은 키를 두 번 적으면 Neo4j 가 거절한다 — 기본에서 빼고 덮는다. JVM 옵션은 기본에만
+    있다(빠뜨리면 `neo4j-admin import` 가 `--add-opens` 없이 죽는다 — 실측)."""
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    stock = tmp_path / "stock.conf"
+    stock.write_text(_STOCK_NEO4J_CONF, encoding="utf-8")
+    home = tmp_path / "graphdb"
+    allowlist = re.search(r'^GRAPHDB_ALLOWLIST="([^"]+)"$', text, re.M)
+    assert allowlist
+    script = (
+        "set -euo pipefail\n"
+        f'GRAPHDB_HOST_DIR="{home}"\nINSTALL_DIR=/i\nOPERATOR="$(id -un)"\n'
+        "GRAPHDB_PORT=7713\nGRAPHDB_HEAP=3g\nGRAPHDB_PAGECACHE=5g\n"
+        f'GRAPHDB_ALLOWLIST="{allowlist.group(1)}"\n'
+        'as_op() { if [[ "$1" == /usr/bin/apptainer ]]; then cat "$STOCK"; else "$@"; fi; }\n'
+        f'STOCK="{stock}"\n' + _piece(text, "graphdb_conf") + "\ngraphdb_conf\n"
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert done.returncode == 0, done.stderr
+    conf = (home / "conf" / "neo4j.conf").read_text(encoding="utf-8")
+    keys = [
+        one.split("=", 1)[0]
+        for one in conf.splitlines()
+        if "=" in one and not one.startswith("#")
+    ]
+    repeated = {key for key in keys if keys.count(key) > 1 and key != "server.jvm.additional"}
+    assert not repeated, repeated
+    assert keys.count("server.jvm.additional") == 2
+    for line in (
+        "server.http.enabled=false",
+        "server.bolt.listen_address=127.0.0.1:7713",
+        "server.directories.data=/data/graphdb/active",
+        "server.memory.heap.max_size=3g",
+        "server.memory.pagecache.size=5g",
+        "dbms.security.auth_enabled=true",
+        "dbms.security.allow_csv_import_from_file_urls=false",
+        "dbms.usage_report.enabled=false",
+    ):
+        assert line in conf.splitlines(), line
+    allowed = next(
+        one
+        for one in conf.splitlines()
+        if one.startswith("dbms.security.procedures.allowlist=")
+    )
+    # 파일 · 바깥 주소를 읽는 것 · 다른 질의를 부르는 것은 아예 안 뜬다.
+    for banned in ("apoc.load", "apoc.cypher", "apoc.export", "apoc.periodic", "apoc.*"):
+        assert banned not in allowed
+
+
+@_no_bash
+def test_그래프_사본_유닛은_그_설치의_폴더와_포트로(tmp_path: Path) -> None:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    script = (
+        "set -euo pipefail\n"
+        "INSTALL_DIR=/home/op/apps/plm\nOPERATOR=op\nAPP_NAME=x\nAPP_SLUG=plm\nENV_FILE=/e/.env\n"
+        "FILESTORE_HOST_DIR=/f\nLOG_HOST_DIR=/l\nBACKUP_HOST_DIR=\n"
+        "GRAPHDB_HOST_DIR=/home/op/apps/plm/graphdb\nGRAPHDB_PORT=7713\n"
+        "worker_nv() { :; }\n"
+        + _piece(text, "render_unit_paths")
+        + f'\nrender_unit_paths "{DEPLOY / "graphdb.service.template"}"\necho ====\n'
+        f'render_unit_paths "{DEPLOY / "graphcopy.service.template"}"\n'
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert done.returncode == 0, done.stderr
+    graphdb, graphcopy = done.stdout.split("====\n")
+    assert "@@" not in done.stdout
+    assert "--bind /home/op/apps/plm/graphdb:/data/graphdb" in graphdb
+    assert "--env NEO4J_CONF=/data/graphdb/conf" in graphdb and "User=op" in graphdb
+    assert "/opt/neo4j/bin/neo4j console" in graphdb
+    # 다시 싣기는 root(그래프 사본 서비스를 껐다 켠다) — 내보내기 · 싣기는 스크립트가 운영
+    # 계정으로.
+    assert "\nUser=" not in graphcopy and "Type=oneshot" in graphcopy
+    assert "Environment=GC_PORT=7713" in graphcopy
+    assert "Environment=GC_SERVICE=plm-graphdb" in graphcopy
+    assert "ExecStart=/bin/bash /home/op/apps/plm/graphcopy.sh" in graphcopy
+
+
+def _graphcopy(
+    tmp_path: Path, *, listen: bool
+) -> tuple[subprocess.CompletedProcess[str], Path, str]:
+    """`graphcopy.sh` 를 가짜 apptainer · runuser · systemctl 로 — 폴더를 바꿔 끼우는 차례만
+    본다. 같은 `tmp_path` 로 다시 부르면 같은 사본 폴더 위에서 돈다. `listen` 이면 새 판이 뜬
+    것처럼 그 포트를 연다. (결과, 사본 폴더, 이번에 부른 것들)."""
+    home = tmp_path / "graphdb"
+    (home / "conf").mkdir(parents=True, exist_ok=True)
+    (home / "conf" / "neo4j.conf").write_text(
+        "server.directories.data=/data/graphdb/active\n", encoding="utf-8"
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text("GRAPHDB_PASSWORD=pw-1\n", encoding="utf-8")
+    log = tmp_path / "calls.log"
+    log.write_text("", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _stub(bin_dir / "runuser", 'shift 3\nexec "$@"\n')
+    _stub(bin_dir / "systemctl", f'echo "systemctl $*" >> "{log}"\n')
+    args = "--nodes=Obj:p=/data/graphdb/import/n.h.csv,/data/graphdb/import/n.csv"
+    _stub(
+        bin_dir / "fake-apptainer",
+        f'NEXT_CONF="{home}/conf-next/neo4j.conf"\n'
+        f'echo "apptainer $*" >> "{log}"\n'
+        'case "$*" in\n'
+        f'  *"copycli export"*) echo "{args}" > "{home}/import/import.args" ;;\n'
+        '  *"database import full"*)\n'
+        '    slot=$(sed -n "s|^server.directories.data=/data/graphdb/||p" "$NEXT_CONF")\n'
+        f'    touch "{home}/$slot/imported" ;;\n'
+        "esac\n",
+    )
+    port = 47000 + os.getpid() % 2000
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "APPTAINER": str(bin_dir / "fake-apptainer"),
+        "GC_USER": subprocess.run(
+            ["id", "-un"], capture_output=True, text=True
+        ).stdout.strip(),
+        "GC_SIF": "/i/app.sif",
+        "GC_ENV_FILE": str(env_file),
+        "GC_DIR": str(home),
+        "GC_SERVICE": "plm-graphdb",
+        "GC_PORT": str(port),
+        "GC_WAIT_ROUNDS": "2",
+    }
+    server = None
+    if listen:
+        import socket
+
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", port))
+        server.listen(8)
+    try:
+        done = subprocess.run(
+            [shutil.which("bash") or "bash", str(DEPLOY / "graphcopy.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        if server is not None:
+            server.close()
+    return done, home, log.read_text(encoding="utf-8")
+
+
+@_no_bash
+def test_밤의_다시_싣기는_쉬는_쪽에_싣고_바꿔_끼운다(tmp_path: Path) -> None:
+    """처음엔 slot-a, 다음엔 slot-b — 싣는 동안 앞 판이 답한다. 끝나면 내보낸 CSV 를 지운다."""
+    first, home, calls = _graphcopy(tmp_path, listen=True)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert os.readlink(home / "active") == "slot-a"
+    assert (home / "slot-a" / "imported").exists() and not (home / "import").exists()
+    assert "systemctl restart plm-graphdb" in calls
+    assert "set-initial-password pw-1" in calls and "copycli indexes" in calls
+    second, home, _calls = _graphcopy(tmp_path, listen=True)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert os.readlink(home / "active") == "slot-b"
+    assert (home / "slot-b" / "imported").exists()
+
+
+@_no_bash
+def test_새_판이_안_뜨면_앞_판으로_되돌린다(tmp_path: Path) -> None:
+    first, home, _calls = _graphcopy(tmp_path, listen=True)
+    assert first.returncode == 0
+    failed, home, calls = _graphcopy(tmp_path, listen=False)
+    assert failed.returncode != 0
+    assert "앞 판(slot-a)으로 되돌립니다" in failed.stdout
+    assert os.readlink(home / "active") == "slot-a"
+    assert calls.count("systemctl restart plm-graphdb") == 2
+
+
+@_no_bash
+def test_비밀번호가_없으면_싣기_전에_멈춘다(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    # 사본 폴더 · 가짜 명령을 먼저 갖춘다(`_graphcopy` 는 .env 를 다시 쓴다) — 비운 판으로
+    # 한 번 더.
+    _graphcopy(tmp_path, listen=True)
+    (tmp_path / ".env").write_text("GRAPHDB_URL=bolt://x\n", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", str(DEPLOY / "graphcopy.sh")],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "GC_USER": "op",
+            "GC_SIF": "/i/app.sif",
+            "GC_ENV_FILE": str(env_file),
+            "GC_DIR": str(tmp_path / "graphdb"),
+            "GC_SERVICE": "plm-graphdb",
+            "GC_PORT": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert done.returncode != 0 and "GRAPHDB_PASSWORD" in done.stdout
+
+
+def test_그래프_사본이_번들과_이미지에_든다() -> None:
+    """번들은 유닛 둘 · 타이머 · 스크립트를, 이미지는 판과 지문을 박은 Neo4j 무료판 + 같은
+    압축본의 APOC Core 를 담는다. 포트는 앱 +3 이고 다른 설치와 겹치면 멈춘다."""
+    builder = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
+    for name in (
+        "graphdb.service.template",
+        "graphcopy.service.template",
+        "graphcopy.timer.template",
+        "graphcopy.sh",
+    ):
+        assert f"cp deploy/{name}" in builder, name
+    definition = (DEPLOY / "apptainer.def").read_text(encoding="utf-8")
+    assert re.search(r"^\s+NEO4J_VERSION=\d{4}\.\d+\.\d+$", definition, re.M)
+    assert re.search(r"^\s+NEO4J_SHA256=[0-9a-f]{64}$", definition, re.M)
+    assert (
+        "sha256sum -c -" in definition
+        and "neo4j-community-${NEO4J_VERSION}-unix.tar.gz" in definition
+    )
+    assert "cp /opt/neo4j/labs/apoc-*-core.jar /opt/neo4j/plugins/" in definition
+    assert "openjdk-21-jre-headless" in definition and "/data/graphdb" in definition
+    deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    assert 'GRAPHDB_PORT="${GRAPHDB_PORT:-$((APP_PORT + 3))}"' in deploy
+    assert '"$GRAPHDB_PORT:그래프 사본"' in _piece(deploy, "check_port_clash")
+    names = _piece(deploy, "derive_unit_names")
+    assert '"${APP_SLUG}-graphdb"' in names and '"${APP_SLUG}-graphcopy"' in names
+    remove = _piece(deploy, "cmd_remove")
+    assert (
+        "$GRAPHDB_SERVICE_NAME.service" in remove and "$GRAPHCOPY_SERVICE_NAME.timer" in remove
+    )
+    # 앱이 뜨기 전에 .env 에 길을 적는다 — 앱은 기동 때 설정을 읽는다.
+    for command in ("cmd_install", "cmd_update"):
+        body = _piece(deploy, command)
+        assert body.index("sync_env_graphdb") < body.index(
+            'systemctl start "$SERVICE_NAME"'
+            if command == "cmd_update"
+            else 'systemctl restart "$SERVICE_NAME"'
+        )
+        assert "setup_graphdb ||" in body

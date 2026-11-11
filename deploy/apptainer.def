@@ -34,8 +34,24 @@ From: ubuntu:24.04
         python3.12-venv \
         python3-pip \
         libpq5 \
-        ca-certificates
+        ca-certificates \
+        curl \
+        openjdk-21-jre-headless
     rm -rf /var/lib/apt/lists/*
+
+    # **그래프 사본**(4단계) — Neo4j 무료판(GPLv3, 고치지 않고 그대로) + 같은 압축본의 `labs/` 에 든 APOC
+    # Core(Apache-2.0). 판과 지문을 박는다 — 받은 것이 그것인지 여기서 본다. 데이터 · 로그 · 설정은
+    # 이미지 밖(/data/graphdb — deploy.sh 가 conf 를 쓴다)이고 이미지의 conf 는 그 바탕(JVM 옵션)이다.
+    NEO4J_VERSION=2026.10.1
+    NEO4J_SHA256=afcf4986d47d13dd908427d301d5a9278b2ec7d615a12bb40e22087c7e133e78
+    curl -fsSL --retry 3 -o /tmp/neo4j.tar.gz \
+        "https://dist.neo4j.org/neo4j-community-${NEO4J_VERSION}-unix.tar.gz"
+    echo "${NEO4J_SHA256}  /tmp/neo4j.tar.gz" | sha256sum -c -
+    mkdir -p /opt/neo4j
+    tar xzf /tmp/neo4j.tar.gz -C /opt/neo4j --strip-components=1
+    rm -f /tmp/neo4j.tar.gz
+    cp /opt/neo4j/labs/apoc-*-core.jar /opt/neo4j/plugins/
+    rm -rf /opt/neo4j/data /opt/neo4j/logs /opt/neo4j/run /opt/neo4j/import
 
     # **의존성을 여기서 전부 얼린다.** 런타임에 이미지 루트는 읽기 전용이라
     # 첫 기동에 pip 을 부를 수 없다 — 부르면 그 자리에서 실패한다.
@@ -51,7 +67,7 @@ From: ubuntu:24.04
 
     # **bind-mount 대상은 이미지 안에 미리 있어야 한다.** 없으면 마운트가 조용히
     # 엉뚱한 데 붙거나 실패하고, 그 사실은 파일을 쓰는 순간에야 드러난다.
-    mkdir -p /data/filestore /data/logs /data/backup
+    mkdir -p /data/filestore /data/logs /data/backup /data/graphdb
 
     # 개발 부산물이 이미지에 섞여 들어가면 크기만 늘고 좋을 것이 없다.
     find /opt/app -type d -name __pycache__ -prune -exec rm -rf {} + || true
