@@ -296,3 +296,21 @@ def test_그래프_사본_드라이버는_질의_문_한_곳에서만_부른다(
         if name.split(".")[0] == "neo4j" and path != allowed
     ]
     assert not offenders, "neo4j 드라이버를 정한 자리 밖에서 부릅니다: " + ", ".join(offenders)
+
+
+def test_SPARQL_사본_라이브러리는_싣기와_질의_프로세스에서만_부른다() -> None:
+    """**pyoxigraph 는 `rdf/copycli.py`(싣기) · `rdf/storeq.py`(따로 도는 질의)에서만**(ADR
+    0070). 그 질의에는 시간 상한이 없다 — 웹 프로세스 안에서 부르면 잘못 쓴 질의 하나가 그
+    프로세스를 붙잡는다. 질의 프로세스는 앱을 import 하지 않는다(뜨는 시간)."""
+    allowed = {MODULES / "rdf" / "copycli.py", MODULES / "rdf" / "storeq.py"}
+    offenders = [
+        f"{path.relative_to(BACKEND)} -> {name}"
+        for path in (BACKEND / "app").rglob("*.py")
+        for name in _imports(path)
+        if name.split(".")[0] == "pyoxigraph" and path not in allowed
+    ]
+    assert not offenders, "pyoxigraph 를 정한 자리 밖에서 부릅니다: " + ", ".join(offenders)
+    child = [
+        name for name in _imports(MODULES / "rdf" / "storeq.py") if name.startswith("app")
+    ]
+    assert not child, f"질의 프로세스가 앱을 부릅니다: {child}"

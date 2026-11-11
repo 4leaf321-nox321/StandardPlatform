@@ -28,6 +28,7 @@ ExecStart=/usr/bin/apptainer run \
     --bind @@FILESTORE_DIR@@:/data/filestore \
     --bind @@LOG_DIR@@:/data/logs \
 @@BACKUP_BIND@@
+@@RDFSTORE_BIND@@
     @@INSTALL_DIR@@/app.sif
 
 Restart=on-failure

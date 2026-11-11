@@ -1,0 +1,25 @@
+[Unit]
+Description=@@APP_NAME@@ SPARQL 사본 다시 싣기 (쉬는 쪽에 싣고 바꿔 끼운다)
+After=@@APP_SLUG@@.service
+
+# SPARQL 사본(ADR 0070) — PostgreSQL → N-Triples → 쉬는 쪽 폴더에 Oxigraph 로 통째로 싣고 `active` 를
+# 바꿔 끼운다. 웹은 다음 질의부터 새 판을 읽는다(다시 띄울 것이 없다). 실패하면 앞 판이 그대로 답한다.
+[Service]
+Type=oneshot
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@INSTALL_DIR@@
+# 서버의 밤 자리표(nightly-slot.sh)에서 빈 자리를 잡고 돈다 — 설치 여럿이 한꺼번에 몰리지 않게.
+ExecStart=/bin/bash @@INSTALL_DIR@@/nightly-slot.sh "@@APP_SLUG@@ SPARQL 사본" /usr/bin/apptainer exec \
+    --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
+    --bind @@RDFSTORE_DIR@@:/data/rdfstore \
+    @@INSTALL_DIR@@/app.sif \
+    sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python -m app.modules.rdf.copycli load /data/rdfstore'
+TimeoutStartSec=14h
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true

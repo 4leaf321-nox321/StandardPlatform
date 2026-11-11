@@ -340,6 +340,18 @@ class Settings(BaseSettings):
     """Cypher 질의 하나의 시간 상한(초) — 넘으면 끊고 좁히라고 말한다."""
     graphdb_rows: int = 1000
     """Cypher 질의 하나가 돌려줄 줄의 상한(5,000 까지) — 넘으면 `truncated`."""
+    rdf_store_dir: str = ""
+    """SPARQL 사본(Oxigraph — 디스크에 세운 RDF 저장소, ADR 0070)의 폴더 — 그 안의 `active` 가
+    지금 판. 비우면 사본이 없다 — SPARQL 은 질의마다 메모리에 그래프를 세운다(객체 5만 개
+    상한). 배포(`deploy.sh`)가 `/data/rdfstore` 로 적고 밤마다 다시 싣는다."""
+    rdf_query_seconds: int = 60
+    """사본에 묻는 SPARQL 하나의 시간 상한(초) — 넘으면 그 질의를 돌리던 프로세스를 끊는다."""
+    rdf_query_memory_mb: int = 4096
+    """사본에 묻는 SPARQL 하나가 쓸 메모리 상한(MB) — 넘으면 그 질의만 실패한다."""
+    rdf_rows: int = 10_000
+    """바깥 시스템용 SPARQL 창구(`/api/rdf/sparql`)가 한 번에 돌려줄 줄의 상한."""
+    rdf_concurrency: int = 2
+    """웹 프로세스 하나가 동시에 돌리는 SPARQL(사본) 수 — 넘는 것은 기다린다."""
     graph_calc_whole_relations: str = ""
     """무리 · 다리 역할을 지을 선 — 쉼표로 가른 관계 slug, 참조 칸은 `<타입 slug>.<칸 키>`.
     비우면 전부(기준정보끼리의 참조 칸 + 오늘 유효한 관계). 무리는 고른 선에 따라 뜻이 바뀐다 —

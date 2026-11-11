@@ -60,3 +60,6 @@ XlsxWriter==3.3.0
 # 부른다(구조 시험). pytz 는 그 의존.
 neo4j==6.4.1
 pytz==2026.6
+# SPARQL 사본(ADR 0070 — 디스크에 세운 RDF 저장소). MIT OR Apache-2.0(안의 RocksDB 는 Apache-2.0).
+# 싣기(`rdf/copycli.py`)와 따로 도는 질의 프로세스(`rdf/storeq.py`)에서만 부른다(구조 시험).
+pyoxigraph==0.5.13

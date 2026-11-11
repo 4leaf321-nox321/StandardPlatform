@@ -1580,7 +1580,8 @@ def test_그래프_사본_유닛은_그_설치의_폴더와_포트로(tmp_path: 
     assert "\nUser=" not in graphcopy and "Type=oneshot" in graphcopy
     assert "Environment=GC_PORT=7713" in graphcopy
     assert "Environment=GC_SERVICE=plm-graphdb" in graphcopy
-    assert "ExecStart=/bin/bash /home/op/apps/plm/graphcopy.sh" in graphcopy
+    assert "/home/op/apps/plm/nightly-slot.sh" in graphcopy
+    assert "/bin/bash /home/op/apps/plm/graphcopy.sh" in graphcopy
 
 
 def _graphcopy(
@@ -1740,3 +1741,194 @@ def test_그래프_사본이_번들과_이미지에_든다() -> None:
             else 'systemctl restart "$SERVICE_NAME"'
         )
         assert "setup_graphdb ||" in body
+
+
+# --- SPARQL 사본(ADR 0070 — Oxigraph) -------------------------------------------------------
+
+
+def _render_with_rdf(template: str, *, enabled: str) -> subprocess.CompletedProcess[str]:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    script = (
+        "set -euo pipefail\n"
+        "INSTALL_DIR=/home/op/apps/plm\nOPERATOR=op\nAPP_NAME=x\nAPP_SLUG=plm\nENV_FILE=/e/.env\n"
+        "FILESTORE_HOST_DIR=/f\nLOG_HOST_DIR=/l\nBACKUP_HOST_DIR=\n"
+        f"RDFSTORE_ENABLED={enabled}\nRDFSTORE_HOST_DIR=/home/op/apps/plm/rdfstore\n"
+        "worker_nv() { :; }\n"
+        + _piece(text, "render_unit_paths")
+        + f'\nrender_unit_paths "{DEPLOY / template}"\n'
+    )
+    return subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@_no_bash
+@pytest.mark.parametrize("enabled", ["1", "0"])
+def test_웹은_SPARQL_사본을_읽기_전용으로_걸고_끄면_뺀다(enabled: str) -> None:
+    """웹은 질의마다 `active` 를 다시 읽는다 — 사본 폴더를 읽기 전용으로 건다(밤의 싣기만
+    쓴다)."""
+    done = _render_with_rdf("app.service.template", enabled=enabled)
+    assert done.returncode == 0, done.stderr
+    assert "@@" not in done.stdout
+    bound = "--bind /home/op/apps/plm/rdfstore:/data/rdfstore:ro \\" in done.stdout
+    assert bound is (enabled == "1")
+    # 명령이 끊기지 않았다 — 마지막 bind 다음 줄이 곧 SIF 다.
+    lines = [one.strip() for one in done.stdout.splitlines()]
+    assert lines[lines.index("/home/op/apps/plm/app.sif") - 1].endswith("\\")
+
+
+@_no_bash
+def test_SPARQL_사본_싣기는_운영_계정으로_돈다() -> None:
+    """서비스를 다시 띄울 것이 없다 — root 가 아니라 운영 계정으로, 사본 폴더를 쓰기로 건다."""
+    done = _render_with_rdf("rdfcopy.service.template", enabled="1")
+    assert done.returncode == 0, done.stderr
+    assert "User=op" in done.stdout and "Type=oneshot" in done.stdout
+    assert "--bind /home/op/apps/plm/rdfstore:/data/rdfstore \\" in done.stdout
+    assert "app.modules.rdf.copycli load /data/rdfstore" in done.stdout
+    assert "@@" not in done.stdout
+
+
+def test_SPARQL_사본이_번들과_배포에_든다() -> None:
+    builder = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
+    for name in ("rdfcopy.service.template", "rdfcopy.timer.template"):
+        assert f"cp deploy/{name}" in builder, name
+    assert "/data/rdfstore" in (DEPLOY / "apptainer.def").read_text(encoding="utf-8")
+    deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    assert '"${APP_SLUG}-rdfcopy"' in _piece(deploy, "derive_unit_names")
+    remove = _piece(deploy, "cmd_remove")
+    assert (
+        "$RDFCOPY_SERVICE_NAME.timer" in remove and "$RDFCOPY_SERVICE_NAME.service" in remove
+    )
+    for command in ("cmd_install", "cmd_update"):
+        body = _piece(deploy, command)
+        # 웹 유닛을 렌더하기 전에 폴더 · .env — bind 가 서고 앱이 사본을 안다.
+        assert body.index("ensure_rdfstore_dir") < body.index("render_service_unit")
+        assert body.index("sync_env_rdfstore") < body.index("render_service_unit")
+        assert "setup_rdfstore ||" in body
+
+
+# --- 밤 작업 자리표(한 서버의 설치 모두) ------------------------------------------
+
+
+def _slot_run(
+    tmp_path: Path, name: str, seconds: float, *, wait: int = 60
+) -> subprocess.Popen[str]:
+    log = tmp_path / "order.log"
+    started = f'echo "{name} 시작 $(date +%s.%N)" >> {log}'
+    command = f'{started}; sleep {seconds}; echo "{name} 끝" >> {log}'
+    return subprocess.Popen(
+        [
+            shutil.which("bash") or "bash",
+            str(DEPLOY / "nightly-slot.sh"),
+            name,
+            "bash",
+            "-c",
+            command,
+        ],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "NIGHTLY_DIR": str(tmp_path / "slots"),
+            "NIGHTLY_POLL": "0.2",
+            "NIGHTLY_WAIT": str(wait),
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+@_no_bash
+def test_밤_작업은_빈_자리를_잡은_것만_돌고_나머지는_기다린다(tmp_path: Path) -> None:
+    """설치 셋이 같은 밤에 몰려도 자리 둘이면 둘만 돈다 — 시각이 아니라 끝났는지를 본다."""
+    slots = tmp_path / "slots"
+    slots.mkdir()
+    for number in (1, 2):
+        (slots / f"slot-{number}.lock").write_text("", encoding="utf-8")
+    first, second = _slot_run(tmp_path, "A", 1.5), _slot_run(tmp_path, "B", 1.5)
+    import time
+
+    time.sleep(0.5)
+    third = _slot_run(tmp_path, "C", 0.1)
+    outputs = [one.communicate(timeout=30)[0] for one in (first, second, third)]
+    assert [one.returncode for one in (first, second, third)] == [0, 0, 0]
+    order = (tmp_path / "order.log").read_text(encoding="utf-8").splitlines()
+    # C 는 A · B 중 하나가 끝난 뒤에야 시작했다.
+    assert order.index(next(one for one in order if one.startswith("C 시작"))) > min(
+        order.index("A 끝"), order.index("B 끝")
+    )
+    assert "다 찼습니다" in outputs[2] and "잡았습니다" in outputs[2]
+
+
+@_no_bash
+def test_빈_자리를_못_잡으면_상한에서_건너뛰고_자리표가_없으면_그냥_돈다(
+    tmp_path: Path,
+) -> None:
+    slots = tmp_path / "slots"
+    slots.mkdir()
+    (slots / "slot-1.lock").write_text("", encoding="utf-8")
+    holder = _slot_run(tmp_path, "A", 3)
+    import time
+
+    time.sleep(0.5)
+    late = _slot_run(tmp_path, "B", 0.1, wait=1)
+    out = late.communicate(timeout=30)[0]
+    assert late.returncode == 75 and "건너뜁니다" in out
+    holder.communicate(timeout=30)
+    shutil.rmtree(slots)
+    alone = _slot_run(tmp_path, "C", 0.1)
+    assert alone.communicate(timeout=30)[0].count("자리가 없어 바로") == 1
+    assert alone.returncode == 0
+
+
+@_no_bash
+def test_자리_수를_줄이면_남는_자리를_지우고_서버_설정에_남긴다(tmp_path: Path) -> None:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    here = tmp_path / "bundle"
+    here.mkdir()
+    shutil.copy(DEPLOY / "nightly-slot.sh", here / "nightly-slot.sh")
+    install = tmp_path / "install"
+    install.mkdir()
+
+    def run(slots: str) -> subprocess.CompletedProcess[str]:
+        script = (
+            "set -euo pipefail\n"
+            f'ETC="{tmp_path}"\nHERE="{here}"\nINSTALL_DIR="{install}"\nOPERATOR="$(id -un)"\n'
+            f'NIGHTLY_CONF="$ETC/etc/platform-nightly.conf"\nNIGHTLY_DIR="$ETC/var/lib/platform-nightly"\n'
+            f"NIGHTLY_SLOTS={slots}\n"
+            'err() { echo "오류: $*" >&2; exit 1; }\n'
+            + _piece(text, "ensure_nightly_slots")
+            + "\nensure_nightly_slots\n"
+        )
+        return subprocess.run(
+            [shutil.which("bash") or "bash", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    assert run("3").returncode == 0
+    slots = tmp_path / "var" / "lib" / "platform-nightly"
+    assert sorted(one.name for one in slots.iterdir()) == [
+        "slot-1.lock",
+        "slot-2.lock",
+        "slot-3.lock",
+    ]
+    assert run("1").returncode == 0
+    assert [one.name for one in slots.iterdir()] == ["slot-1.lock"]
+    conf = (tmp_path / "etc" / "platform-nightly.conf").read_text(encoding="utf-8")
+    assert "SLOTS=1" in conf.splitlines()
+    assert (install / "nightly-slot.sh").exists()
+    assert "1 ~ 99" in run("0").stderr
+
+
+def test_사본_싣기는_밤_자리표를_거친다() -> None:
+    for template in ("graphcopy.service.template", "rdfcopy.service.template"):
+        body = (DEPLOY / template).read_text(encoding="utf-8")
+        assert "ExecStart=/bin/bash @@INSTALL_DIR@@/nightly-slot.sh" in body, template
+        assert "TimeoutStartSec=14h" in body, template
+    assert "cp deploy/nightly-slot.sh" in (DEPLOY / "build_bundle.sh").read_text(
+        encoding="utf-8"
+    )

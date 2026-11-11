@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from itertools import islice
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from rdflib import Graph, URIRef
 from rdflib.paths import Path
@@ -16,12 +18,14 @@ from rdflib.plugins.sparql.parser import expandUnicodeEscapes, parseQuery
 from rdflib.plugins.sparql.parserutils import CompValue
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.rdf import export
+from app.modules.rdf import export, store
 from app.shared import cut_questions
 from app.shared.auth import current_user
-from app.shared.errors import Conflict, code
+from app.shared.errors import AppError, Conflict, Forbidden, code
+from app.shared.permissions import sees_every_department
 
 router = APIRouter(prefix="/rdf", tags=["rdf"])
 
@@ -118,6 +122,11 @@ class QueryOut(BaseModel):
     left_out: list[str] = []
     """`types` 를 안 줘서 **빠진 기록 타입**(slug) — 답에 그 기록은 없다. 기록까지 물으려면
     `types` 에 적어 다시 부른다."""
+    source: str = "memory"
+    """어디서 답했나 — `copy`(밤에 디스크에 세운 SPARQL 사본, ADR 0070 — 기록까지 전부, 객체
+    상한 없음) · `memory`(질의마다 메모리에 세운 그래프 — 추론 · 부서로 좁힌 설치)."""
+    copied_at: str | None = None
+    """사본이면 언제 실었나 — SP 의 지금과 다를 수 있다. 답에 함께 말한다."""
 
 
 _BLOCKED = ("insert", "delete", "load", "clear", "drop", "create", "service", "with")
@@ -206,6 +215,13 @@ def query(
         raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
     if "ServiceGraphPattern" in _algebra_names(prepared.algebra):
         raise Conflict(code("RDF", 2), "질의에 쓸 수 없는 말입니다: service")
+
+    # **사본이 있으면 사본으로**(ADR 0070) — 기록까지 전부 · 객체 상한 없음. 추론은 사본에 없고
+    # (속성 경로 `+` · `^` 로 묻는다), 부서로 좁힌 설치에서는 모든 부서를 보는 사람만(사본에는
+    # 부서 구분이 없다) — 그 밖은 지금처럼 메모리에 세운다.
+    copy = store.available()
+    if copy is not None and not payload.infer and sees_every_department(user):
+        return _from_copy(copy, payload, names)
 
     # **안 좁혔으면 기록 타입은 뺀다**(ADR 0031) — 기록 수천만 건이 5만 객체 상한에 걸려 코어를
     # 건너뛰는 물음까지 막히던 것. 빠진 기록을 부르는 질의는 0건이 아니라 거절로 — 0건이면
@@ -313,6 +329,161 @@ def query(
         prefixes=_prefixes(names),
         left_out=left_out,
     )
+
+
+def _from_copy(copy: store.Copy, payload: QueryRequest, names: export.Names) -> QueryOut:
+    prefixes = _prefixes(names)
+    started = time.perf_counter()
+    out = store.run(
+        copy, payload.query, base=names.base, prefixes=prefixes, limit=payload.limit
+    )
+    elapsed = int((time.perf_counter() - started) * 1000)
+    if out["kind"] == "ask":
+        columns: list[str] = ["answer"]
+        rows: list[dict[str, Any]] = [{"answer": out["answer"]}]
+        truncated = False
+    else:
+        columns = list(out["vars"])
+        rows = [
+            {
+                name: store.plain(term, prefixes)
+                for name, term in zip(columns, row, strict=True)
+            }
+            for row in out["rows"]
+        ]
+        truncated = bool(out["truncated"])
+    return QueryOut(
+        columns=columns,
+        rows=rows,
+        truncated=truncated,
+        triples=copy.triples or 0,
+        inferred_triples=0,
+        elapsed_ms=elapsed,
+        prefixes=prefixes,
+        source="copy",
+        copied_at=copy.copied_at,
+    )
+
+
+def _sparql_text(request_query: str | None, body: bytes, content_type: str) -> str:
+    """SPARQL 1.1 Protocol 의 세 모양 — `GET ?query=` · `POST` 폼(`query=`) · `POST`
+    `application/sparql-query`(몸통이 질의)."""
+    if request_query:
+        return request_query
+    kind = content_type.split(";", 1)[0].strip().lower()
+    if kind == "application/sparql-query":
+        return body.decode("utf-8")
+    if kind == "application/x-www-form-urlencoded":
+        from urllib.parse import parse_qs
+
+        found = parse_qs(body.decode("utf-8")).get("query")
+        if found:
+            return found[0]
+    raise Conflict(
+        code("RDF", 13),
+        "질의가 없습니다 — `?query=` 또는 POST(`application/sparql-query` 몸통 · 폼의 "
+        "`query`).",
+    )
+
+
+@router.api_route("/sparql", methods=["GET", "POST"])
+async def sparql_protocol(
+    request: Request,
+    query: str | None = Query(default=None, description="SPARQL(SELECT · ASK) — GET 일 때"),
+    user: User = Depends(current_user),
+) -> Response:
+    """**바깥 시스템용 표준 SPARQL 창구**(SPARQL 1.1 Protocol, ADR 0070) — 답은
+    `application/sparql-results+json`. 밤에 세운 사본에 묻는다(기록까지 전부).
+
+    토큰(Bearer)으로 인증한다 — SPARQL 도구(Jena · SPARQLWrapper · …)에 머리
+    `Authorization: Bearer <토큰>` 을 넣는다. 읽기만(SELECT · ASK), 시간 · 줄 상한이 있다
+    (`RDF_QUERY_SECONDS` · `RDF_ROWS` — 잘리면 머리 `X-SP-Truncated: true`). 머리
+    `X-SP-Copied-At` 이 언제 실은 사본인지다. 부서로 좁힌 설치에서는 모든 부서를 보는
+    사람만."""
+    text = _sparql_text(query, await request.body(), request.headers.get("content-type", ""))
+    copy = store.available()
+    if copy is None:
+        raise AppError(
+            code("RDF", 14),
+            "이 설치에는 SPARQL 사본이 없습니다(밤에 아직 안 실었거나 꺼져 있음) — "
+            "`POST /api/rdf/query` 가 메모리에 세워 묻는다(객체 5만 개 상한).",
+            status=503,
+        )
+    if not sees_every_department(user):
+        raise Forbidden(
+            code("RDF", 15),
+            "SPARQL 사본은 모든 부서를 보는 사람만 묻습니다 — 사본에는 부서 구분이 없습니다"
+            "(조회가 부서로 좁혀진 설치). `POST /api/rdf/query` 는 보이는 것만으로 답한다.",
+        )
+    names = _names(request)
+    _check(text, names)
+    settings = get_settings()
+    out = await run_in_threadpool(
+        store.run,
+        copy,
+        text,
+        base=names.base,
+        prefixes=_prefixes(names),
+        limit=settings.rdf_rows,
+    )
+    headers = {"X-SP-Copied-At": copy.copied_at or "", "Cache-Control": "no-store"}
+    if out["kind"] == "ask":
+        body: dict[str, Any] = {"head": {}, "boolean": out["answer"]}
+    else:
+        headers["X-SP-Truncated"] = "true" if out["truncated"] else "false"
+        body = {
+            "head": {"vars": out["vars"]},
+            "results": {
+                "bindings": [
+                    {
+                        name: _binding(term)
+                        for name, term in zip(out["vars"], row, strict=True)
+                        if term is not None
+                    }
+                    for row in out["rows"]
+                ]
+            },
+        }
+    return Response(
+        json.dumps(body, ensure_ascii=False),
+        media_type="application/sparql-results+json",
+        headers=headers,
+    )
+
+
+def _binding(term: dict[str, Any]) -> dict[str, str]:
+    """SPARQL 1.1 Query Results JSON 의 값 하나."""
+    if term["t"] == "uri":
+        return {"type": "uri", "value": term["v"]}
+    if term["t"] == "bnode":
+        return {"type": "bnode", "value": term["v"]}
+    out = {"type": "literal", "value": term["v"]}
+    if term.get("lang"):
+        out["xml:lang"] = term["lang"]
+    elif term.get("dt") and term["dt"] != "http://www.w3.org/2001/XMLSchema#string":
+        out["datatype"] = term["dt"]
+    return out
+
+
+def _check(text: str, names: export.Names) -> None:
+    """`query` 와 같은 검사 — 묻기(SELECT · ASK)만, 쓰기 · 바깥 호출(SERVICE)은 막는다."""
+    lowered = expandUnicodeEscapes(text).lower()
+    if not ("select" in lowered or "ask" in lowered):
+        raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
+    for word in _BLOCKED:
+        if re.search(rf"\b{word}\b", lowered):
+            raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
+    try:
+        prepared = translateQuery(
+            parseQuery(text),
+            initNs=dict(export.bound(names).namespace_manager.namespaces()),
+        )
+    except Exception as failure:  # rdflib 의 문법 오류는 종류가 많다
+        raise Conflict(code("RDF", 4), f"질의를 이해하지 못했습니다: {failure}") from failure
+    if prepared.algebra.name not in ("SelectQuery", "AskQuery"):
+        raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
+    if "ServiceGraphPattern" in _algebra_names(prepared.algebra):
+        raise Conflict(code("RDF", 2), "질의에 쓸 수 없는 말입니다: service")
 
 
 def _prefixes(names: export.Names) -> dict[str, str]:

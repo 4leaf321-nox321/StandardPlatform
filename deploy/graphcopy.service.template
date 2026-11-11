@@ -12,7 +12,8 @@ Environment=GC_ENV_FILE=@@ENV_FILE@@
 Environment=GC_DIR=@@GRAPHDB_DIR@@
 Environment=GC_SERVICE=@@APP_SLUG@@-graphdb
 Environment=GC_PORT=@@GRAPHDB_PORT@@
-ExecStart=/bin/bash @@INSTALL_DIR@@/graphcopy.sh
-TimeoutStartSec=6h
+# 서버의 밤 자리표(nightly-slot.sh)에서 빈 자리를 잡고 돈다 — 설치 여럿이 한꺼번에 몰리지 않게.
+ExecStart=/bin/bash @@INSTALL_DIR@@/nightly-slot.sh "@@APP_SLUG@@ 그래프 사본" /bin/bash @@INSTALL_DIR@@/graphcopy.sh
+TimeoutStartSec=14h
 Nice=10
 IOSchedulingClass=idle

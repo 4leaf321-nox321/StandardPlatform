@@ -504,7 +504,10 @@ def test_SPARQL_의_걸린_시간은_줄을_꺼내는_데까지_잰다(
     `elapsed_ms` 가 늘 0 이라(200만 건 실측 DB 에서 0.5초 걸린 질의도) AI 가 「빠르다」 로
     읽는다."""
     part = _make_type(client, admin, label="부품", key_policy="required")
-    _make_object(client, admin, part, key="P-1", label="P-1")
+    # 곱이 2,000줄을 넘게 **이 시험이 스스로** 채운다 — 예전에는 다른 시험이 먼저 만든 타입
+    # 정의(스키마 트리플)에 기대어, 작업자의 앞쪽에서 돌면 줄이 모자랐다(순서에 따라 떨어짐).
+    for number in range(20):
+        _make_object(client, admin, part, key=f"P-{number}", label=f"P-{number}")
     asked = client.post(
         "/api/rdf/query",
         json={

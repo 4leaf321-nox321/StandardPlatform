@@ -114,6 +114,9 @@ derive_unit_names() {
     GRAPHCOPY_SERVICE_NAME="${APP_SLUG}-graphcopy"
     GRAPHCOPY_SERVICE_UNIT="/etc/systemd/system/${GRAPHCOPY_SERVICE_NAME}.service"
     GRAPHCOPY_TIMER_UNIT="/etc/systemd/system/${GRAPHCOPY_SERVICE_NAME}.timer"
+    RDFCOPY_SERVICE_NAME="${APP_SLUG}-rdfcopy"
+    RDFCOPY_SERVICE_UNIT="/etc/systemd/system/${RDFCOPY_SERVICE_NAME}.service"
+    RDFCOPY_TIMER_UNIT="/etc/systemd/system/${RDFCOPY_SERVICE_NAME}.timer"
 }
 derive_unit_names
 
@@ -137,6 +140,7 @@ GRAPHDB_ENABLED=${GRAPHDB_ENABLED:-1}
 GRAPHDB_PORT=${GRAPHDB_PORT:-}
 GRAPHDB_HEAP=${GRAPHDB_HEAP:-}
 GRAPHDB_PAGECACHE=${GRAPHDB_PAGECACHE:-}
+RDFSTORE_ENABLED=${RDFSTORE_ENABLED:-1}
 EOF
     chmod 644 "$INSTANCES_DIR/$APP_SLUG.conf"
 }
@@ -259,6 +263,18 @@ GRAPHDB_PORT="${GRAPHDB_PORT:-$(instance_conf_get "$APP_SLUG" GRAPHDB_PORT)}"; G
 GRAPHDB_HEAP="${GRAPHDB_HEAP:-$(instance_conf_get "$APP_SLUG" GRAPHDB_HEAP)}"; GRAPHDB_HEAP="${GRAPHDB_HEAP:-2g}"
 GRAPHDB_PAGECACHE="${GRAPHDB_PAGECACHE:-$(instance_conf_get "$APP_SLUG" GRAPHDB_PAGECACHE)}"; GRAPHDB_PAGECACHE="${GRAPHDB_PAGECACHE:-2g}"
 GRAPHDB_HOST_DIR="$INSTALL_DIR/graphdb"
+# ── SPARQL 사본(ADR 0070 — Oxigraph, 디스크에 세운 RDF 저장소) — 서비스가 따로 없다: 밤 타이머가
+# 쉬는 쪽 폴더에 싣고 `active` 를 바꿔 끼우면, 웹이 다음 질의부터 그것을 읽는다(웹 유닛에 읽기 전용으로
+# 건다). 데이터는 이 서버의 $INSTALL_DIR/rdfstore(이중화면 두 서버가 각자). 끄기: RDFSTORE_ENABLED=0.
+RDFSTORE_ENABLED="${RDFSTORE_ENABLED:-$(instance_conf_get "$APP_SLUG" RDFSTORE_ENABLED)}"; RDFSTORE_ENABLED="${RDFSTORE_ENABLED:-1}"
+RDFSTORE_HOST_DIR="$INSTALL_DIR/rdfstore"
+# ── 밤 작업 자리표 — **서버 하나에 하나**(설치 모두가 함께 쓴다). 무거운 밤 일(그래프 사본 · SPARQL 사본
+# 다시 싣기)은 빈 자리를 잡은 것만 돌고 나머지는 기다린다(nightly-slot.sh) — 시각을 나눠 두면 데이터가
+# 커지는 날 겹친다. 자리 수 = 동시에 도는 수. 서버 설정(/etc/platform-nightly.conf)에 남는다.
+NIGHTLY_CONF="$ETC/etc/platform-nightly.conf"
+NIGHTLY_DIR="${NIGHTLY_DIR:-$ETC/var/lib/platform-nightly}"
+NIGHTLY_SLOTS="${NIGHTLY_SLOTS:-$( [[ -f "$NIGHTLY_CONF" ]] && sed -n 's|^SLOTS=||p' "$NIGHTLY_CONF" | tail -n1 || true)}"
+NIGHTLY_SLOTS="${NIGHTLY_SLOTS:-2}"
 # 그 인스턴스의 그래프 사본 포트(기록 > 앱 포트 +3)
 other_graphdb_port() {  # $1=slug
     local got app
@@ -1027,7 +1043,11 @@ worker_nv() {
 # 백업 폴더가 없으면 그 --bind 줄을 통째로 뺀다(apptainer 는 없는 원본을 거부한다).
 render_unit_paths() {  # $1=template
     # 줄 끝의 '\' 가 다음 줄로 잇는다 — 빈 줄로 두면 거기서 명령이 끊기므로 줄을 아예 지운다.
-    local backup_sed nv_sed='/^@@NV@@/d'
+    local backup_sed nv_sed='/^@@NV@@/d' rdf_sed='/^@@RDFSTORE_BIND@@/d'
+    # SPARQL 사본 — 웹이 읽기 전용으로 건다(켠 설치만).
+    if [[ "${RDFSTORE_ENABLED:-0}" == "1" && -n "${RDFSTORE_HOST_DIR:-}" ]]; then
+        rdf_sed="s|^@@RDFSTORE_BIND@@.*|    --bind ${RDFSTORE_HOST_DIR}:/data/rdfstore:ro \\\\|"
+    fi
     if [[ -n "$BACKUP_HOST_DIR" ]]; then
         backup_sed="s|^@@BACKUP_BIND@@.*|    --bind $BACKUP_HOST_DIR:/data/backup \\\\|"
     else
@@ -1047,7 +1067,9 @@ render_unit_paths() {  # $1=template
         -e "s|@@BACKUP_DIR@@|${BACKUP_HOST_DIR:-}|g" \
         -e "s|@@GRAPHDB_DIR@@|${GRAPHDB_HOST_DIR:-}|g" \
         -e "s|@@GRAPHDB_PORT@@|${GRAPHDB_PORT:-}|g" \
+        -e "s|@@RDFSTORE_DIR@@|${RDFSTORE_HOST_DIR:-}|g" \
         -e "$backup_sed" \
+        -e "$rdf_sed" \
         -e "$nv_sed" \
         "$1"
 }
@@ -1269,7 +1291,7 @@ setup_graphdb() {
         return 0
     fi
     local one
-    for one in "${templates[@]}" "$HERE/graphcopy.sh"; do
+    for one in "${templates[@]}" "$HERE/graphcopy.sh" "$HERE/nightly-slot.sh"; do
         [[ -f "$one" ]] || { warn "$(basename "$one") 없음 — 그래프 사본 건너뜀"; return 0; }
     done
     if ! as_op /usr/bin/apptainer exec "$INSTALL_DIR/app.sif" test -x /opt/neo4j/bin/neo4j; then
@@ -1280,6 +1302,7 @@ setup_graphdb() {
     install -d -o "$OPERATOR" -g "$OPERATOR" -m 750 "$GRAPHDB_HOST_DIR" \
         "$GRAPHDB_HOST_DIR/logs" "$GRAPHDB_HOST_DIR/run" "$GRAPHDB_HOST_DIR/import"
     graphdb_conf
+    ensure_nightly_slots
     install -o "$OPERATOR" -g "$OPERATOR" -m 755 "$HERE/graphcopy.sh" "$INSTALL_DIR/graphcopy.sh"
     # 두 서버가 같은 시각에 DB 를 다 읽지 않게 — 대기(backup) 서버는 30분 뒤.
     local at="05:30"; [[ "$HA_ROLE" == "backup" ]] && at="06:00"
@@ -1304,6 +1327,87 @@ cmd_graph_copy() {
     info "그래프 사본 다시 싣기 — 끝날 때까지 기다린다(앞 판이 그동안 답한다)"
     systemctl start "$GRAPHCOPY_SERVICE_NAME"
     journalctl -u "$GRAPHCOPY_SERVICE_NAME" -n 8 --no-pager || true
+}
+
+# 밤 작업 자리표 — 잠금 파일 slot-1 … slot-N(운영 계정도 읽기로 열어 잠근다). 줄이면 남는 자리 파일을
+# 지운다(그 자리에서 돌던 일은 끝까지 돈다 — 이름만 사라진다). 서버 설정에 자리 수를 남긴다.
+ensure_nightly_slots() {
+    [[ "$NIGHTLY_SLOTS" =~ ^[1-9][0-9]?$ ]] || err "NIGHTLY_SLOTS 는 1 ~ 99 입니다: $NIGHTLY_SLOTS"
+    mkdir -p "$NIGHTLY_DIR" "$(dirname "$NIGHTLY_CONF")"
+    chmod 755 "$NIGHTLY_DIR"
+    local i one
+    for i in $(seq 1 "$NIGHTLY_SLOTS"); do
+        [[ -f "$NIGHTLY_DIR/slot-$i.lock" ]] || : > "$NIGHTLY_DIR/slot-$i.lock"
+        chmod 644 "$NIGHTLY_DIR/slot-$i.lock"
+    done
+    for one in "$NIGHTLY_DIR"/slot-*.lock; do
+        [[ -e "$one" ]] || continue
+        i="${one##*/slot-}"; i="${i%.lock}"
+        [[ "$i" =~ ^[0-9]+$ ]] && (( i > NIGHTLY_SLOTS )) && rm -f "$one"
+    done
+    cat > "$NIGHTLY_CONF" <<EOF
+# 한 서버의 밤 작업 자리 수(설치 모두가 함께 쓴다 — 동시에 도는 무거운 밤 일의 수). deploy.sh 가 쓴다.
+# 바꾸려면: sudo NIGHTLY_SLOTS=<수> ./deploy.sh update  (어느 설치에서든 — 서버에 하나다)
+SLOTS=$NIGHTLY_SLOTS
+EOF
+    chmod 644 "$NIGHTLY_CONF"
+    if [[ -f "$HERE/nightly-slot.sh" ]]; then
+        install -o "$OPERATOR" -g "$OPERATOR" -m 755 "$HERE/nightly-slot.sh" "$INSTALL_DIR/nightly-slot.sh"
+    fi
+}
+
+# ── SPARQL 사본 (ADR 0070) ──
+# 앱이 사본을 찾는 자리(컨테이너 안) — 끄면 비운다(앱은 질의마다 메모리에 세운다).
+sync_env_rdfstore() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    if [[ "$RDFSTORE_ENABLED" == "1" ]]; then
+        env_file_set RDF_STORE_DIR "/data/rdfstore"
+    else
+        env_file_set RDF_STORE_DIR ""
+    fi
+}
+
+# 웹 유닛이 읽기 전용으로 거는 폴더 — 유닛을 렌더하기 **전에** 있어야 bind 가 선다.
+ensure_rdfstore_dir() {
+    [[ "$RDFSTORE_ENABLED" == "1" ]] || return 0
+    install -d -o "$OPERATOR" -g "$OPERATOR" -m 750 "$RDFSTORE_HOST_DIR"
+}
+
+setup_rdfstore() {
+    if [[ "$RDFSTORE_ENABLED" != "1" ]]; then
+        if [[ -f "$RDFCOPY_TIMER_UNIT" ]]; then
+            info "SPARQL 사본 끔(RDFSTORE_ENABLED=0) — 타이머를 멈춘다(데이터 $RDFSTORE_HOST_DIR 는 둔다)"
+            systemctl disable --now "${RDFCOPY_SERVICE_NAME}.timer" >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+    local one
+    for one in "$HERE/rdfcopy.service.template" "$HERE/rdfcopy.timer.template" "$HERE/nightly-slot.sh"; do
+        [[ -f "$one" ]] || { warn "$(basename "$one") 없음 — SPARQL 사본 건너뜀"; return 0; }
+    done
+    info "SPARQL 사본(Oxigraph) → $RDFSTORE_HOST_DIR (웹은 읽기 전용으로 건다)"
+    ensure_rdfstore_dir
+    ensure_nightly_slots
+    # 두 서버가 같은 시각에 DB 를 다 읽지 않게 — 대기(backup) 서버는 30분 뒤.
+    local at="05:45"; [[ "$HA_ROLE" == "backup" ]] && at="06:15"
+    render_unit_paths "$HERE/rdfcopy.service.template" > "$RDFCOPY_SERVICE_UNIT"
+    sed -e "s|@@APP_NAME@@|$APP_NAME|g" -e "s|@@AT@@|$at|g" "$HERE/rdfcopy.timer.template" > "$RDFCOPY_TIMER_UNIT"
+    chmod 644 "$RDFCOPY_SERVICE_UNIT" "$RDFCOPY_TIMER_UNIT"
+    systemctl daemon-reload
+    systemctl enable --now "${RDFCOPY_SERVICE_NAME}.timer" >/dev/null 2>&1 \
+        || warn "SPARQL 사본 타이머 기동 실패 — 'systemctl status ${RDFCOPY_SERVICE_NAME}.timer' 확인"
+    # **지금 한 번 싣는다**(뒤에서) — 다 실을 때까지 앞 판(없으면 메모리)이 답한다.
+    systemctl start --no-block "$RDFCOPY_SERVICE_NAME" \
+        || warn "SPARQL 사본 싣기를 못 시작했습니다 — sudo systemctl start $RDFCOPY_SERVICE_NAME"
+    info "SPARQL 사본 싣는 중(뒤에서) — 보기: journalctl -u $RDFCOPY_SERVICE_NAME -f"
+}
+
+cmd_rdf_copy() {
+    [[ "$RDFSTORE_ENABLED" == "1" ]] || err "SPARQL 사본이 꺼져 있습니다(RDFSTORE_ENABLED=0)"
+    [[ -f "$RDFCOPY_SERVICE_UNIT" ]] || err "SPARQL 사본이 깔려 있지 않습니다 — sudo ./deploy.sh update"
+    info "SPARQL 사본 다시 싣기 — 끝날 때까지 기다린다(앞 판이 그동안 답한다)"
+    systemctl start "$RDFCOPY_SERVICE_NAME"
+    journalctl -u "$RDFCOPY_SERVICE_NAME" -n 6 --no-pager || true
 }
 
 health_check() {
@@ -1391,6 +1495,8 @@ cmd_install() {
     sync_env_identity
     sync_env_portal
     sync_env_graphdb
+    sync_env_rdfstore
+    ensure_rdfstore_dir
     place_sif
     # 마이그레이션 앞에서 — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
     require_vector
@@ -1408,6 +1514,7 @@ cmd_install() {
     setup_metrics_timer || warn "지표 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
     setup_graphdb || warn "그래프 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
+    setup_rdfstore || warn "SPARQL 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 실패해도 앱은 돈다(서버 화면이 말한다).
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
     setup_lb
@@ -1434,6 +1541,8 @@ cmd_update() {
     sync_env_identity
     sync_env_portal
     sync_env_graphdb
+    sync_env_rdfstore
+    ensure_rdfstore_dir
     # **내리기 전에** — 패키지를 받는 동안(처음 한 번) 서비스가 서 있다. 못 갖추면 여기서 멈춘다(옛 판이
     # 그대로 돈다) — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
     require_vector
@@ -1471,6 +1580,7 @@ cmd_update() {
     setup_metrics_timer || warn "지표 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
     setup_graphdb || warn "그래프 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
+    setup_rdfstore || warn "SPARQL 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 이미 있으면 확인만.
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
     setup_lb
@@ -1654,6 +1764,7 @@ cmd_setup() {
     derive_unit_names
     MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
     GRAPHDB_PORT=$((APP_PORT + 3)); GRAPHDB_HOST_DIR="$INSTALL_DIR/graphdb"
+    RDFSTORE_HOST_DIR="$INSTALL_DIR/rdfstore"
     [[ -n "$HA_ROLE" ]] && MCP_HOST="0.0.0.0"
     SELF_IP="${SELF_IP_GIVEN:-}"   # 상대 IP 를 이제 아니, 그쪽으로 나가는 내 주소를 다시 잰다
     ha_load
@@ -1767,7 +1878,8 @@ MSG
     local unit
     for unit in "$SERVICE_NAME.service" "$WORKER_SERVICE_NAME.service" "$MCP_SERVICE_NAME.service" "$SYNC_SERVICE_NAME.timer" \
                 "$SYNC_SERVICE_NAME.service" "$BACKUP_SERVICE_NAME.timer" "$BACKUP_SERVICE_NAME.service" \
-                "$GRAPHCOPY_SERVICE_NAME.timer" "$GRAPHCOPY_SERVICE_NAME.service" "$GRAPHDB_SERVICE_NAME.service"; do
+                "$GRAPHCOPY_SERVICE_NAME.timer" "$GRAPHCOPY_SERVICE_NAME.service" "$GRAPHDB_SERVICE_NAME.service" \
+                "$RDFCOPY_SERVICE_NAME.timer" "$RDFCOPY_SERVICE_NAME.service"; do
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
         rm -f "/etc/systemd/system/$unit"
     done
@@ -1805,7 +1917,7 @@ cmd_render() {
     # 설정 파일도 그 아래에 — 실제 배포가 남길 것과 같은 모양을 본다.
     instance_save; ha_save
     for tpl in app.service worker.service sync.service metrics.service backup.service \
-               graphdb.service graphcopy.service; do
+               graphdb.service graphcopy.service rdfcopy.service; do
         [[ -f "$HERE/$tpl.template" ]] || continue
         case "$tpl" in
             app.service)       unit="$SERVICE_NAME.service" ;;
@@ -1814,6 +1926,7 @@ cmd_render() {
             metrics.service)   unit="$METRICS_SERVICE_NAME.service" ;;
             graphdb.service)   unit="$GRAPHDB_SERVICE_NAME.service" ;;
             graphcopy.service) unit="$GRAPHCOPY_SERVICE_NAME.service" ;;
+            rdfcopy.service)   unit="$RDFCOPY_SERVICE_NAME.service" ;;
             *)                 unit="$BACKUP_SERVICE_NAME.service" ;;
         esac
         render_unit_paths "$HERE/$tpl.template" > "$ETC/etc/systemd/system/$unit"
@@ -1880,6 +1993,9 @@ $APP_NAME 배포 스크립트 ($VERSION)
   MCP_ENABLED = $MCP_ENABLED   (MCP_HOST=$MCP_HOST MCP_PORT=$MCP_PORT MCP_API_BASE=$MCP_API_BASE)
   GRAPHDB     = $GRAPHDB_ENABLED   (127.0.0.1:$GRAPHDB_PORT · 힙 $GRAPHDB_HEAP · 페이지 캐시 $GRAPHDB_PAGECACHE · $GRAPHDB_HOST_DIR)
   graph-copy  그래프 사본을 지금 다시 싣는다(끝날 때까지 기다린다 — 앞 판이 그동안 답한다)
+  RDFSTORE    = $RDFSTORE_ENABLED   (SPARQL 사본 · $RDFSTORE_HOST_DIR — 웹은 읽기 전용)
+  NIGHTLY_SLOTS = $NIGHTLY_SLOTS   (서버 하나의 밤 작업 자리 — 설치 모두가 함께, 빈 자리를 잡은 것만 돈다)
+  rdf-copy    SPARQL 사본을 지금 다시 싣는다(끝날 때까지 기다린다)
   HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST LB_MODE=$LB_MODE${WEB_VIP:+ WEB_VIP=$WEB_VIP}
 
   HWAX 포털에 붙이기 — sudo PORTAL_JWKS_URL=<포털 JWKS> PORTAL_LAUNCH_URL=<포털>/launch/<id> ./deploy.sh update
@@ -1914,6 +2030,7 @@ case "${1:-}" in
     render)         cmd_render ;;
     hwax-request)   cmd_hwax_request ;;
     graph-copy)     cmd_graph_copy ;;
+    rdf-copy)       cmd_rdf_copy ;;
     ""|auto)        cmd_auto    ;;
     -h|--help|help) usage       ;;
     *)              usage; exit 1 ;;

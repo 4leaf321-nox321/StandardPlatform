@@ -19,6 +19,7 @@ Exception)가 든다 — 그래프 사본(ADR 0069). 앱이 링크하는 것이 
 | 그래프 사본(ADR 0069) — Neo4j 무료판 2026.10.1(이미지 안 `/opt/neo4j`, 고치지 않고 그대로) | **GPL-3.0**(Neo4j Community Edition) | `/opt/neo4j/LICENSE.txt` · `ThirdPartyLicenses.txt` |
 | 그래프 사본의 APOC Core(Neo4j 압축본의 `labs/` 에 든 것 그대로) | Apache-2.0 | `/opt/neo4j/labs/` 의 `LICENSE` |
 | 그래프 사본을 돌리는 OpenJDK 21 JRE(Ubuntu 패키지 `openjdk-21-jre-headless`) | GPL-2.0 + Classpath Exception | `/usr/share/doc/openjdk-21-jre-headless/copyright` |
+| SPARQL 사본(ADR 0070)의 pyoxigraph 0.5.13(Oxigraph — 안에 RocksDB 를 묶었다) | MIT OR Apache-2.0(RocksDB 는 Apache-2.0) | 이미지 안 venv 의 `pyoxigraph-*.dist-info/METADATA`(License) · `sboms/`(묶은 Rust 부품과 그 라이선스 목록) |
 | 그래프 사본의 파이썬 드라이버 neo4j 6.4.1 · pytz | Apache-2.0 · MIT | 이미지 안 venv 의 `*.dist-info/licenses/` |
 | MCP 서버 · 정제 키트의 파이썬 휠(mcp · httpx · openpyxl …) | MIT · BSD · Apache-2.0 · PSF, certifi 는 MPL-2.0 | 각 휠의 `*.dist-info/licenses/` · 키트의 내장 CPython 은 PSF-2.0 |
 | 이미지(SIF)의 OS 패키지(Ubuntu 24.04 · python3.12 · libpq5 …) | GPL · LGPL · MIT 등 패키지마다 | 릴리스 번들의 `os-packages.txt`(패키지 · 판) — 각 패키지의 `/usr/share/doc/<패키지>/copyright` |

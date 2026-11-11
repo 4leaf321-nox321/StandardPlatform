@@ -162,6 +162,11 @@ cp deploy/graphdb.service.template   "$STAGE/"
 cp deploy/graphcopy.service.template "$STAGE/"
 cp deploy/graphcopy.timer.template   "$STAGE/"
 cp deploy/graphcopy.sh               "$STAGE/"
+# SPARQL 사본(ADR 0070) — 밤에 다시 싣는 유닛 · 타이머(서비스는 따로 없다).
+cp deploy/rdfcopy.service.template   "$STAGE/"
+cp deploy/rdfcopy.timer.template     "$STAGE/"
+# 밤 작업 자리표 — 한 서버의 설치 모두가 함께 쓴다(무거운 밤 일이 한꺼번에 몰리지 않게).
+cp deploy/nightly-slot.sh            "$STAGE/"
 # 이중화 — deploy.sh 가 source 하는 ha.sh 와, 서버에 /usr/local/sbin/pg-ha 로 깔리는 pg-ha.sh.
 # **ha.sh 가 없으면 deploy.sh 가 단독 서버에서도 안 돈다**(첫 줄에서 찾는다).
 cp deploy/ha.sh                      "$STAGE/"

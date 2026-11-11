@@ -19018,6 +19018,104 @@
         }
       }
     },
+    "/api/rdf/sparql": {
+      "post": {
+        "tags": [
+          "rdf"
+        ],
+        "summary": "Sparql Protocol",
+        "description": "**바깥 시스템용 표준 SPARQL 창구**(SPARQL 1.1 Protocol, ADR 0070) — 답은\n`application/sparql-results+json`. 밤에 세운 사본에 묻는다(기록까지 전부).\n\n토큰(Bearer)으로 인증한다 — SPARQL 도구(Jena · SPARQLWrapper · …)에 머리\n`Authorization: Bearer <토큰>` 을 넣는다. 읽기만(SELECT · ASK), 시간 · 줄 상한이 있다\n(`RDF_QUERY_SECONDS` · `RDF_ROWS` — 잘리면 머리 `X-SP-Truncated: true`). 머리\n`X-SP-Copied-At` 이 언제 실은 사본인지다. 부서로 좁힌 설치에서는 모든 부서를 보는\n사람만.",
+        "operationId": "sparql_protocol_api_rdf_sparql_post",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SPARQL(SELECT · ASK) — GET 일 때",
+              "title": "Query"
+            },
+            "description": "SPARQL(SELECT · ASK) — GET 일 때"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "rdf"
+        ],
+        "summary": "Sparql Protocol",
+        "description": "**바깥 시스템용 표준 SPARQL 창구**(SPARQL 1.1 Protocol, ADR 0070) — 답은\n`application/sparql-results+json`. 밤에 세운 사본에 묻는다(기록까지 전부).\n\n토큰(Bearer)으로 인증한다 — SPARQL 도구(Jena · SPARQLWrapper · …)에 머리\n`Authorization: Bearer <토큰>` 을 넣는다. 읽기만(SELECT · ASK), 시간 · 줄 상한이 있다\n(`RDF_QUERY_SECONDS` · `RDF_ROWS` — 잘리면 머리 `X-SP-Truncated: true`). 머리\n`X-SP-Copied-At` 이 언제 실은 사본인지다. 부서로 좁힌 설치에서는 모든 부서를 보는\n사람만.",
+        "operationId": "sparql_protocol_api_rdf_sparql_post",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "SPARQL(SELECT · ASK) — GET 일 때",
+              "title": "Query"
+            },
+            "description": "SPARQL(SELECT · ASK) — GET 일 때"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/rdf/inferred": {
       "get": {
         "tags": [
@@ -46800,6 +46898,22 @@
             "type": "array",
             "title": "Left Out",
             "default": []
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "memory"
+          },
+          "copied_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copied At"
           }
         },
         "type": "object",
