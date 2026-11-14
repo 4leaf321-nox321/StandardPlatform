@@ -219,7 +219,13 @@ export default function SearchPage() {
         ) : (
           <EmptyState
             title={posts.length > 0 ? '맞는 객체가 없습니다' : '맞는 것이 없습니다'}
-            hint="다른 말로 찾아 보세요 — 이름 · 식별자 · 별칭으로 찾습니다."
+            hint={
+              // **관련도로도 없다**(ADR 0072) — 리랭커가 질문과 함께 읽고 관련 있는 것이 없다고
+              // 했다. 「회의실 예약」 을 기술 문서에 물은 꼴이다 — 엉뚱한 것을 늘어놓지 않는다.
+              data.meaning_rerank === 'ready'
+                ? '이름 · 식별자 · 별칭과 뜻으로 찾았지만 관련 있는 것이 없습니다 — 다른 말로 찾아 보세요.'
+                : '다른 말로 찾아 보세요 — 이름 · 식별자 · 별칭으로 찾습니다.'
+            }
           />
         )
       ) : (
@@ -290,8 +296,9 @@ export default function SearchPage() {
             뜻이 가까운 것 {meaning.length}건
           </h2>
           <p className="text-muted-foreground mb-2 text-xs">
-            글자는 달라도 뜻이 가까운 객체입니다 — 관리자가 대상으로 지정한 타입에서 가까운 것부터
-            표시합니다.
+            {data?.meaning_rerank === 'ready'
+              ? '글자는 달라도 뜻이 맞는 객체입니다 — 질문과 함께 읽고 관련도가 높은 것부터 표시합니다.'
+              : '글자는 달라도 뜻이 가까운 객체입니다 — 관리자가 대상으로 지정한 타입에서 가까운 것부터 표시합니다.'}
           </p>
           <ul className="divide-y rounded-md border">
             {meaning.map((one) => {
@@ -321,6 +328,14 @@ export default function SearchPage() {
                         같은 내용 {(one.same ?? 0).toLocaleString()}건 더
                       </span>
                     )}
+                    {one.relevance != null && (
+                      <span
+                        className="text-muted-foreground shrink-0 text-xs tabular-nums"
+                        title="질문과 함께 읽고 매긴 관련도"
+                      >
+                        관련도 {Math.round(one.relevance * 100)}%
+                      </span>
+                    )}
                   </Link>
                 </li>
               )
@@ -333,6 +348,13 @@ export default function SearchPage() {
         <p className="text-muted-foreground mt-3 text-xs">
           뜻이 가까운 것이 일부만 표시되었을 수 있습니다 — 더 구체적인 말로 다시 찾으면 다른 결과가
           표시될 수 있습니다.
+        </p>
+      )}
+      {/* 리랭커를 못 불렀으면 말한다 — 이번 줄은 거리로만 골라 관계없는 것이 섞일 수 있다. */}
+      {data?.meaning_rerank === 'unavailable' && meaning.length > 0 && (
+        <p className="text-muted-foreground mt-3 text-xs">
+          관련도를 매기지 못해 뜻의 거리로만 골랐습니다 — 관계없는 것이 섞일 수 있습니다. 관리자는
+          서버 화면의 「리랭커」 를 확인하세요.
         </p>
       )}
       {/* 모델에 못 닿으면 말한다 — 안 말하면 「뜻으로는 없다」 로 읽힌다. */}

@@ -46,6 +46,21 @@ class EmbeddingOut(BaseModel):
     problem: str | None
 
 
+class RerankOut(BaseModel):
+    """리랭커(ADR 0072) — 뜻으로 찾은 후보를 질문과 함께 읽고 관련도를 매긴다. 배포가 깔고, 못
+    깔아도 멈추지 않으므로 그 사실이 드러날 자리가 여기다."""
+
+    state: str
+    """ready · off(RERANK_BACKEND=off) · problem."""
+    backend: str
+    model: str
+    url: str
+    probe_ms: int | None
+    """글 하나를 매기는 데 걸린 시간 — 실측 GPU 20ms · CPU 45ms(2026-11-14)라 이것으로 GPU
+    인지 가르지 않는다(`nvidia-smi`)."""
+    problem: str | None
+
+
 class ServerStatusOut(BaseModel):
     app_name: str
     app_slug: str
@@ -66,6 +81,7 @@ class ServerStatusOut(BaseModel):
     disk: DiskOut | None
     backup: BackupOut
     embedding: EmbeddingOut
+    rerank: RerankOut | None = None
     counts: list[TableCountOut]
     """`shared/extensions.py` 의 레지스트리가 채운다 — 도메인이 등록한 만큼 는다."""
     started_at: datetime

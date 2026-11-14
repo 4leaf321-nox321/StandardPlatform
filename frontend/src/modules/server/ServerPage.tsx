@@ -209,6 +209,12 @@ function ServerStatusTab() {
           뜻으로 찾기를 쓸 수 없습니다 — {one.embedding.problem}
         </div>
       )}
+      {/* 리랭커도 같다(ADR 0072) — 없으면 검색이 거리로만 골라 관계없는 것이 섞인다. */}
+      {one.rerank?.state === 'problem' && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          리랭커를 쓸 수 없어 뜻으로 찾기가 거리로만 고릅니다 — {one.rerank.problem}
+        </div>
+      )}
 
       <dl className="grid gap-4 rounded-md border p-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
@@ -275,6 +281,27 @@ function ServerStatusTab() {
             )}
           </dd>
         </div>
+        {one.rerank && (
+          <div>
+            <dt className="text-muted-foreground text-xs">리랭커</dt>
+            <dd className="text-sm">
+              {one.rerank.state === 'ready' && (
+                <>
+                  준비됨{' '}
+                  <span className="text-muted-foreground font-mono text-xs">
+                    ({one.rerank.model} · 글 하나 {one.rerank.probe_ms}ms)
+                  </span>
+                </>
+              )}
+              {one.rerank.state === 'off' && (
+                <span className="text-muted-foreground">비활성 — 거리로만 고름</span>
+              )}
+              {one.rerank.state === 'problem' && (
+                <span className="text-amber-700 dark:text-amber-400">준비 안 됨</span>
+              )}
+            </dd>
+          </div>
+        )}
         {one.disk && (
           <div>
             <dt className="text-muted-foreground text-xs">디스크</dt>

@@ -89,7 +89,7 @@ from sqlalchemy.orm import Session  # noqa: E402
 import app.all_models  # noqa: F401,E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
-from app.shared import embedding  # noqa: E402
+from app.shared import embedding, rerank  # noqa: E402
 
 
 def _ensure_database(name: str) -> None:
@@ -179,8 +179,13 @@ def _no_real_ollama() -> Iterator[None]:
         raise httpx.ConnectError("시험은 진짜 Ollama 에 닿지 않는다", request=request)
 
     embedding.transport = httpx.MockTransport(unreachable)
+    # 리랭커(ADR 0072)도 — 닿지 않으면 검색은 거리로만 고른다. 보는 시험은 제 가짜를 끼운다.
+    rerank.transport = httpx.MockTransport(unreachable)
+    rerank.resume()
     yield
     embedding.transport = None
+    rerank.transport = None
+    rerank.resume()
 
 
 @pytest.fixture(autouse=True)

@@ -259,6 +259,69 @@ describe('검색', () => {
     expect(screen.getByText(/그 글자가 포함된 객체는 없습니다/)).toBeInTheDocument()
   })
 
+  it('관련도로 골랐으면 줄마다 관련도를 보이고 그렇게 골랐다고 말한다', async () => {
+    // ADR 0072 — 리랭커가 질문과 함께 읽고 매긴 관련도. 줄은 이미 그 차례로 온다.
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      meaning: [
+        {
+          id: 'm1',
+          type_slug: 'part',
+          type_label: '부품',
+          icon: 'Cog',
+          label: 'MIC',
+          key: 'PT-7',
+          similarity: 0.52,
+          relevance: 0.851,
+        },
+      ],
+      meaning_state: 'ready',
+      meaning_rerank: 'ready',
+    })
+    await open('/search?q=마이크')
+    const section = await screen.findByRole('region', { name: '뜻이 가까운 것' })
+    expect(section).toHaveTextContent('관련도 85%')
+    expect(section).toHaveTextContent('질문과 함께 읽고 관련도가 높은 것부터')
+  })
+
+  it('관련도로도 없으면 「관련 있는 것이 없다」 고 말한다 — 엉뚱한 것을 늘어놓지 않는다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      total: 0,
+      types: [],
+      items: [],
+      meaning: [],
+      meaning_state: 'ready',
+      meaning_rerank: 'ready',
+    })
+    await open('/search?q=회의실 예약')
+    expect(await screen.findByText('맞는 것이 없습니다')).toBeInTheDocument()
+    expect(screen.getByText(/뜻으로 찾았지만 관련 있는 것이 없습니다/)).toBeInTheDocument()
+  })
+
+  it('리랭커를 못 불렀으면 거리로만 골랐다고 말한다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      meaning: [
+        {
+          id: 'm1',
+          type_slug: 'part',
+          type_label: '부품',
+          icon: 'Cog',
+          label: 'MIC',
+          key: null,
+          similarity: 0.52,
+          relevance: null,
+        },
+      ],
+      meaning_state: 'ready',
+      meaning_rerank: 'unavailable',
+    })
+    await open('/search?q=마이크')
+    expect(await screen.findByText(/관련도를 매기지 못해 뜻의 거리로만/)).toBeInTheDocument()
+    expect(screen.queryByText(/관련도 \d+%/)).not.toBeInTheDocument()
+  })
+
   it('뜻이 덜 나왔을 수 있으면 줄 아래에 그렇다고 말한다', async () => {
     searchApi.find.mockResolvedValue({
       ...RESULT,

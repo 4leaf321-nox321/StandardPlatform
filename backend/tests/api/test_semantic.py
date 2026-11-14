@@ -30,7 +30,7 @@ from app.modules.ontology.models import ObjectType
 from app.modules.semantic import services
 from app.modules.semantic.models import ObjectEmbedding, SemanticTarget
 from app.modules.workspaces.models import Workspace
-from app.shared import embedding, vectors
+from app.shared import embedding, rerank, vectors
 from app.shared.errors import code
 from tests.api.conftest import Signed, work_until
 from tests.api.test_ontology import _make_object, _make_property, _make_type
@@ -298,7 +298,7 @@ def test_작은_범위는_정확히_재고_못_채운_채_끝나면_덜_나왔�
     monkeypatch.setattr(services, "EF_SEARCH", 2)  # 받는 수를 작게 — 운영의 400 을 흉내 낸다
 
     # 1) 작은 범위는 정확히 잰다 — 받는 수가 2 라도 좁힌 타입의 것이 온다.
-    state, near, narrowed = services.nearest(db, user, "battery", among={ids[pack]})
+    state, near, narrowed, _ = services.nearest(db, user, "battery", among={ids[pack]})
     assert (state, [str(one.row.id) for one in near], narrowed) == (
         "ready",
         [box["id"]],
@@ -311,17 +311,17 @@ def test_작은_범위는_정확히_재고_못_채운_채_끝나면_덜_나왔�
     monkeypatch.setattr(services, "EXACT_MAX", 0)
     db.execute(text("SET LOCAL enable_seqscan = off"))
     db.execute(text("SET LOCAL enable_sort = off"))
-    assert services.nearest(db, user, "battery", among={ids[pack]}) == ("ready", [], True)
+    assert services.nearest(db, user, "battery", among={ids[pack]})[:3] == ("ready", [], True)
     monkeypatch.setattr(services, "EXACT_MAX", 10_000)
 
     # 3) 받은 줄이 끝까지 기준 안인데 낼 수를 못 채웠다 — 더 있을 수 있다. 다 찼으면 아니다
     # (안 본 것은 받은 어느 것보다 멀다).
-    state, near, narrowed = services.nearest(db, user, "battery", among={ids[part]})
+    state, near, narrowed, _ = services.nearest(db, user, "battery", among={ids[part]})
     assert len(near) == 2 and narrowed is True
     assert services.nearest(db, user, "battery", among={ids[part]}, limit=1)[2] is False
 
     # 4) 같은 글이 받는 수를 채웠다 — 한 줄만 섰지만 다른 가까운 글이 뒤에 있을 수 있다.
-    state, near, narrowed = services.nearest(db, user, "battery", among={ids[bundle]})
+    state, near, narrowed, _ = services.nearest(db, user, "battery", among={ids[bundle]})
     assert len(near) == 1 and near[0].same == 2 and narrowed is True
 
 
@@ -549,3 +549,181 @@ def test_검색은_문서의_절을_가리킨다(
     assert [(one["id"], one["section"], one["anchor"]) for one in found["meaning"]] == [
         (made["id"], "3.2 덮개 내구", "3-2-덮개-내구")
     ]
+
+
+# --- 리랭크(ADR 0072) — 질문과 찾은 글을 함께 읽고 관련도로 다시 고른다
+# ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def reranker() -> Iterator[dict[str, Any]]:
+    """가짜 리랭커(llama.cpp `/v1/rerank`) — 받은 질문 · 글을 모으고, `rules`(글에 든 말 → 날
+    점수)로 답한다. 맞는 말이 없으면 -9(시그모이드 0.0001). llama.cpp 처럼 날 점수(로짓)를
+    준다."""
+    seen: dict[str, Any] = {"asked": [], "rules": {}}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen["asked"].append(body)
+        results = []
+        for index, doc in enumerate(body["documents"]):
+            raw = max(
+                (value for word, value in seen["rules"].items() if word in doc), default=-9.0
+            )
+            results.append({"index": index, "relevance_score": raw})
+        return httpx.Response(200, json={"results": results})
+
+    rerank.transport = httpx.MockTransport(handle)
+    rerank.resume()
+    yield seen
+    rerank.transport = None
+    rerank.resume()
+
+
+def test_리랭커가_관계없는_것은_빼고_관련도_차례로_낸다(
+    client: TestClient,
+    admin: Signed,
+    db: Session,
+    ollama: list[list[str]],
+    reranker: dict[str, Any],
+) -> None:
+    """거리로는 가까워도(같은 「배터리」 묶음 · 섞인 글 0.66) 리랭커가 답이 아니라고 하면 안
+    낸다 — 운영에서 「회의실 예약」 이 CAE 백서의 「라이선스 예약」 에 걸린 꼴. 차례는 거리가
+    아니라 관련도다."""
+    tag = uuid.uuid4().hex[:6]
+    part = _make_type(client, admin, label="부품")
+    pack = _make_object(client, admin, part, label=f"{tag} 배터리 팩")
+    terminal = _make_object(client, admin, part, label=f"{tag} 배터리 단자")
+    _make_object(client, admin, part, label=f"{tag} 배터리 커버 상자")  # 두 뜻이 섞였다
+    _put(client, admin, [part])
+    _sync_now(db)
+    # 「단자」 가 더 답이다 — 거리로는 셋이 비슷하다.
+    reranker["rules"] = {"단자": 4.0, "팩": 1.0, "상자": -6.0}
+
+    found = _find(client, admin, "battery", meaning="true")
+    assert found["meaning_rerank"] == "ready"
+    assert [one["id"] for one in found["meaning"]] == [terminal["id"], pack["id"]]
+    assert found["meaning"][0]["relevance"] == pytest.approx(0.982, abs=0.001)
+    assert found["meaning"][1]["relevance"] == pytest.approx(0.731, abs=0.001)
+    # 리랭커는 질문과 조각의 글 그대로를 읽는다(뜻의 자리를 맞출 때와 같은 글).
+    asked = reranker["asked"][-1]
+    assert asked["query"] == "battery" and asked["model"] == "bge-reranker-v2-m3"
+    assert f"부품: {tag} 배터리 단자" in asked["documents"]
+
+    # 아무것도 답이 아니면 빈 줄 — 「뜻으로 관련 있는 것이 없다」.
+    reranker["rules"] = {}
+    empty = _find(client, admin, "battery", meaning="true")
+    assert (empty["meaning"], empty["meaning_rerank"]) == ([], "ready")
+
+
+def test_리랭커는_기준_근처의_것도_후보로_읽는다(
+    client: TestClient,
+    admin: Signed,
+    db: Session,
+    ollama: list[list[str]],
+    reranker: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """후보의 바닥(`CANDIDATE_FLOOR`)이 거리 기준보다 낮다 — 기준을 조금 밑도는 맞는 짝을
+    리랭커가 건진다. 거리로만 고르면 안 나온다."""
+    tag = uuid.uuid4().hex[:6]
+    part = _make_type(client, admin, label="부품")
+    mixed = _make_object(client, admin, part, label=f"{tag} 배터리 커버 상자")  # 약 0.66
+    _put(client, admin, [part])
+    _sync_now(db)
+    monkeypatch.setattr(services, "MIN_SIMILARITY", 0.8)  # 거리 기준을 넘지 못하게
+    monkeypatch.setattr(services, "CANDIDATE_FLOOR", 0.5)
+    reranker["rules"] = {"상자": 3.0}
+    found = _find(client, admin, "battery", meaning="true")
+    assert [one["id"] for one in found["meaning"]] == [mixed["id"]]
+
+    monkeypatch.setattr(get_settings(), "rerank_backend", "off")
+    plain = _find(client, admin, "battery", meaning="true")
+    assert (plain["meaning"], plain["meaning_rerank"]) == ([], "off")
+
+
+def test_리랭커가_문서의_절을_그_글_그대로_읽는다(
+    client: TestClient,
+    admin: Signed,
+    db: Session,
+    ollama: list[list[str]],
+    reranker: dict[str, Any],
+) -> None:
+    paper = _make_type(client, admin, label="백서")
+    _make_property(client, admin, paper, key="body", label="본문", data_type="document")
+    made = _make_object(client, admin, paper, label="내구 백서")
+    client.put(
+        f"/api/objects/{paper}/{made['id']}/documents/body",
+        json={
+            "body": "## 시험\n\n볼트 조임\n\n## 3.2 덮개 내구\n\n덮개가 갈라짐",
+            "base_revision": 0,
+        },
+        headers=admin.headers,
+    )
+    _put(client, admin, [paper])
+    _sync_now(db)
+    reranker["rules"] = {"갈라짐": 2.0}
+    found = _find(client, admin, "cover", meaning="true", type=paper)
+    assert [(one["id"], one["section"]) for one in found["meaning"]] == [
+        (made["id"], "3.2 덮개 내구")
+    ]
+    assert "내구 백서 › 3.2 덮개 내구\n덮개가 갈라짐" in reranker["asked"][-1]["documents"]
+
+
+def test_리랭커가_없으면_거리로만_고르고_잠깐은_다시_부르지_않는다(
+    client: TestClient, admin: Signed, db: Session, ollama: list[list[str]]
+) -> None:
+    """리랭커가 꺼졌거나 닿지 않으면(시험의 기본 — `conftest`) 그 검색은 지금처럼 거리로만
+    고르고 `unavailable` 이라고 말한다. 검색은 멈추지 않는다. 한 번 실패하면 `PAUSE` 동안은
+    부르지 않는다 — 꺼진 리랭커를 기다리느라 검색마다 늦어지지 않게."""
+    tag = uuid.uuid4().hex[:6]
+    part = _make_type(client, admin, label="부품")
+    battery = _make_object(client, admin, part, label=f"{tag} 배터리")
+    _put(client, admin, [part])
+    _sync_now(db)
+    calls: list[str] = []
+
+    def down(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        raise httpx.ConnectError("꺼짐", request=request)
+
+    rerank.transport = httpx.MockTransport(down)
+    found = _find(client, admin, "battery", meaning="true")
+    assert found["meaning_rerank"] == "unavailable"
+    assert [one["id"] for one in found["meaning"]] == [battery["id"]]
+    assert found["meaning"][0]["relevance"] is None
+    again = _find(client, admin, "battery", meaning="true")
+    assert again["meaning_rerank"] == "unavailable" and len(calls) == 1
+
+
+def test_리랭커의_점수는_시그모이드로_펴고_넣은_차례대로() -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        # llama.cpp 는 관련도 차례로 준다 — 넣은 차례로 되돌린다.
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"index": 1, "relevance_score": 2.0},
+                    {"index": 0, "relevance_score": -12.5},
+                ]
+            },
+        )
+
+    rerank.transport = httpx.MockTransport(answer)
+    low, high = rerank.score("q", ["a", "b"])
+    assert low == pytest.approx(3.7e-6, rel=0.01) and high == pytest.approx(0.8808, abs=1e-4)
+    assert rerank.score("q", []) == []
+
+
+def test_서버_화면이_리랭커를_보인다(client: TestClient, admin: Signed) -> None:
+    down = client.get("/api/server/status", headers=admin.headers).json()["rerank"]
+    assert down["state"] == "problem" and "deploy.sh rerank" in down["problem"]
+
+    rerank.transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, json={"results": [{"index": 0, "relevance_score": 3.0}]}
+        )
+    )
+    up = client.get("/api/server/status", headers=admin.headers).json()["rerank"]
+    assert up["state"] == "ready" and up["model"] == "bge-reranker-v2-m3"
+    assert isinstance(up["probe_ms"], int)

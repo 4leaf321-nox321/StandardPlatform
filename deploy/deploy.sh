@@ -1011,6 +1011,143 @@ check_embedding() {  # $1=주소 $2=모델
     info "임베딩: $2 · ${dims}차원 · $where"
 }
 
+# ── 리랭커 (ADR 0072) ──
+# 뜻으로 찾은 후보를 **질문과 함께 읽고** 관련도를 매기는 모델(bge-reranker-v2-m3)을 llama.cpp 의 서버
+# (`llama-server --reranking`)로 띄운다. Ollama 에는 리랭크 창구가 없다(v0.30.10 에서 404 확인). 서버에
+# 하나(127.0.0.1:11436)고 이 서버의 플랫폼들이 함께 쓴다. GPU 가 보이면(nvidia-smi) CUDA 판, 아니면 CPU 판.
+#
+# **실패해도 배포를 멈추지 않는다** — 리랭커가 없으면 검색이 거리로만 고르고 서버 화면의 「리랭커」 가
+# 말한다. 고친 뒤 `sudo ./deploy.sh rerank`. 실행 파일 · 모델은 **임베딩 꾸러미**(`build_ai_bundle.sh` 의
+# `ai/rerank/`)에서만 온다 — 모델은 꾸러미를 만들 때 원본(BAAI 가중치)을 GGUF 로 바꿔 담는다.
+RERANK_LLAMA_BUILD="${RERANK_LLAMA_BUILD:-b12024}"   # llama.cpp 판 — 리랭크를 재 본 판(2026-10-31)
+RERANK_PREFIX="${RERANK_PREFIX:-/opt/sp-rerank}"
+RERANK_UNIT="${RERANK_UNIT:-/etc/systemd/system/sp-rerank.service}"
+RERANK_MODEL_FILE="bge-reranker-v2-m3-f16.gguf"
+RERANK_ALIAS="bge-reranker-v2-m3"                   # 앱의 RERANK_MODEL 기본값과 같다
+# 바르게 매기나 — 이 짝을 보내 **맞는 짝이 엉뚱한 짝보다 날 점수로 이만큼 높아야** 한다. 바른 모델은 13 쯤
+# (2.09 · -10.99, 2026-11-14 실측 — GPU · CPU 같다). 변환에서 분류 머리가 빠진 모델은 점수가 다 0 근처라
+# 「앞이 조금 크다」 로는 못 잡는다. build_ai_bundle.sh 도 이 둘을 읽어 꾸러미를 만들 때 한 번 매겨 본다.
+RERANK_CHECK_BODY='{"query":"마이크 감도 시험","documents":["신뢰성 시험 규격 › 마이크 음질 시험\n상단과 하단 마이크의 감도를 잰다","회의실 예약 방법"]}'
+RERANK_CHECK_MARGIN=5
+
+setup_rerank() {
+    local backend url port
+    backend="$(env_file_get RERANK_BACKEND)"; backend="${backend:-llamacpp}"
+    if [[ "$backend" != "llamacpp" ]]; then
+        info "리랭커: 끔(RERANK_BACKEND=$backend) — 건너뜁니다"
+        return 0
+    fi
+    url="$(env_file_get RERANK_URL)"; url="${url:-http://127.0.0.1:11436}"; url="${url%/}"
+    if [[ ! "$url" =~ ^http://(127\.0\.0\.1|localhost)(:([0-9]+))?$ ]]; then
+        info "리랭커: 다른 서버의 리랭커($url) — 여기 깔지 않습니다"
+        return 0
+    fi
+    port="${BASH_REMATCH[3]:-11436}"
+    ensure_rerank "$port" || return 1
+    check_rerank "$url"
+}
+
+rerank_up() { curl -sf --max-time 5 "$1/health" >/dev/null 2>&1; }
+rerank_gpu() { command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; }
+
+ensure_rerank() {  # $1=포트
+    local port="$1" src="$AI_BUNDLE/rerank" kind="cpu" dir want have sum group i
+    rerank_gpu && kind="gpu"
+    dir="$RERANK_PREFIX/$RERANK_LLAMA_BUILD-$kind"
+    sum="$(sed -n "s/^\([0-9a-f]*\)  $RERANK_MODEL_FILE\$/\1/p" "$src/SHA256SUMS" 2>/dev/null || true)"
+    want="$RERANK_LLAMA_BUILD $kind ${sum:-?}"
+    have="$(cat "$RERANK_PREFIX/INSTALLED" 2>/dev/null || true)"
+    # **꾸러미가 같으면 다시 풀지 않는다** — 판 · GPU/CPU · 모델 해시가 같으면 이미 깔린 것이다.
+    if [[ -z "$sum" || "$have" != "$want" || ! -x "$dir/llama-server" \
+            || ! -f "$RERANK_PREFIX/models/$RERANK_MODEL_FILE" ]]; then
+        if [[ -z "$sum" || ! -f "$src/$RERANK_MODEL_FILE" ]]; then
+            # 꾸러미가 없어도 이미 깔린 것이 있으면 그대로 쓴다(꾸러미는 서버를 세울 때만 옮긴다).
+            local old_build old_kind
+            read -r old_build old_kind _ <<<"$have"
+            if [[ -z "$have" || ! -x "$RERANK_PREFIX/$old_build-$old_kind/llama-server" \
+                    || ! -f "$RERANK_PREFIX/models/$RERANK_MODEL_FILE" ]]; then
+                warn "리랭커 꾸러미가 없습니다($src) — 임베딩 꾸러미(build_ai_bundle.sh)를 번들 안 ai/ 에 푸세요"
+                return 1
+            fi
+            kind="$old_kind"
+            dir="$RERANK_PREFIX/$old_build-$old_kind"
+            info "리랭커: 꾸러미가 없어 깔린 것($have)을 그대로 씁니다"
+        else
+            (cd "$src" && sha256sum -c --quiet SHA256SUMS) \
+                || { warn "리랭커 꾸러미의 해시가 다릅니다($src/SHA256SUMS) — 꾸러미를 다시 옮기세요"; return 1; }
+            info "리랭커 설치 — llama.cpp $RERANK_LLAMA_BUILD ($kind) · $RERANK_MODEL_FILE"
+            rm -rf "$dir"
+            install -d "$dir" "$RERANK_PREFIX/models"
+            if [[ "$kind" == "gpu" ]]; then
+                tar -C "$dir" --strip-components=1 -xzf "$src/llama-$RERANK_LLAMA_BUILD-bin-ubuntu-cuda-12.8-x64.tar.gz" \
+                    && tar -C "$dir" --strip-components=1 -xzf "$src/cudart-llama-$RERANK_LLAMA_BUILD-bin-ubuntu-cuda-12.8-x64.tar.gz"
+            else
+                tar -C "$dir" --strip-components=1 -xzf "$src/llama-$RERANK_LLAMA_BUILD-bin-ubuntu-x64.tar.gz"
+            fi || { warn "llama.cpp 를 풀지 못했습니다($src)"; return 1; }
+            cp "$src/$RERANK_MODEL_FILE" "$RERANK_PREFIX/models/"
+            printf '%s\n' "$want" > "$RERANK_PREFIX/INSTALLED"
+        fi
+    fi
+    id sp-rerank >/dev/null 2>&1 || useradd -r -s /bin/false -U -M -d "$RERANK_PREFIX" sp-rerank
+    # GPU 장치(/dev/nvidia*)를 읽는 그룹 — Ollama 와 같다.
+    for group in render video; do
+        getent group "$group" >/dev/null && usermod -aG "$group" sp-rerank
+    done
+    local gpu_flags=""
+    [[ "$kind" == "gpu" ]] && gpu_flags=" -ngl 99"
+    # 자리(슬롯) 넷 · 자리마다 4,096 토큰(-c 16384 / 4) — 앱이 글을 2,000자로 자른다(rerank.TEXT_MAX).
+    # 리랭크는 한 글을 한 번에(-ub) 읽어야 해서 묶음 크기를 자리의 길이에 맞춘다.
+    cat > "$RERANK_UNIT" <<UNIT
+[Unit]
+Description=리랭커 — $RERANK_ALIAS (llama.cpp $RERANK_LLAMA_BUILD $kind · deploy.sh 가 깔았다 · 이 서버의 플랫폼들이 함께 쓴다)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$dir/llama-server -m $RERANK_PREFIX/models/$RERANK_MODEL_FILE --reranking --alias $RERANK_ALIAS --host 127.0.0.1 --port $port -c 16384 --parallel 4 -b 4096 -ub 4096$gpu_flags
+Environment=LD_LIBRARY_PATH=$dir
+User=sp-rerank
+Group=sp-rerank
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable sp-rerank >/dev/null 2>&1 || true
+    systemctl restart sp-rerank
+    info "리랭커 유닛: $RERANK_UNIT"
+    for i in $(seq 1 60); do
+        rerank_up "http://127.0.0.1:$port" && return 0
+        sleep 1
+    done
+    warn "리랭커가 127.0.0.1:$port 에서 답하지 않습니다 — sudo journalctl -u sp-rerank"
+    return 1
+}
+
+# 한 번 매겨 본다 — 맞는 짝이 높고 엉뚱한 짝이 낮은지, GPU 인지, 얼마나 걸리는지.
+check_rerank() {  # $1=주소
+    local answer where="CPU" kind
+    answer="$(curl -sf --max-time 60 "$1/v1/rerank" -H 'Content-Type: application/json' \
+        -d "$RERANK_CHECK_BODY" \
+        | python3 -c 'import json, sys
+scores = {one["index"]: one["relevance_score"] for one in json.load(sys.stdin)["results"]}
+ok = scores[0] - scores[1] >= float(sys.argv[1])
+print("ok" if ok else "flat", round(scores[0], 2), round(scores[1], 2))' "$RERANK_CHECK_MARGIN" 2>/dev/null)" \
+        || answer=""
+    if [[ "$answer" != ok* ]]; then
+        warn "리랭커가 답하지 않거나 점수가 이상합니다(${answer:-답 없음}) — 맞는 짝이 엉뚱한 짝보다" \
+            "날 점수로 $RERANK_CHECK_MARGIN 이상 높아야 합니다(바른 모델은 13 쯤)"
+        return 1
+    fi
+    # 깔린 판으로 말한다 — GPU 가 있어도 꾸러미 없이 예전 CPU 판을 그대로 쓰는 서버가 있다.
+    kind="$(awk '{print $2}' "$RERANK_PREFIX/INSTALLED" 2>/dev/null || true)"
+    [[ "$kind" == "gpu" ]] && rerank_gpu && where="GPU — $(nvidia-smi -L | head -n1 | sed 's/ (UUID.*//')"
+    info "리랭커: $RERANK_ALIAS · $where · 맞는 짝 ${answer#ok }(날 점수 · 앞이 맞는 짝)"
+}
+
 run_seed() {
     # 뿌리 부서와 관리자 계정. **이것 없이는 아무도 로그인할 수 없다** —
     # 가입은 승인이 필요한데 승인할 사람이 없기 때문이다. 멱등하다.
@@ -1525,6 +1662,7 @@ cmd_install() {
     setup_rdfstore || warn "SPARQL 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 실패해도 앱은 돈다(서버 화면이 말한다).
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
+    setup_rerank || warn "리랭커 설정 건너뜀(비치명적 — 검색은 거리로만 고른다) — 고친 뒤: sudo ./deploy.sh rerank"
     setup_lb
 
     cat <<MSG
@@ -1591,6 +1729,7 @@ cmd_update() {
     setup_rdfstore || warn "SPARQL 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 이미 있으면 확인만.
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
+    setup_rerank || warn "리랭커 설정 건너뜀(비치명적 — 검색은 거리로만 고른다) — 고친 뒤: sudo ./deploy.sh rerank"
     setup_lb
 
     cat <<MSG
@@ -1986,6 +2125,8 @@ $APP_NAME 배포 스크립트 ($VERSION)
                           안 멈춤 — 서버 화면이 말한다). 고친 뒤 이것만 다시
   ollama                  임베딩 모델(Ollama · bge-m3)만 다시 — install · update 가 끝에 돈다(실패해도 안 멈춤).
                           폐쇄망이면 임베딩 꾸러미(build_ai_bundle.sh)를 번들 안 ai/ 에 풀거나 AI_BUNDLE=<폴더>
+  rerank                  리랭커(llama.cpp · bge-reranker-v2-m3, ADR 0072)만 다시 — install · update 가 끝에
+                          돈다(실패해도 안 멈춤 — 검색은 거리로만). 임베딩 꾸러미의 ai/rerank/ 에서 깐다
 
   pg-tune [--apply]       PostgreSQL 서버 설정을 이 서버의 메모리 · CPU 로 맞춘다(기본은 보여 주기만 —
                           ADR 0031). 공유 버퍼 등은 재시작해야 바뀐다. 이중화면 두 서버 다. --help 로 옵션
@@ -2035,6 +2176,8 @@ case "${1:-}" in
     pgvector)       ensure_vector || err "pgvector 를 갖추지 못했습니다 — 위의 경고를 보세요" ;;
     ollama)         [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — 먼저 install 하세요"
                     setup_embedding || err "임베딩 모델을 갖추지 못했습니다 — 위의 경고를 보세요" ;;
+    rerank)         [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — 먼저 install 하세요"
+                    setup_rerank || err "리랭커를 갖추지 못했습니다 — 위의 경고를 보세요" ;;
     render)         cmd_render ;;
     hwax-request)   cmd_hwax_request ;;
     graph-copy)     cmd_graph_copy ;;

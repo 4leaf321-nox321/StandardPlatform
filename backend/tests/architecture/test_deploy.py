@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -1100,6 +1101,258 @@ def test_임베딩_꾸러미는_deploy_sh_의_Ollama_판을_쓴다() -> None:
         check=True,
     ).stdout.strip()
     assert picked and f'OLLAMA_VERSION="${{OLLAMA_VERSION:-{picked}}}"' in deploy
+
+
+# --- 리랭커(ADR 0072) — llama.cpp 서버를 꾸러미에서 깔고 GPU 면 GPU 로 -----------------------
+
+
+def _setup_rerank(
+    tmp_path: Path,
+    *,
+    env: str = "",
+    bundle: bool = True,
+    gpu: bool = True,
+    installed: str = "",
+    bad_sum: bool = False,
+    scores: str = "[3.2, -9.5]",
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """`setup_rerank` 을 가짜 명령과 함께 — tar · sha256sum · python3 은 진짜다."""
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    pieces = [
+        _piece(text, name)
+        for name in (
+            "err",
+            "info",
+            "warn",
+            "env_file_get",
+            "setup_rerank",
+            "rerank_up",
+            "rerank_gpu",
+            "ensure_rerank",
+            "check_rerank",
+        )
+    ]
+    settings = "\n".join(
+        re.search(rf"^{name}=.*$", text, re.M).group(0)  # type: ignore[union-attr]
+        for name in (
+            "RERANK_LLAMA_BUILD",
+            "RERANK_PREFIX",
+            "RERANK_UNIT",
+            "RERANK_MODEL_FILE",
+            "RERANK_ALIAS",
+            "RERANK_CHECK_BODY",
+            "RERANK_CHECK_MARGIN",
+        )
+    )
+    build = "b12024"
+    bin_dir, prefix, log = tmp_path / "bin", tmp_path / "prefix", tmp_path / "calls.log"
+    bin_dir.mkdir()
+    prefix.mkdir()
+    ai = tmp_path / "ai"
+    if bundle:
+        rerank_dir = ai / "rerank"
+        rerank_dir.mkdir(parents=True)
+        for name, top, files in (
+            (
+                f"llama-{build}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+                f"llama-{build}",
+                ["llama-server"],
+            ),
+            (
+                f"cudart-llama-{build}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+                f"cudart-llama-{build}-bin-ubuntu-cuda-12.8-x64",
+                ["libcudart.so.12"],
+            ),
+            (f"llama-{build}-bin-ubuntu-x64.tar.gz", f"llama-{build}", ["llama-server"]),
+        ):
+            stage = tmp_path / "stage" / name / top
+            stage.mkdir(parents=True)
+            for one in files:
+                _stub(stage / one, f"echo {name}\n")
+            subprocess.run(
+                ["tar", "-C", str(stage.parent), "-czf", str(rerank_dir / name), top],
+                check=True,
+            )
+        (rerank_dir / "bge-reranker-v2-m3-f16.gguf").write_text("gguf", encoding="utf-8")
+        subprocess.run("sha256sum -- * > SHA256SUMS", shell=True, cwd=rerank_dir, check=True)
+        if bad_sum:
+            (rerank_dir / "bge-reranker-v2-m3-f16.gguf").write_text(
+                "다른 것", encoding="utf-8"
+            )
+    if installed:
+        kind = installed.split()[1]
+        (prefix / f"{build}-{kind}").mkdir()
+        _stub(prefix / f"{build}-{kind}" / "llama-server", "exit 0\n")
+        (prefix / "models").mkdir()
+        (prefix / "models" / "bge-reranker-v2-m3-f16.gguf").write_text(
+            "gguf", encoding="utf-8"
+        )
+        (prefix / "INSTALLED").write_text(installed + "\n", encoding="utf-8")
+    _stub(
+        bin_dir / "curl",
+        'url=""\nfor a in "$@"; do case "$a" in http*) url="$a";; esac; done\n'
+        f'echo "curl $url" >> "{log}"\n'
+        'case "$url" in\n'
+        "  */health) exit 0 ;;\n"
+        f"  */v1/rerank) python3 -c 'import json; s = {scores}; "
+        'print(json.dumps({"results": [{"index": i, "relevance_score": v} '
+        "for i, v in enumerate(s)]}))' ;;\n"
+        "esac\n",
+    )
+    if gpu:
+        _stub(bin_dir / "nvidia-smi", 'echo "GPU 0: NVIDIA L40S (UUID: GPU-x)"\n')
+    _stub(bin_dir / "systemctl", f'echo "systemctl $*" >> "{log}"\n')
+    _stub(
+        bin_dir / "install",
+        'for a in "$@"; do case "$a" in -*) ;; *) mkdir -p "$a";; esac; done\n',
+    )
+    for tool in ("useradd", "usermod", "getent"):
+        _stub(bin_dir / tool, f'echo "{tool} $*" >> "{log}"\n')
+    script = (
+        "set -euo pipefail\n"
+        f'ENV_FILE="{tmp_path / ".env"}"\nAI_BUNDLE="{ai}"\n{settings}\n'
+        f'RERANK_PREFIX="{prefix}"\nRERANK_UNIT="{tmp_path / "sp-rerank.service"}"\n'
+        "sleep() { :; }\nid() { return 1; }\n" + "\n".join(pieces) + "\nsetup_rerank\n"
+    )
+    (tmp_path / ".env").write_text(env, encoding="utf-8")
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return done, calls
+
+
+@_no_bash
+def test_리랭커는_GPU_가_보이면_CUDA_판을_꾸러미에서_깔고_띄워_한_번_매겨_본다(
+    tmp_path: Path,
+) -> None:
+    done, calls = _setup_rerank(tmp_path)
+    assert done.returncode == 0, done.stderr
+    prefix = tmp_path / "prefix"
+    assert (prefix / "b12024-gpu" / "llama-server").exists()
+    assert (prefix / "b12024-gpu" / "libcudart.so.12").exists()  # CUDA 런타임도 같은 자리
+    assert (prefix / "INSTALLED").read_text(encoding="utf-8").startswith("b12024 gpu ")
+    unit = (tmp_path / "sp-rerank.service").read_text(encoding="utf-8")
+    assert f"ExecStart={prefix}/b12024-gpu/llama-server -m {prefix}/models/" in unit
+    assert "--reranking" in unit and "--host 127.0.0.1 --port 11436" in unit
+    assert "-ngl 99" in unit and f"Environment=LD_LIBRARY_PATH={prefix}/b12024-gpu" in unit
+    assert "systemctl restart sp-rerank" in calls
+    assert "curl http://127.0.0.1:11436/v1/rerank" in calls
+    assert "GPU — GPU 0: NVIDIA L40S" in done.stdout
+
+
+@_no_bash
+def test_리랭커는_GPU_가_없으면_CPU_판으로(tmp_path: Path) -> None:
+    done, _ = _setup_rerank(tmp_path, gpu=False)
+    assert done.returncode == 0, done.stderr
+    unit = (tmp_path / "sp-rerank.service").read_text(encoding="utf-8")
+    assert "/b12024-cpu/llama-server" in unit and "-ngl" not in unit
+    assert " · CPU · " in done.stdout
+
+
+@_no_bash
+def test_리랭커를_끄거나_다른_서버면_깔지_않는다(tmp_path: Path) -> None:
+    (tmp_path / "off").mkdir()
+    done, calls = _setup_rerank(tmp_path / "off", env="RERANK_BACKEND=off\n")
+    assert done.returncode == 0 and calls == [] and "끔" in done.stdout
+    (tmp_path / "remote").mkdir()
+    done, calls = _setup_rerank(tmp_path / "remote", env="RERANK_URL=http://10.0.0.5:11436\n")
+    assert done.returncode == 0 and calls == [] and "다른 서버" in done.stdout
+
+
+@_no_bash
+def test_리랭커_꾸러미가_없거나_해시가_다르면_실패로_말한다(tmp_path: Path) -> None:
+    """배포는 계속한다(`setup_rerank || warn`) — 검색은 거리로만 고르고 서버 화면이 말한다."""
+    (tmp_path / "none").mkdir()
+    done, _ = _setup_rerank(tmp_path / "none", bundle=False)
+    assert done.returncode != 0 and "build_ai_bundle.sh" in done.stderr
+    (tmp_path / "bad").mkdir()
+    done, _ = _setup_rerank(tmp_path / "bad", bad_sum=True)
+    assert done.returncode != 0 and "해시가 다릅니다" in done.stderr
+
+
+@_no_bash
+def test_꾸러미가_없어도_이미_깔린_리랭커는_그대로_쓴다(tmp_path: Path) -> None:
+    done, _ = _setup_rerank(tmp_path, bundle=False, installed="b12024 gpu abc")
+    assert done.returncode == 0, done.stderr
+    assert "깔린 것(b12024 gpu abc)을 그대로" in done.stdout
+    assert "/b12024-gpu/llama-server" in (tmp_path / "sp-rerank.service").read_text(
+        encoding="utf-8"
+    )
+    # GPU 가 보여도 깔린 것이 CPU 판이면 CPU 라고 말한다.
+    (tmp_path / "cpu").mkdir()
+    done, _ = _setup_rerank(tmp_path / "cpu", bundle=False, installed="b12024 cpu abc")
+    assert done.returncode == 0, done.stderr
+    assert " · CPU · " in done.stdout and "GPU —" not in done.stdout
+
+
+@_no_bash
+def test_리랭커의_점수가_이상하면_실패로_말한다(tmp_path: Path) -> None:
+    """맞는 짝이 엉뚱한 짝보다 **넉넉히** 높지 않으면 — 모델 변환에서 분류 머리가 빠지면
+    점수가 다 0 근처라 앞이 조금 큰 것으로는 못 잡는다(바른 모델은 13 쯤 높다)."""
+    for name, scores in (("flat", "[0.1, 0.1]"), ("barely", "[0.31, 0.3]")):
+        (tmp_path / name).mkdir()
+        done, _ = _setup_rerank(tmp_path / name, scores=scores)
+        assert done.returncode != 0 and "점수가 이상합니다" in done.stderr, name
+        assert "날 점수로 5 이상" in done.stderr, name
+    (tmp_path / "real").mkdir()
+    done, _ = _setup_rerank(tmp_path / "real", scores="[2.09, -10.99]")  # 2026-11-14 실측
+    assert done.returncode == 0, done.stderr
+
+
+def test_리랭커는_앱이_뜬_뒤에_돌고_실패해도_배포를_멈추지_않는다() -> None:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    for command in ("cmd_install", "cmd_update"):
+        body = _piece(text, command)
+        assert body.index("setup_rerank") > body.index("setup_embedding"), command
+        assert 'setup_rerank || warn "' in body, command
+    assert "    rerank)" in text
+
+
+def test_임베딩_꾸러미는_deploy_sh_의_리랭커_판을_쓴다() -> None:
+    builder = (DEPLOY / "build_ai_bundle.sh").read_text(encoding="utf-8")
+    deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    for name in ("RERANK_LLAMA_BUILD", "RERANK_MODEL_FILE"):
+        pattern = re.search(rf"sed -n '(s/\^{name}=.*?)' deploy/deploy\.sh", builder)
+        assert pattern, f"build_ai_bundle.sh 가 deploy.sh 에서 {name} 을 읽지 않습니다"
+        picked = subprocess.run(
+            ["sed", "-n", pattern.group(1)], input=deploy, capture_output=True, text=True
+        ).stdout.strip()
+        assert picked and picked in deploy, name
+
+
+@_no_bash
+def test_임베딩_꾸러미는_deploy_sh_의_확인_짝으로_바꾼_리랭커를_매겨_본다() -> None:
+    """꾸러미를 만들 때의 확인과 서버 배포의 확인(`check_rerank`)이 같은 짝 · 같은 기준이다 —
+    한쪽만 고치면 꾸러미는 통과하고 서버에서 떨어진다(또는 거꾸로)."""
+    builder = (DEPLOY / "build_ai_bundle.sh").read_text(encoding="utf-8")
+    deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    lines = [
+        one
+        for one in builder.splitlines()
+        if one.startswith(("RERANK_CHECK_BODY=", "RERANK_CHECK_MARGIN="))
+    ]
+    assert len(lines) == 2, lines
+    show = 'printf "%s\\n%s\\n" "$RERANK_CHECK_BODY" "$RERANK_CHECK_MARGIN"'
+    shown = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", "\n".join([*lines, show])],
+        cwd=DEPLOY.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    body = re.search(r"^RERANK_CHECK_BODY='(.*)'$", deploy, re.M)
+    margin = re.search(r"^RERANK_CHECK_MARGIN=([0-9.]+)$", deploy, re.M)
+    assert body and margin
+    assert shown == [body.group(1), margin.group(1)]
+    sent = json.loads(body.group(1))  # 그대로 보내는 JSON 이다
+    assert sent["query"] and len(sent["documents"]) == 2
+    assert '-d "$RERANK_CHECK_BODY"' in builder and '"$RERANK_CHECK_MARGIN"' in builder
+    assert "sentencepiece==0.2.2" in builder  # 그 판의 목록대로면 변환이 떨어진다(ADR 0072)
 
 
 # --- update 의 안전장치 — 내리기 전에 보고, 내린 뒤 실패하면 되돌린다 --------------------

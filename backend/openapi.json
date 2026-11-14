@@ -49797,6 +49797,59 @@
         ],
         "title": "RequestStatsOut"
       },
+      "RerankOut": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "backend": {
+            "type": "string",
+            "title": "Backend"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "probe_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Ms"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "backend",
+          "model",
+          "url",
+          "probe_ms",
+          "problem"
+        ],
+        "title": "RerankOut",
+        "description": "리랭커(ADR 0072) — 뜻으로 찾은 후보를 질문과 함께 읽고 관련도를 매긴다. 배포가 깔고, 못\n깔아도 멈추지 않으므로 그 사실이 드러날 자리가 여기다."
+      },
       "ResetItemOut": {
         "properties": {
           "table": {
@@ -52755,6 +52808,17 @@
             "type": "integer",
             "title": "Same",
             "default": 0
+          },
+          "relevance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relevance"
           }
         },
         "type": "object",
@@ -52835,6 +52899,11 @@
           "meaning_state": {
             "type": "string",
             "title": "Meaning State",
+            "default": ""
+          },
+          "meaning_rerank": {
+            "type": "string",
+            "title": "Meaning Rerank",
             "default": ""
           },
           "meaning_narrowed": {
@@ -53603,6 +53672,16 @@
           },
           "embedding": {
             "$ref": "#/components/schemas/EmbeddingOut"
+          },
+          "rerank": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RerankOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "counts": {
             "items": {

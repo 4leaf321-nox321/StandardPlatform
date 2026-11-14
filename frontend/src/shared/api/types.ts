@@ -257,6 +257,17 @@ export interface ServerStatus {
     dim: number | null
     problem: string | null
   }
+  /** 리랭커(ADR 0072) — 뜻으로 찾은 후보를 질문과 함께 읽고 관련도를 매긴다. 옛 서버에는 없다. */
+  rerank?: {
+    /** ready · off(RERANK_BACKEND=off) · problem */
+    state: string
+    backend: string
+    model: string
+    url: string
+    /** 글 하나를 매기는 데 걸린 시간 — 실측 GPU 20ms · CPU 45ms(2026-11-14)라 이것으로 GPU 인지 가르지 않는다(`nvidia-smi`). */
+    probe_ms: number | null
+    problem: string | null
+  } | null
   counts: { label: string; count: number }[]
   started_at: string
 }

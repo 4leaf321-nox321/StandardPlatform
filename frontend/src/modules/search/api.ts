@@ -41,6 +41,8 @@ export interface SearchMeaning {
   anchor?: string
   /** 글이 똑같은 다른 객체의 수 — 하나만 세우고 수로 말한다. */
   same?: number
+  /** 리랭커가 질문과 함께 읽고 매긴 관련도(0 ~ 1, ADR 0072) — 리랭크하지 않았으면 null. */
+  relevance?: number | null
 }
 
 /** 게시판 글 하나(ADR 0033) — 객체가 아니라 사람이 쓴 글이라 따로 선다. */
@@ -76,6 +78,11 @@ export interface SearchResult {
   meaning_state?: string
   /** 타입 · 부서로 걸러져 뜻이 가까운 것이 덜 나왔을 수 있다 — 빈 `meaning` 이 「없다」 가 아니다. */
   meaning_narrowed?: boolean
+  /**
+   * 관련도로 골랐나(ADR 0072) — ready(리랭커가 기준 이상만 냈다 — 빈 `meaning` 은 「관련 있는 것이
+   * 없다」) · off(리랭커를 끈 설치) · unavailable(못 불러 거리로만 — 관계없는 것이 섞일 수 있다).
+   */
+  meaning_rerank?: string
 }
 
 export const searchApi = {

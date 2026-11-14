@@ -70,8 +70,9 @@ def search(
     meaning_state = ""
     near: list[semantic.Near] = []
     narrowed = False
+    reranked = ""
     if meaning and offset == 0 and len(q.strip()) >= services.MIN_QUERY:
-        meaning_state, near, narrowed = semantic.nearest(
+        meaning_state, near, narrowed, reranked = semantic.nearest(
             db,
             user,
             q,
@@ -133,9 +134,11 @@ def search(
                 section=one.heading,
                 anchor=one.anchor,
                 same=one.same,
+                relevance=one.relevance,
             )
             for one in near
         ],
         meaning_state=meaning_state,
+        meaning_rerank=reranked,
         meaning_narrowed=narrowed,
     )

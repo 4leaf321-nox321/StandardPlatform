@@ -65,6 +65,9 @@ class SearchMeaningOut(BaseModel):
     """그 절의 제목 id — 상세 주소 뒤에 `#` 로 붙이면 그 절로 간다."""
     same: int = 0
     """글이 똑같은 다른 객체의 수 — 하나만 세우고 수로 말한다."""
+    relevance: float | None = None
+    """리랭커가 질문과 함께 읽고 매긴 관련도(0 ~ 1, ADR 0072) — 줄은 이 차례다. 리랭크하지
+    않았으면(`meaning_rerank` 가 ready 가 아니면) 비고 줄은 거리(`similarity`) 차례다."""
 
 
 class SearchOut(BaseModel):
@@ -89,6 +92,11 @@ class SearchOut(BaseModel):
     """ready · off(켠 타입이 없거나 끔) · unavailable(Ollama 에 못 닿음).
 
     안 물었으면 빈 글자."""
+    meaning_rerank: str = ""
+    """관련도로 골랐나(ADR 0072) — ready(리랭커가 질문과 함께 읽고 관련도 기준 이상만 냈다 — 빈
+    `meaning` 은 「뜻으로 관련 있는 것이 없다」) · off(리랭커를 끈 설치 — 거리로만) ·
+    unavailable(리랭커를 못 불러 이번에는 거리로만 — 관계없는 것이 섞일 수 있다). 뜻으로 못
+    찾았으면 빈 글자."""
     meaning_narrowed: bool = False
     """**덜 나왔을 수 있다** — 낼 수를 못 채웠는데 범위를 다 봤다고 할 수 없다(큰 범위는 HNSW
     색인이 가까운 조각을 먼저 받고 타입 · 부서로 나중에 거르고, 같은 글이 받는 수를 채울 수도

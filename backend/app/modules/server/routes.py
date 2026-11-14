@@ -45,10 +45,11 @@ from app.modules.server.schemas import (
     RequestCaseOut,
     RequestStatOut,
     RequestStatsOut,
+    RerankOut,
     ServerStatusOut,
     TableCountOut,
 )
-from app.shared import cut_questions, embedding, extensions, ops
+from app.shared import cut_questions, embedding, extensions, ops, rerank
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import NotFound, code
 from app.shared.pagination import MAX_LIMIT, clamp_limit
@@ -114,6 +115,7 @@ def status(
         disk=disk,
         backup=BackupOut(**vars(ops.backup_status())),
         embedding=EmbeddingOut(**vars(embedding.readiness(db))),
+        rerank=RerankOut(**vars(rerank.readiness())),
         counts=[
             TableCountOut(label=item.label, count=item.count)
             for item in extensions.stat_items(db)

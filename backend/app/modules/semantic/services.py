@@ -36,7 +36,7 @@ import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import (
     Float,
@@ -60,7 +60,7 @@ from app.modules.objects.models import ObjectAlias, ObjectDocument, ObjectInstan
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.semantic.models import ObjectEmbedding, SemanticMark, SemanticTarget
-from app.shared import audit, embedding, vectors
+from app.shared import audit, embedding, rerank, vectors
 from app.shared.errors import AppError, code
 from app.shared.permissions import visible_owner_clause
 
@@ -537,16 +537,13 @@ def run_sync(
     return counted
 
 
-def _sync_chunk(
-    db: Session,
-    object_type: ObjectType,
-    defs: list[PropertyDef],
-    fields: list[str] | None,
-    rows: list[ObjectInstance],
-    model: str,
-) -> dict[str, int]:
-    """한 묶음 — 글이 바뀐 조각만 Ollama 에 보낸다(같은 글이 이미 있으면 그 자리를 옮겨
-    쓴다)."""
+def _piece_inputs(
+    db: Session, defs: list[PropertyDef], fields: list[str] | None, rows: list[ObjectInstance]
+) -> tuple[
+    Mapping[uuid.UUID, str], dict[uuid.UUID, list[str]], dict[uuid.UUID, dict[str, str]]
+]:
+    """조각을 짓는 재료 — 참조 칸이 가리키는 것의 이름 · 사람이 붙인 다른 이름 · 문서의 몸통.
+    뜻의 자리를 맞출 때와 리랭커가 읽을 글을 다시 지을 때 **같은 것**을 쓴다."""
     ids = [row.id for row in rows]
     labels = system.ref_labels(db, defs, [row.properties or {} for row in rows])
     names: dict[uuid.UUID, list[str]] = {}
@@ -570,6 +567,59 @@ def _sync_chunk(
             )
         ):
             bodies.setdefault(doc.object_id, {})[doc.key] = doc.body
+    return labels, names, bodies
+
+
+def piece_texts(
+    db: Session, picks: Mapping[uuid.UUID, str], rows: Mapping[uuid.UUID, ObjectInstance]
+) -> dict[uuid.UUID, str]:
+    """찾은 조각의 글 — 객체에서 **다시 짓는다**(조각의 글은 저장하지 않는다). 리랭커가 읽는다.
+
+    `picks` 는 객체 → 조각(`part`). 그 사이 객체가 바뀌어 그 조각이 없어졌으면 이름으로
+    대신한다(다음 맞추기가 조각을 고친다)."""
+    chosen = targets(db)
+    by_type: dict[uuid.UUID, list[ObjectInstance]] = {}
+    for object_id in picks:
+        row = rows[object_id]
+        by_type.setdefault(row.type_id, []).append(row)
+    out: dict[uuid.UUID, str] = {}
+    for type_id, mine in by_type.items():
+        object_type = db.get(ObjectType, type_id)
+        if object_type is None:
+            continue
+        defs = properties_of(db, type_id)
+        fields = chosen.get(type_id)
+        labels, names, bodies = _piece_inputs(db, defs, fields, mine)
+        for row in mine:
+            for piece in pieces_of(
+                object_type,
+                row,
+                defs,
+                labels,
+                names.get(row.id, []),
+                fields,
+                bodies.get(row.id, {}),
+            ):
+                if piece.part == picks[row.id]:
+                    out[row.id] = piece.text
+                    break
+    for object_id in picks:
+        out.setdefault(object_id, rows[object_id].label)
+    return out
+
+
+def _sync_chunk(
+    db: Session,
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    fields: list[str] | None,
+    rows: list[ObjectInstance],
+    model: str,
+) -> dict[str, int]:
+    """한 묶음 — 글이 바뀐 조각만 Ollama 에 보낸다(같은 글이 이미 있으면 그 자리를 옮겨
+    쓴다)."""
+    ids = [row.id for row in rows]
+    labels, names, bodies = _piece_inputs(db, defs, fields, rows)
 
     known: dict[tuple[uuid.UUID, str], str] = {
         (one_id, part): digest
@@ -952,6 +1002,24 @@ class Near:
     same: int = 0
     """**글이 똑같은** 다른 객체의 수(볼 수 있는 것) — 기록은 같은 증상 글이 되풀이되어, 그대로
     늘어놓으면 같은 줄이 첫 쪽을 다 차지한다. 하나만 세우고 수로 말한다."""
+    relevance: float | None = None
+    """리랭커가 질문과 함께 읽고 매긴 관련도(0 ~ 1, ADR 0072) — 리랭크하지 않았으면 None."""
+
+
+class Nearest(NamedTuple):
+    state: str
+    """ready · off(대상 타입이 없거나 끔) · unavailable(뜻으로 못 바꿈)."""
+    rows: list[Near]
+    narrowed: bool
+    """안 본 것 중에 가까운 것이 있을 수 있다 — 빈 줄을 「뜻으로도 없다」 로 읽지 않게."""
+    reranked: str
+    """ready(관련도로 골랐다) · off(리랭커를 끔) · unavailable(못 불러 거리로만) · 빈
+    글자(뜻으로 못 찾았다)."""
+
+
+#: 리랭커에 넘길 후보의 바닥(코사인) — 기준(`MIN_SIMILARITY`)보다 낮게 받아 기준 근처의 맞는
+#: 짝(「물에 빠짐」 → 침수 0.47)까지 리랭커가 읽게 한다. 거르는 것은 리랭커의 관련도다.
+CANDIDATE_FLOOR = 0.35
 
 
 def nearest(
@@ -962,32 +1030,35 @@ def nearest(
     among: set[uuid.UUID] | None = None,
     exclude: Iterable[uuid.UUID] = (),
     limit: int = NEAR_LIMIT,
-) -> tuple[str, list[Near], bool]:
-    """찾을 말과 뜻이 가까운 것 — (상태, 줄, 덜 나왔을 수 있나). 객체마다 가장 가까운 조각
-    하나.
+) -> Nearest:
+    """찾을 말과 뜻이 가까운 것 — 객체마다 가장 가까운 조각 하나.
 
-    상태: ready · off(대상 타입이 없거나 끔) · unavailable. **볼 수 있는 것만**
-    (`visible_owner_clause`), 지운 것 · 이미 글자로 찾은 것(`exclude`)은 뺀다. 뜻으로 못
-    바꾸면(Ollama 가 꺼졌다 …) 빈 줄과 `unavailable` — 찾기 전체는 멈추지 않는다.
+    **리랭커가 있으면**(ADR 0072) 거리로 후보(`RERANK_CANDIDATES` 개, 바닥 `CANDIDATE_FLOOR`)를
+    받아 질문과 함께 읽혀 관련도 순으로, `RERANK_MIN_SCORE` 이상만 낸다 — 상관없는 질문은 빈
+    줄이 된다. 리랭커가 꺼졌거나 못 부르면 지금처럼 거리(`MIN_SIMILARITY`)로만 고른다 — 같은
+    목록에서 다시 고르므로 DB 를 다시 묻지 않는다.
+
+    **볼 수 있는 것만**(`visible_owner_clause`), 지운 것 · 이미 글자로 찾은 것(`exclude`)은
+    뺀다. 뜻으로 못 바꾸면(Ollama 가 꺼졌다 …) 빈 줄과 `unavailable` — 찾기 전체는 멈추지
+    않는다.
 
     고른 범위(대상 타입 ∩ `among`)의 조각이 `EXACT_MAX` 이하면 정확히 잰다. 넘으면 HNSW
     색인으로 받는데, pgvector 0.6 은 가까운 조각 `EF_SEARCH` 개를 먼저 받고 그 뒤에 타입 ·
     부서 · 지운 것을 거른다.
 
-    **셋째 값(narrowed)** — 낼 수(`limit`)를 못 채웠는데, 받은 줄이 끝까지 기준 안이고 범위를
-    다 봤다고 할 수 없을 때 참이다. 그러면 **안 본 것 중에 가까운 것이 있을 수 있다** — 빈 줄을
-    「뜻으로도 없다」 로 읽지 않게 알린다(ADR 0052 「추가」).
+    **narrowed** — 받을 수를 못 채웠는데, 받은 줄이 끝까지 바닥 안이고 범위를 다 봤다고 할 수
+    없을 때 참이다. 그러면 **안 본 것 중에 가까운 것이 있을 수 있다**(ADR 0052 「추가」).
     """
     chosen = target_ids(db)
     if among is not None:
         chosen &= among
     if not embedding.enabled() or not chosen:
-        return "off", [], False
+        return Nearest("off", [], False, "")
     try:
         [at] = embedding.embed([q.strip()], seconds=embedding.QUERY_SECONDS)
     except embedding.Unavailable as caught:
         log.warning("뜻으로 찾기를 건너뜁니다: %s", caught)
-        return "unavailable", [], False
+        return Nearest("unavailable", [], False, "")
     distance = ObjectEmbedding.embedding.op(
         f"OPERATOR({vectors.SCHEMA}.<=>)", return_type=Float()
     )(bindparam("at", at, type_=vectors.Vector()))
@@ -1013,8 +1084,7 @@ def nearest(
     exact = int(in_range or 0) <= EXACT_MAX
     if not exact:
         db.execute(text(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"))
-    # 기준(MIN_SIMILARITY)은 질의에 안 건다 — 받은 줄의 수와 끝 줄의 거리로 「덜 나왔나」 를
-    # 알아야 한다.
+    # 기준은 질의에 안 건다 — 받은 줄의 수와 끝 줄의 거리로 「덜 나왔나」 를 알아야 한다.
     found = list(
         db.execute(
             select(
@@ -1022,6 +1092,7 @@ def nearest(
                 ObjectEmbedding.heading,
                 ObjectEmbedding.anchor,
                 ObjectEmbedding.text_hash,
+                ObjectEmbedding.part,
                 distance,
             )
             .join(ObjectInstance, ObjectInstance.id == ObjectEmbedding.object_id)
@@ -1034,29 +1105,58 @@ def nearest(
             .limit(EF_SEARCH)
         ).tuples()
     )
-    best: dict[uuid.UUID, tuple[str, str, str, float]] = {}
-    seen_text: set[str] = set()
-    for object_id, heading, anchor, digest, gap in found:
-        similarity = 1 - float(gap)
-        if similarity < MIN_SIMILARITY:
-            break  # 가까운 것부터 왔다 — 뒤는 모두 기준 밖이다
-        if object_id in best or digest in seen_text:
-            continue
-        seen_text.add(digest)
-        best[object_id] = (heading, anchor, digest, similarity)
-        if len(best) >= limit:
-            break
-    # **덜 나왔을 수 있나.** 아닌 셋: 낼 수만큼 다 찼다(안 본 것은 받은 어느 것보다 멀다) · 끝
-    # 줄이 기준 밖이다(기준 안은 다 봤다) · 정확히 쟀고 받는 수보다 적게 왔다(범위를 다 봤다).
-    # 나머지 — 받은 줄이 같은 글로 찼거나, 색인이 가까운 것을 받은 뒤 걸러 모자랐다 — 는 안 본
-    # 가까운 것이 있을 수 있다.
-    narrowed = (
-        len(best) < limit
-        and (not found or 1 - float(found[-1][4]) >= MIN_SIMILARITY)
-        and not (exact and len(found) < EF_SEARCH)
-    )
+
+    def collect(bottom: float, want: int) -> tuple[dict[uuid.UUID, _Hit], bool]:
+        """가까운 것부터 `bottom` 이상을 객체마다 하나, 같은 글은 하나만, `want` 개까지 —
+        그리고 덜 나왔을 수 있나. 아닌 셋: 낼 수만큼 다 찼다(안 본 것은 받은 어느 것보다 멀다)
+        · 끝 줄이 바닥 밖이다(바닥 안은 다 봤다) · 정확히 쟀고 받는 수보다 적게 왔다(범위를 다
+        봤다). 나머지 — 받은 줄이 같은 글로 찼거나, 색인이 가까운 것을 받은 뒤 걸러 모자랐다 —
+        는 안 본 가까운 것이 있을 수 있다."""
+        best: dict[uuid.UUID, _Hit] = {}
+        seen_text: set[str] = set()
+        for object_id, heading, anchor, digest, part, gap in found:
+            similarity = 1 - float(gap)
+            if similarity < bottom:
+                break  # 가까운 것부터 왔다 — 뒤는 모두 바닥 밖이다
+            if object_id in best or digest in seen_text:
+                continue
+            seen_text.add(digest)
+            best[object_id] = _Hit(heading, anchor, digest, similarity, part)
+            if len(best) >= want:
+                break
+        narrowed = (
+            len(best) < want
+            and (not found or 1 - float(found[-1][5]) >= bottom)
+            and not (exact and len(found) < EF_SEARCH)
+        )
+        return best, narrowed
+
+    settings = get_settings()
+    reranked = "off"
+    relevance: dict[uuid.UUID, float] = {}
+    if rerank.enabled():
+        best, narrowed = collect(CANDIDATE_FLOOR, max(limit, settings.rerank_candidates))
+        rows = _rows(db, list(best))
+        order = [one for one in best if one in rows]
+        try:
+            texts = piece_texts(db, {one: best[one].part for one in order}, rows)
+            scores = rerank.score(q.strip(), [texts[one] for one in order])
+        except rerank.Unavailable as caught:
+            log.warning("관련도 없이 거리로만 고릅니다: %s", caught)
+            reranked = "unavailable"
+            best, narrowed = collect(MIN_SIMILARITY, limit)
+        else:
+            reranked = "ready"
+            relevance = dict(zip(order, scores, strict=True))
+            kept = sorted(
+                (one for one in order if relevance[one] >= settings.rerank_min_score),
+                key=lambda one: -relevance[one],
+            )[:limit]
+            best = {one: best[one] for one in kept}
+    else:
+        best, narrowed = collect(MIN_SIMILARITY, limit)
     if not best:
-        return "ready", [], narrowed
+        return Nearest("ready", [], narrowed, reranked)
     # 같은 글의 다른 객체 — 볼 수 있는 것만 센다(남의 부서 것이 수로 새지 않게).
     same: dict[str, int] = {
         digest: int(count) - 1
@@ -1066,7 +1166,7 @@ def nearest(
             )
             .join(ObjectInstance, ObjectInstance.id == ObjectEmbedding.object_id)
             .where(
-                ObjectEmbedding.text_hash.in_([one[2] for one in best.values()]),
+                ObjectEmbedding.text_hash.in_([one.digest for one in best.values()]),
                 ObjectEmbedding.type_id.in_(list(chosen)),
                 ObjectInstance.deleted_at.is_(None),
                 visible_owner_clause(user, ObjectInstance.owner_workspace_id),
@@ -1074,27 +1174,43 @@ def nearest(
             .group_by(ObjectEmbedding.text_hash)
         ).tuples()
     }
-    rows = {
-        row.id: row
-        for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(list(best))))
-    }
+    rows = _rows(db, list(best))
     types = {
         row.id: row
         for row in db.scalars(select(ObjectType).where(ObjectType.id.in_(list(chosen))))
     }
-    return (
+    return Nearest(
         "ready",
         [
             Near(
                 row=rows[object_id],
                 object_type=types[rows[object_id].type_id],
-                similarity=round(similarity, 3),
-                heading=heading,
-                anchor=anchor,
-                same=max(same.get(digest, 1), 0),
+                similarity=round(hit.similarity, 3),
+                heading=hit.heading,
+                anchor=hit.anchor,
+                same=max(same.get(hit.digest, 1), 0),
+                relevance=round(relevance[object_id], 4) if object_id in relevance else None,
             )
-            for object_id, (heading, anchor, digest, similarity) in best.items()
+            for object_id, hit in best.items()
             if object_id in rows and rows[object_id].type_id in types
         ],
         narrowed,
+        reranked,
     )
+
+
+class _Hit(NamedTuple):
+    heading: str
+    anchor: str
+    digest: str
+    similarity: float
+    part: str
+
+
+def _rows(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, ObjectInstance]:
+    if not ids:
+        return {}
+    return {
+        row.id: row
+        for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(ids)))
+    }
