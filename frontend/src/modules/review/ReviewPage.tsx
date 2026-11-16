@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ExternalLink, Inbox, Loader2 } from 'lucide-react'
+import { ExternalLink, Inbox, Loader2, Timer } from 'lucide-react'
 
 import { jobsApi } from '@/modules/jobs/api'
 import { ReviewPlanDialog } from '@/modules/review/ReviewPlanDialog'
@@ -142,6 +142,8 @@ export default function ReviewPage() {
   }, [page.data, kind])
   const shownKinds = page.data?.kinds ?? []
   const kinds = kind && allKinds.length > 0 ? allKinds : shownKinds
+  /** 시간 안에 다 못 읽은 종류 — 「없다」 가 아니다(ADR 0073). */
+  const lateKinds = shownKinds.filter((one) => one.late)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   /** 「거른 전부」 — 쪽을 넘어 지금 거르기에 맞는 전부. 결정은 서버가 다시 읽어 고른다. */
@@ -392,8 +394,18 @@ export default function ReviewPage() {
             }}
           >
             {one.label}
+            {one.late && (
+              <Timer
+                className="ml-1 size-3.5 text-amber-600 dark:text-amber-400"
+                aria-label="시간 안에 다 읽지 못함"
+              />
+            )}
             <Badge variant="secondary" className="ml-1">
-              {one.matched === one.total ? one.total : `${one.matched}/${one.total}`}
+              {one.late && one.scanned === 0
+                ? '?'
+                : one.matched === one.total
+                  ? one.total
+                  : `${one.matched}/${one.total}`}
             </Badge>
           </Button>
         ))}
@@ -607,9 +619,55 @@ export default function ReviewPage() {
         <Loader2 className="text-muted-foreground size-5 animate-spin" />
       )}
 
+      {lateKinds.length > 0 && (
+        <div
+          role="status"
+          aria-label="시간 안에 다 읽지 못한 종류"
+          className="space-y-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-950/40"
+        >
+          {lateKinds.map((one) => (
+            <p key={one.kind} className="flex flex-wrap items-center gap-2">
+              <Timer className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>
+                <strong>{one.label}</strong> —{' '}
+                {one.scanned > 0
+                  ? `시간이 걸려 ${one.scanned.toLocaleString()}건만 읽었습니다.`
+                  : '시간 안에 읽지 못해 이번에는 건너뛰었습니다.'}{' '}
+                <span className="text-muted-foreground">없는 것이 아닙니다.</span>
+              </span>
+              {kind !== one.kind && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setOffset(0)
+                    setParams({ kind: one.kind })
+                  }}
+                >
+                  이 종류만 보기
+                </Button>
+              )}
+              {one.scanned === 0 && one.link && (
+                <Link to={one.link} className="text-xs hover:underline">
+                  원래 화면 <ExternalLink className="inline size-3" />
+                </Link>
+              )}
+            </p>
+          ))}
+          {lateKinds.some((one) => one.scanned === 0) && (
+            <p className="text-muted-foreground text-xs">
+              {lateKinds
+                .filter((one) => one.scanned === 0)
+                .flatMap((one) => one.notes)
+                .join(' ')}
+            </p>
+          )}
+        </div>
+      )}
+
       {page.data && items.length === 0 && (
         <EmptyState
-          title="검토할 항목이 없습니다"
+          title={lateKinds.length > 0 ? '시간 안에 다 읽지 못했습니다' : '검토할 항목이 없습니다'}
           hint={[...page.data.notes, ...page.data.kinds.flatMap((one) => one.notes)].join(' ')}
         />
       )}

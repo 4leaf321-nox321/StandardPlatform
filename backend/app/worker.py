@@ -41,6 +41,10 @@ MAP_CHECK_EVERY = 300.0
 #: 뜻으로 찾기(ADR 0052)의 차례를 보는 간격 — 새것 · 고친 것이 있으면 계산을 넣는다(하루 한
 #: 번은 전부).
 SEMANTIC_CHECK_EVERY = 300.0
+#: 별칭 후보의 「이것 아닐까」 미리 셈(ADR 0074)의 차례를 보는 간격 — 셈할 줄이 있으면 넣는다.
+#: 작업은 다른 작업이 기다리면 비켜 주므로(`misses.refresh`) 짧게 봐도 된다 — 새로 세 번을 넘긴
+#: 줄이 몇 분 안에 셈해진다.
+ALIAS_SUGGEST_CHECK_EVERY = 60.0
 #: 고아 첨부 정리는 기동 한 시간 뒤가 첫 차례 — 업데이트로 워커가 자주 다시 떠도 밀리지 않게,
 #: 그렇다고 기동하자마자 저장소 전체를 훑지는 않게.
 GC_FIRST_AFTER = 3600.0
@@ -123,6 +127,7 @@ class Worker:
         self._last_webhook = 0.0
         self._last_map = 0.0
         self._last_semantic = 0.0
+        self._last_alias_suggest = 0.0
         hours = get_settings().filestore_gc_hours
         self._gc_every = hours * 3600.0 if hours > 0 else 0.0
         self._last_gc = time.monotonic() - max(self._gc_every - GC_FIRST_AFTER, 0.0)
@@ -172,6 +177,14 @@ class Worker:
                 queued = semantic.schedule(db)
             if queued:
                 log.info("뜻으로 찾기 계산을 넣었습니다: %s", queued)
+        if now - self._last_alias_suggest >= ALIAS_SUGGEST_CHECK_EVERY:
+            # 별칭 후보의 「이것 아닐까」 도 **넣기만** 한다 — 셈할 줄이 없으면 안 넣는다.
+            self._last_alias_suggest = now
+            from app.modules.objects import misses
+
+            with SessionLocal() as db:
+                if misses.schedule(db):
+                    log.info("별칭 후보 「이것 아닐까」 셈을 넣었습니다")
         if now - self._last_purge >= PURGE_EVERY:
             with SessionLocal() as db:
                 gone = services.purge_expired_files(db)

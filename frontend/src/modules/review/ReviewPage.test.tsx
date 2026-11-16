@@ -68,12 +68,14 @@ const kinds = [
     actionable: true,
     undo_note: '',
     notes: [],
+    late: false,
+    seconds: 0.4,
   },
 ]
 
-function page(items: unknown[]) {
+function page(items: unknown[], shown: unknown[] = kinds) {
   return {
-    kinds,
+    kinds: shown,
     items,
     total: items.length,
     limit: 50,
@@ -419,5 +421,71 @@ describe('제안된 관계(ADR 0042)', () => {
     expect(within(high).getByRole('button', { name: /거절/ })).toBeInTheDocument()
     const low = screen.getByText('「볼트」 —공급받음→ 「BETA」 을(를) 이을까요?').closest('li')!
     expect(within(low).getByText('추천 없음')).toBeInTheDocument()
+  })
+})
+
+describe('종류마다 시간 상한(ADR 0073)', () => {
+  it('시간 안에 다 못 읽은 종류는 「없다」 가 아니라고 말하고 그 종류만 볼 길을 준다', async () => {
+    // 운영에서 별칭 후보 하나가 60초를 넘겨 검토함 전체가 504 였다 — 이제 서버가 종류마다
+    // 시간을 두고, 못 읽은 종류는 `late` 로 온다(ADR 0073).
+    const slow = [
+      {
+        ...kinds[0],
+        total: 24000,
+        matched: 1,
+        scanned: 18,
+        late: true,
+        seconds: 8.4,
+        notes: ['아직 미리 계산하지 않은 182건은 그 자리에서 계산하는 데 시간이 걸려 이번에 건너뛰었습니다'],
+      },
+      {
+        kind: 'broken_ref',
+        label: '지워진 것을 가리키는 칸',
+        description: '',
+        link: '/quality#broken_refs',
+        total: 0,
+        matched: 0,
+        scanned: 0,
+        actionable: true,
+        undo_note: '',
+        notes: ['「지워진 것을 가리키는 칸」 은(는) 12초 안에 읽지 못해 이번에는 건너뛰었습니다'],
+        late: true,
+        seconds: 12.0,
+      },
+    ]
+    reviewApi.items.mockResolvedValue(page([item('r1')], slow))
+    await open()
+    const notice = screen.getByRole('status', { name: '시간 안에 다 읽지 못한 종류' })
+    expect(notice).toHaveTextContent('시간이 걸려 18건만 읽었습니다.')
+    expect(notice).toHaveTextContent('시간 안에 읽지 못해 이번에는 건너뛰었습니다.')
+    expect(notice).toHaveTextContent('없는 것이 아닙니다.')
+    expect(notice).toHaveTextContent('12초 안에 읽지 못해')
+    // 칩 — 건너뛴 종류는 수를 모른다(0 이 아니다).
+    expect(screen.getByRole('button', { name: /지워진 것을 가리키는 칸.*\?/ })).toBeInTheDocument()
+    expect(screen.getAllByLabelText('시간 안에 다 읽지 못함')).toHaveLength(2)
+
+    const buttons = within(notice).getAllByRole('button', { name: '이 종류만 보기' })
+    await userEvent.click(buttons[1])
+    await waitFor(() =>
+      expect(reviewApi.items).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'broken_ref' }),
+        expect.anything(),
+      ),
+    )
+  })
+
+  it('항목이 없어도 늦은 종류가 있으면 「검토할 항목이 없습니다」 라고 하지 않는다', async () => {
+    reviewApi.items.mockResolvedValue({
+      ...page([], [{ ...kinds[0], total: 0, matched: 0, scanned: 0, late: true, notes: [] }]),
+      notes: ['시간 안에 다 읽지 못한 종류가 있습니다(별칭 후보) — 없는 것이 아닙니다.'],
+    })
+    const { default: ReviewPage } = await import('@/modules/review/ReviewPage')
+    render(
+      <MemoryRouter initialEntries={['/review']}>
+        <ReviewPage />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('시간 안에 다 읽지 못했습니다')).toBeInTheDocument()
+    expect(screen.queryByText('검토할 항목이 없습니다')).not.toBeInTheDocument()
   })
 })

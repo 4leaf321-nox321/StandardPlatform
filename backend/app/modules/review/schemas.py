@@ -56,6 +56,11 @@ class ReviewKindOut(BaseModel):
     actionable: bool
     undo_note: str
     notes: list[str]
+    late: bool = False
+    """시간 안에 다 읽지 못했다 — 앞의 것만 읽었거나(`scanned`) 하나도 못 읽고 건너뜀(`total`
+    0). **「없다」 가 아니다** — 까닭은 `notes`, 이 종류만(`kind`) 보면 시간을 더 쓴다."""
+    seconds: float = 0.0
+    """이 종류를 모으는 데 든 시간(초) — 어느 종류가 느린지."""
 
 
 class ReviewFacetOut(BaseModel):

@@ -161,7 +161,11 @@ def review_items(
 ) -> ReviewPageOut:
     """**사람이 판단할 일** — 종류마다 원래 자리에서 읽어 한 줄(물음 · 근거 · 후보 · 추천 ·
     확신도)로. 종류마다 묶여 선다(`kinds` 의 차례). 수는 `kinds[].total`(원래 자리에 있는 수)과
-    `matched`(거르기에 맞는 수). 0건이면 `notes` · `kinds[].notes` 가 까닭을 말한다."""
+    `matched`(거르기에 맞는 수). 0건이면 `notes` · `kinds[].notes` 가 까닭을 말한다.
+
+    **종류마다 시간이 있다**(ADR 0073) — 한 종류가 느려도 나머지는 선다. 시간 안에 다 못 읽은
+    종류는 `kinds[].late`(앞의 것만 읽었거나 건너뜀 — 「없다」 가 아니다), 까닭은 그 종류의
+    `notes`. 종류 하나만(`kind`) 보면 그 종류가 시간을 다 쓴다."""
     services.require_viewer(db, user)
     query = services.Query(
         kind=kind,
@@ -176,9 +180,15 @@ def review_items(
     capped = clamp_limit(limit)
     types, places = _facets(db, listed.items)
     notes = list(listed.notes)
+    late = [one.provider.label for one in listed.kinds if one.late]
     if not items:
         if not listed.kinds:
             notes.append("볼 수 있는 종류가 없습니다.")
+        elif late:
+            notes.append(
+                f"시간 안에 다 읽지 못한 종류가 있습니다({', '.join(late)}) — 없는 것이 "
+                "아닙니다. 그 종류만 골라 다시 보세요."
+            )
         elif any(one.total for one in listed.kinds):
             notes.append(
                 "거르기에 맞는 항목이 없습니다 — 거르기(타입 · 부서 · 확신도)를 넓혀 보세요."
@@ -198,6 +208,8 @@ def review_items(
                 actionable=one.provider.check is not None,
                 undo_note=one.provider.undo_note,
                 notes=one.notes,
+                late=one.late,
+                seconds=one.seconds,
             )
             for one in listed.kinds
         ],

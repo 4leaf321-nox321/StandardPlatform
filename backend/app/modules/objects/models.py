@@ -1016,3 +1016,15 @@ class SearchMiss(Base):
     last_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    suggested: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    """**미리 셈해 둔 「이것 아닐까」**(ADR 0074) — `[{id, matched, matched_text, score}]`,
+    점수 차례. 줄마다 비슷한 객체를 찾는 질의가 축 객체 · 별칭을 다 훑어(운영 모양에서 한 줄
+    0.5초) 화면이 그 자리에서 셀 수 없다 — 워커가 센다(`misses.refresh`). 이름 · 타입은 적지
+    않는다: 읽을 때 객체에서 읽어 바꾼 이름이 보이고 지운 것은 빠진다. **부서를 가리지 않고**
+    세고 읽을 때 그 사람에게 보이는 것만 남긴다."""
+    suggested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """셈한 때 — 비면 아직 안 셈했다(화면이 시간 안에서 그 자리에서 센다)."""
+    suggest_note: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    """셈할 때 제안을 못 낸 까닭 — 「기록 타입」 · 「객체가 많아 건너뜀」."""

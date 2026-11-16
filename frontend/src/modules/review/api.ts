@@ -56,6 +56,13 @@ export interface ReviewKind {
   actionable: boolean
   undo_note: string
   notes: string[]
+  /**
+   * 시간 안에 다 읽지 못했다 — 앞의 것만(`scanned`) 읽었거나 하나도 못 읽고 건너뜀. 「없다」 가
+   * 아니다. 그 종류만 보면 시간을 더 쓴다(ADR 0073).
+   */
+  late: boolean
+  /** 이 종류를 모으는 데 든 시간(초). */
+  seconds: number
 }
 
 export interface ReviewFacet {

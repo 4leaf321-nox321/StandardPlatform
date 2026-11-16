@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterable
@@ -186,13 +187,46 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
             ).limit(CANDIDATE_CAP)
         )
     )
-    if total > len(rows):
+    labels = misses._labels(db)
+    axes: misses.Axes = {}
+    # 「이것 아닐까」 는 워커가 미리 셈해 둔 것을 읽는다(ADR 0074) — 한 번에 읽고 지금의 객체로
+    # 거른다. 아직 안 셈한 줄만 그 자리에서 센다(줄마다 수십 ~ 수백 ms).
+    ready = misses.stored(db, user, rows)
+    found: list[misses.Candidate] = []
+    skipped = 0
+    for miss in rows:
+        # 시간이 다 되면 안 셈한 줄은 건너뛴다 — 셈한 줄은 그래도 낸다(읽기만 한다).
+        if (
+            miss.id not in ready
+            and flt.deadline is not None
+            and time.monotonic() >= flt.deadline
+        ):
+            skipped += 1
+            continue
+        found.append(
+            misses.describe(
+                db, user, miss, suggest=True, labels=labels, axes=axes, ready=ready
+            )
+        )
+    cut = skipped > 0
+    if len(ready) < len(rows) and flt.item_ids is None:
+        state = misses.suggest_state(db, scope=flt.type_slug)
+        notes.append(
+            f"「이것 아닐까」 는 워커가 미리 계산합니다 — 세 번 이상 찾은 "
+            f"{state['shown']:,}건 중 {state['shown_ready']:,}건을 계산했습니다. 아직 "
+            "계산하지 않은 줄은 그 자리에서 계산합니다(몇 분 뒤면 바로 열립니다)."
+        )
+    if cut:
+        notes.append(
+            f"아직 미리 계산하지 않은 {skipped:,}건은 그 자리에서 계산하는 데 시간이 걸려 "
+            f"이번에 건너뛰었습니다(대기 {total:,}건 중 {len(found):,}건 표시) — 워커가 "
+            "계산해 두면 표시됩니다."
+        )
+    elif total > len(rows):
         notes.append(
             f"별칭 후보는 많이 찾은 것부터 {CANDIDATE_CAP}건만 후보를 셉니다 — 나머지 "
             f"{total - len(rows):,}건은 이것을 처리한 뒤에 표시됩니다."
         )
-    labels = misses._labels(db)
-    found = [misses.describe(db, user, one, suggest=True, labels=labels) for one in rows]
     tops = [one.suggestions[0].id for one in found if one.suggestions]
     owners: dict[uuid.UUID, uuid.UUID | None] = {}
     for batch in chunks(tops):
@@ -222,6 +256,10 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
                     f"{len(row.askers or [])}명이 찾았으나 못 찾음",
                     f"자리: {vias}" if vias else "",
                     f"마지막 {row.last_at:%Y-%m-%d}",
+                    f"「이것 아닐까」 는 {one.suggested_at.astimezone():%m-%d %H:%M}에 "
+                    "계산한 것"
+                    if one.suggested_at is not None
+                    else "",
                 ],
                 choices=[
                     Choice(
@@ -245,7 +283,7 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
                 priority=float(row.hits),
             )
         )
-    return Collected(items=items, total=total, notes=notes)
+    return Collected(items=items, total=total, notes=notes, cut=cut)
 
 
 def check_candidate(db: Session, user: User, item: Item, value: str) -> Check:

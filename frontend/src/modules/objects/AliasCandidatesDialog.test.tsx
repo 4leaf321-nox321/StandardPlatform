@@ -41,6 +41,7 @@ const candidate = {
     },
   ],
   suggest_note: '',
+  suggested_at: null as string | null,
 }
 
 function plan(apply: boolean, extra: Record<string, unknown> = {}) {
@@ -78,6 +79,19 @@ describe('별칭 후보', () => {
     await waitFor(() => expect(aliasCandidateApi.attach).toHaveBeenCalledWith('c1', 'o1', true))
     expect(screen.getByText(/Ansys Fluent의 별칭으로 추가했습니다/)).toBeInTheDocument()
     expect(onDone).toHaveBeenCalled()
+  })
+
+  it('미리 셈한 「이것 아닐까」 면 언제 셈했는지 보인다(ADR 0074)', async () => {
+    aliasCandidateApi.list.mockResolvedValue({
+      items: [{ ...candidate, suggested_at: '2026-11-16T16:05:00Z' }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    const { AliasCandidatesDialog } = await import('@/modules/objects/AliasCandidatesDialog')
+    render(<AliasCandidatesDialog onClose={() => {}} onDone={() => {}} />)
+    await waitFor(() => expect(screen.getByText('Ansys Fluet')).toBeInTheDocument())
+    expect(screen.getByText(/\(.*2026.*계산\)/)).toBeInTheDocument()
   })
 
   it('다른 객체가 쓰는 별칭이면 막는 까닭을 보이고 추가 단추를 끈다', async () => {

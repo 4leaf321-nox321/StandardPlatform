@@ -19964,7 +19964,7 @@
           "review"
         ],
         "summary": "Review Items",
-        "description": "**사람이 판단할 일** — 종류마다 원래 자리에서 읽어 한 줄(물음 · 근거 · 후보 · 추천 ·\n확신도)로. 종류마다 묶여 선다(`kinds` 의 차례). 수는 `kinds[].total`(원래 자리에 있는 수)과\n`matched`(거르기에 맞는 수). 0건이면 `notes` · `kinds[].notes` 가 까닭을 말한다.",
+        "description": "**사람이 판단할 일** — 종류마다 원래 자리에서 읽어 한 줄(물음 · 근거 · 후보 · 추천 ·\n확신도)로. 종류마다 묶여 선다(`kinds` 의 차례). 수는 `kinds[].total`(원래 자리에 있는 수)과\n`matched`(거르기에 맞는 수). 0건이면 `notes` · `kinds[].notes` 가 까닭을 말한다.\n\n**종류마다 시간이 있다**(ADR 0073) — 한 종류가 느려도 나머지는 선다. 시간 안에 다 못 읽은\n종류는 `kinds[].late`(앞의 것만 읽었거나 건너뜀 — 「없다」 가 아니다), 까닭은 그 종류의\n`notes`. 종류 하나만(`kind`) 보면 그 종류가 시간을 다 쓴다.",
         "operationId": "review_items_api_review_items_get",
         "parameters": [
           {
@@ -23777,6 +23777,18 @@
           "suggest_note": {
             "type": "string",
             "title": "Suggest Note"
+          },
+          "suggested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested At"
           }
         },
         "type": "object",
@@ -51340,6 +51352,16 @@
             },
             "type": "array",
             "title": "Notes"
+          },
+          "late": {
+            "type": "boolean",
+            "title": "Late",
+            "default": false
+          },
+          "seconds": {
+            "type": "number",
+            "title": "Seconds",
+            "default": 0.0
           }
         },
         "type": "object",

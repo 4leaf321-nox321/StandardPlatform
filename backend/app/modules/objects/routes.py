@@ -482,6 +482,7 @@ def _candidate_out(found: misses.Candidate) -> AliasCandidateOut:
         decided_at=row.decided_at,
         suggestions=[AliasSuggestionOut(**vars(one)) for one in found.suggestions],
         suggest_note=found.suggest_note,
+        suggested_at=found.suggested_at,
     )
 
 

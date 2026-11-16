@@ -1399,6 +1399,9 @@ class AliasCandidateOut(BaseModel):
     suggestions: list[AliasSuggestionOut]
     """「이것 아닐까」 — 짐작이다. 사람이 고른 것만 붙인다."""
     suggest_note: str
+    suggested_at: datetime | None = None
+    """「이것 아닐까」 를 **미리 셈한 때**(ADR 0074 — 워커가 세고 밤마다 다시 센다). 비면 지금
+    셈했거나(아직 미리 셈하지 않은 줄) 셈하지 않았다."""
 
 
 class AliasCandidatePage(BaseModel):

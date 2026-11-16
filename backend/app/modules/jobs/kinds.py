@@ -1249,6 +1249,36 @@ register(
 )
 
 
+def alias_suggest(work: Work) -> dict[str, Any]:
+    """별칭 후보의 「이것 아닐까」 미리 셈(ADR 0074) — 셈할 줄을 많이 찾은 것부터 셈해 적는다.
+    몇 줄마다 커밋하고(그 커밋마다 워커의 검사가 돈다), 10분이 지나거나 다른 작업이 기다리면
+    거기서 멈춘다 — 남은 것은 타이머가 1분 뒤에 다시 넣는다."""
+    from app.modules.objects import misses
+
+    scope = work.params.get("scope")
+    return misses.refresh(
+        work.db,
+        progress=work.progress,
+        commit=work.db.commit,
+        scope=str(scope) if scope is not None else None,
+    )
+
+
+# 별칭 후보의 「이것 아닐까」 — 타이머(워커가 1분마다 `misses.schedule`)만 넣는다. 줄마다 축
+# 객체 · 별칭을 다 훑는 질의라 검토함 · 별칭 후보 창이 그 자리에서 셀 수 없었다(ADR 0073).
+register(
+    Kind(
+        "alias_suggest",
+        "별칭 후보의 「이것 아닐까」 계산",
+        False,
+        False,
+        alias_suggest,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+
+
 def review_apply(work: Work) -> dict[str, Any]:
     """검토함의 큰 묶음(ADR 0027) — 요청 경로와 **같은 함수**(`review.services.apply`)를 같은
     지문으로. 항목마다 원래 기능으로 처리하고 그 커밋마다 워커의 검사가 돈다(`work.db`). 멈추면

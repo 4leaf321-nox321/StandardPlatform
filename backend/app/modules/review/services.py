@@ -22,17 +22,22 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
+import threading
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -42,6 +47,7 @@ from app.modules.review import registry
 from app.modules.review.models import ReviewDecision
 from app.modules.review.registry import IGNORE, Filters, Item, Provider
 from app.modules.workspaces.models import Workspace, WorkspaceMember
+from app.shared import querycap, readguard
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 from app.shared.permissions import is_any_manager, workspace_by_slug
 
@@ -62,6 +68,19 @@ MAX_DECISIONS = 5000
 SHOWN_OUTCOMES = 500
 #: 부서 거르기에서 「전역」 을 뜻하는 값 — slug 에는 `@` 가 없다.
 GLOBAL = "@global"
+#: 검토함 한 쪽을 모으는 시간(초) — 프록시가 먼저 끊지 않게(흔히 60초) 넉넉히 짧게. 종류
+#: 하나만 볼 때(`kind`)는 그 종류가 이것을 다 쓴다. 운영에서 별칭 후보 하나가 60초를 넘겨
+#: 검토함 전체가 504 였다(2026-11-16) — 종류마다 원래 자리에서 읽으니 어느 하나가 느려지면
+#: 나머지까지 못 본다. 「추천대로 모두」 · 「거른 전부」 의 미리 보기는 목록을 읽고(이
+#: 시간까지) 고른 항목을 한 번 더 읽어(대개 비슷한 시간) 이것의 두 배 남짓이 든다 — 그래서
+#: 15초.
+COLLECT_SECONDS = 15.0
+#: 여러 종류를 함께 볼 때 종류 하나가 쓰는 시간(초) — 하나가 느려도 나머지가 선다.
+KIND_SECONDS = 8.0
+#: 시간이 다 된 종류를 끊기까지 더 기다리는 시간(초). 줄마다 일하는 종류는 시간이 다 되면
+#: 스스로 멈추고 거기까지 낸다(`Filters.deadline` — 하던 줄은 마친다). 그러지 못하는 것(큰
+#: 질의 하나 · 멈출 자리가 없는 되풀이)은 이만큼 뒤에 도는 질의를 취소하고 그 종류를 건너뛴다.
+KIND_GRACE = 4.0
 
 MODES = ("decisions", "recommended", "all")
 
@@ -89,6 +108,11 @@ class KindSummary:
     """읽은 것 중 거르기에 맞는 수."""
     scanned: int
     notes: list[str] = field(default_factory=list)
+    late: bool = False
+    """시간 안에 다 읽지 못했다 — 앞의 것만(`Collected.cut`) 또는 하나도 못 읽고 건너뜀.
+    「없다」 가 아니다."""
+    seconds: float = 0.0
+    """이 종류를 모으는 데 든 시간 — 어느 종류가 느린지 보인다."""
 
 
 @dataclass
@@ -148,19 +172,141 @@ def _passes(item: Item, provider: Provider, flt: Filters, query: Query) -> bool:
     return not (query.actionable and (provider.check is None or item.blocked))
 
 
+class _Late(Exception):
+    """종류 하나가 끊을 시각을 넘겼다 — 그 종류가 읽은 것은 버렸다."""
+
+
+def _within[T](db: Session, cutoff: float, work: Callable[[], T]) -> T:
+    """`work` 를 `cutoff`(`time.monotonic()`)까지만 — 넘기면 도는 질의를 취소하고 다음 질의를
+    보내지 않는다(`readguard` 의 길 — 큰 질의 하나도, 짧은 질의를 여럿 부르는 되풀이도
+    끊긴다). 세이브포인트 안에서 돌려 끊겨도 요청의 트랜잭션은 산다. 끊기면 `_Late`."""
+    nested = db.begin_nested()
+    lock = threading.Lock()
+    finished = False
+    guard: readguard.Guard | None = None
+    try:
+        with readguard.watching() as guard:
+
+            def fire() -> None:
+                # 끝난 뒤에는 취소를 보내지 않는다 — 다음 종류의 질의가 맞을 수 있다.
+                with lock:
+                    if not finished and guard is not None:
+                        readguard.stop(guard, "time")
+
+            timer = threading.Timer(max(cutoff - time.monotonic(), 0.0), fire)
+            timer.daemon = True
+            timer.start()
+            try:
+                result = work()
+            finally:
+                with lock:
+                    finished = True
+                timer.cancel()
+            if guard.why is not None:
+                # 마지막 질의가 끝난 바로 뒤에 시간이 됐다 — 끊긴 것과 같이 본다(같은 요청에
+                # 같은 답이 나게).
+                raise _Late
+    except BaseException as caught:
+        # 끊긴 질의 뒤의 트랜잭션은 실패 상태다 — 세이브포인트로 돌려야 다음 종류가 읽는다.
+        # `watching()` 을 나온 뒤라 이 되돌리기는 막히지 않는다.
+        nested.rollback()
+        timed_out = guard is not None and guard.why is not None
+        if isinstance(caught, _Late) or (
+            timed_out
+            and (
+                isinstance(caught, readguard.Stopped)
+                or (isinstance(caught, OperationalError) and querycap.cancelled(caught))
+            )
+        ):
+            raise _Late from caught
+        raise
+    nested.commit()
+    return result
+
+
+def _late_note(provider: Provider, took: float, alone: bool) -> str:
+    if alone:
+        return (
+            f"「{provider.label}」 을(를) {took:.0f}초 안에 읽지 못했습니다 — 원래 화면에서 "
+            "보거나, 계속되면 운영 담당자에게 알려 주세요(서버 로그에 종류와 시간이 "
+            "남습니다)."
+        )
+    return (
+        f"「{provider.label}」 은(는) {took:.0f}초 안에 읽지 못해 이번에는 건너뛰었습니다 — "
+        "다른 종류는 그대로 보입니다. 이 종류만 골라 보면 시간을 더 씁니다."
+    )
+
+
 def collect(db: Session, user: User, query: Query) -> Listed:
     """종류마다 원래 자리에서 읽어 거른다 — **볼 수 있는 종류만.** 못 보는 종류는 수도 안
-    말한다 (데이터 소스는 시스템 관리자의 것이다)."""
+    말한다 (데이터 소스는 시스템 관리자의 것이다).
+
+    **종류마다 시간이 있다** — 여럿을 함께 보면 하나에 `KIND_SECONDS`, 다 합쳐
+    `COLLECT_SECONDS`(종류 하나만 보면 그것을 다 쓴다). 시간이 다 되면 줄마다 일하는 종류는
+    거기까지 내고(`Collected.cut`), 스스로 멈추지 못하는 종류는 `KIND_GRACE` 뒤에 끊고
+    건너뛴다. 어느 쪽이든 그 종류는 `late` 이고 까닭은 그 종류의 `notes` 에 선다 — 한 종류가
+    느려도 나머지는 보인다."""
     flt = filters_of(db, query)
     kinds: list[KindSummary] = []
     items: list[Item] = []
     notes: list[str] = []
+    alone = query.kind is not None
+    whole = time.monotonic() + COLLECT_SECONDS
     for provider in _chosen(query.kind):
         if not provider.can_view(db, user):
-            if query.kind is not None:
+            if alone:
                 notes.append(f"「{provider.label}」 은(는) 볼 수 없는 종류입니다.")
             continue
-        got = provider.collect(db, user, flt)
+        started = time.monotonic()
+        if started >= whole:
+            kinds.append(
+                KindSummary(
+                    provider=provider,
+                    total=0,
+                    matched=0,
+                    scanned=0,
+                    late=True,
+                    notes=[
+                        f"앞의 종류들이 {COLLECT_SECONDS:.0f}초를 다 써 「{provider.label}」 "
+                        "은(는) 이번에 읽지 않았습니다 — 이 종류만 골라 보세요."
+                    ],
+                )
+            )
+            continue
+        soft = whole if alone else min(started + KIND_SECONDS, whole)
+        timed = dataclasses.replace(flt, deadline=soft)
+        try:
+            got = _within(db, soft + KIND_GRACE, partial(provider.collect, db, user, timed))
+        except _Late:
+            took = time.monotonic() - started
+            log.warning(
+                "검토함: 「%s」(%s)를 %.1f초 안에 읽지 못해 건너뜀",
+                provider.label,
+                provider.kind,
+                took,
+            )
+            kinds.append(
+                KindSummary(
+                    provider=provider,
+                    total=0,
+                    matched=0,
+                    scanned=0,
+                    late=True,
+                    seconds=round(took, 2),
+                    notes=[_late_note(provider, took, alone)],
+                )
+            )
+            continue
+        took = time.monotonic() - started
+        if got.cut:
+            log.warning(
+                "검토함: 「%s」(%s)는 %.1f초에 %d건만 읽음(전체 %d)",
+                provider.label,
+                provider.kind,
+                took,
+                len(got.items),
+                got.total,
+            )
         mine = [one for one in got.items if _passes(one, provider, flt, query)]
         mine.sort(key=lambda one: (-one.priority, one.question))
         kinds.append(
@@ -170,10 +316,25 @@ def collect(db: Session, user: User, query: Query) -> Listed:
                 matched=len(mine),
                 scanned=len(got.items),
                 notes=got.notes,
+                late=got.cut,
+                seconds=round(took, 2),
             )
         )
         items.extend(mine)
     return Listed(kinds=kinds, items=items, notes=notes)
+
+
+def late_notes(listed: Listed) -> list[str]:
+    """시간 안에 다 못 읽은 종류 — 「거른 전부」 · 「추천대로 모두」 가 그 종류에서는 보인 것만
+    고른다고 말한다."""
+    return [
+        f"「{one.provider.label}」 은(는) 시간 안에 다 읽지 못해 읽은 것"
+        f"({one.scanned:,}건)에서만 골랐습니다."
+        if one.scanned
+        else f"「{one.provider.label}」 은(는) 시간 안에 읽지 못해 이번에는 고르지 않았습니다."
+        for one in listed.kinds
+        if one.late
+    ]
 
 
 def grouped(items: list[Item]) -> list[Item]:
@@ -341,15 +502,17 @@ def resolve(
     query: Query,
     threshold: float,
     action: str,
-) -> tuple[list[Decision], int]:
+) -> tuple[list[Decision], int, list[str]]:
     """화면이 보낸 것을 결정 목록으로 — 고른 것은 그대로, 「추천대로 모두」 · 「거른 전부」 는
     **지금 거르기에 맞는 항목을 원래 자리에서 다시 읽어** 고른다. (결정들, 문턱 아래로 뺀
-    수)."""
+    수, 시간 안에 다 못 읽은 종류의 말)."""
+    notes: list[str] = []
     if mode == "decisions":
         out = decisions
         skipped = 0
     else:
         listed = collect(db, user, query)
+        notes = late_notes(listed)
         handled = {one.provider.kind for one in listed.kinds if one.provider.check is not None}
         out = []
         skipped = 0
@@ -374,7 +537,7 @@ def resolve(
             "좁혀 나눠 하세요.",
             status=422,
         )
-    return out, skipped
+    return out, skipped, notes
 
 
 def _blocked(decision: Decision, message: str, item: Item | None = None) -> Outcome:
@@ -488,7 +651,7 @@ def preview(
     threshold: float,
     action: str,
 ) -> Planned:
-    resolved, skipped = resolve(
+    resolved, skipped, notes = resolve(
         db,
         user,
         mode=mode,
@@ -498,7 +661,6 @@ def preview(
         action=action,
     )
     outcomes = plan(db, user, resolved)
-    notes: list[str] = []
     if mode == "recommended" and skipped:
         notes.append(
             f"추천이 없거나 확신도가 {threshold:.2f} 아래인 {skipped:,}건은 선택하지 "

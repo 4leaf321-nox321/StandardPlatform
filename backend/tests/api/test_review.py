@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -19,7 +20,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from app.main import app as fastapi_app
@@ -1208,6 +1209,159 @@ def test_큰_묶음은_작업으로_간다(
 
 
 # --- MCP 두 도구 ----------------------------------------------------------------------
+
+
+# --- 종류마다 시간 상한(ADR 0073) ------------------------------------------------------
+
+
+def _slow_provider(kind: str, collect: registry.Collect) -> registry.Provider:
+    return registry.Provider(
+        kind=kind,
+        label=f"느린 {kind}",
+        description="",
+        link="/quality",
+        can_view=lambda _db, _user: True,
+        collect=collect,
+        order=0,
+    )
+
+
+def test_느린_종류가_있어도_나머지는_서고_그_종류는_늦음이라고_말한다(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """운영에서 별칭 후보 하나가 60초를 넘겨 검토함 전체가 504 였다(2026-11-16). 이제 종류마다
+    시간이 있다 — 큰 질의 하나(취소)도, 짧은 질의를 여럿 부르는 되풀이(다음 질의를 안 보냄)도
+    끊기고, 끊긴 뒤에도 같은 요청의 다음 종류가 읽는다(세이브포인트)."""
+    tool = _make_type(client, admin, "tool", label="툴")
+    _make_object(client, admin, tool, label="Kestrel Mesher")
+    _miss(db, tool, "Kestrel Meshr")
+    marker = f"review-slow-{uuid.uuid4().hex}"
+    loops: list[int] = []
+
+    def one_big(db: Session, _user: User, _flt: Filters) -> registry.Collected:
+        db.execute(text(f"SELECT pg_sleep(30) /* {marker} */"))
+        return registry.Collected(items=[], total=1)
+
+    def many_small(db: Session, _user: User, _flt: Filters) -> registry.Collected:
+        for _ in range(1000):  # 멈출 자리를 보지 않는 되풀이
+            db.execute(text("SELECT pg_sleep(0.02)"))
+            loops.append(1)
+        return registry.Collected(items=[], total=1)
+
+    monkeypatch.setitem(registry._registry, "slow_big", _slow_provider("slow_big", one_big))
+    monkeypatch.setitem(
+        registry._registry, "slow_many", _slow_provider("slow_many", many_small)
+    )
+    # 시험 기계가 바빠도 별칭 후보(한 줄)는 1초 안에 읽는다 — 느린 둘만 1.3초에 끊긴다.
+    monkeypatch.setattr(review_services, "KIND_SECONDS", 1.0)
+    monkeypatch.setattr(review_services, "KIND_GRACE", 0.3)
+
+    started = time.monotonic()
+    page = _items(client, admin, type=tool)
+    took = time.monotonic() - started
+    assert took < 10, took  # 30초 질의 · 20초 되풀이를 기다리지 않았다
+    kinds = {one["kind"]: one for one in page["kinds"]}
+    for slow in ("slow_big", "slow_many"):
+        assert kinds[slow]["late"] is True and kinds[slow]["total"] == 0
+        assert "읽지 못해 이번에는 건너뛰었습니다" in kinds[slow]["notes"][0]
+        assert 1.2 <= kinds[slow]["seconds"] < 5
+    assert len(loops) < 250
+    # 끊긴 뒤에도 다음 종류가 읽었다 — 별칭 후보는 그대로 선다.
+    assert kinds["alias_candidate"]["late"] is False
+    assert [one["kind"] for one in page["items"]] == ["alias_candidate"]
+    # 30초 질의는 DB 에서도 멈췄다(취소) — 요청이 끝난 뒤 DB 를 붙잡고 있지 않다.
+    still = db.scalar(
+        text(
+            "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE :m "
+            "AND pid <> pg_backend_pid()"
+        ),
+        {"m": f"%{marker}%"},
+    )
+    assert still == 0
+
+    # 「추천대로 모두」 의 미리 보기도 늦은 종류에서는 보인 것만 골랐다고 말한다.
+    planned = _plan(client, admin, mode="recommended", filters={"type": tool}, threshold=0.1)
+    assert any(
+        "느린 slow_big" in line and "이번에는 고르지 않았습니다" in line
+        for line in planned["notes"]
+    )
+
+
+def test_별칭_후보는_시간이_다_되면_많이_찾은_것부터_셈한_만큼만_낸다(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """아직 미리 셈하지 않은 줄(ADR 0074 — 배포 직후 · 워커가 세기 전)은 그 자리에서 센다 —
+    줄마다 「이것 아닐까」 질의가 붙어(운영에서 한 줄 0.5초 남짓) 200줄이면 100초다. 시간이
+    다 되면 하던 줄은 마치고 나머지 안 셈한 줄은 건너뛴다 — 많이 찾은 것이 먼저다. 「없다」 가
+    아니라고 말한다."""
+    tool = _make_type(client, admin, "tool", label="툴")
+    fluent = _make_object(client, admin, tool, label="Kestrel Mesher")
+    _make_object(client, admin, tool, label="Heron Solver")
+    _miss(db, tool, "Kestrel Meshr", times=5)
+    _miss(db, tool, "Heron Solvr", times=4)
+    _miss(db, tool, "Kestrel Meshar", times=3)
+    real = misses.describe
+
+    def slow(*args: Any, **kwargs: Any) -> misses.Candidate:
+        time.sleep(1.2)  # 한 줄이 시간(1초)을 넘긴다 — 첫 줄은 시간 안에 시작한다
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(misses, "describe", slow)
+    monkeypatch.setattr(review_services, "COLLECT_SECONDS", 1.0)
+
+    page = _items(client, admin, kind="alias_candidate", type=tool)
+    (kind,) = page["kinds"]
+    assert kind["late"] is True and kind["total"] == 3 and kind["scanned"] == 1
+    assert any(
+        "아직 미리 계산하지 않은 2건은" in note and "(대기 3건 중 1건 표시)" in note
+        for note in kind["notes"]
+    )
+    (item,) = page["items"]
+    assert item["question"] == "「Kestrel Meshr」 을(를) 무엇의 별칭으로 추가할까요?"
+    assert item["recommended"] == fluent["id"]  # 셈한 줄은 추천까지 온전하다
+
+    # 고른 항목을 다시 읽을 때(미리 보기 · 적용)는 시간으로 자르지 않는다 — 고른 것은 다 본다.
+    plan = _plan(
+        client,
+        admin,
+        decisions=[{"kind": "alias_candidate", "item_id": item["id"], "action": "accept"}],
+    )
+    assert plan["counts"] == {"apply": 1, "blocked": 0}
+    assert _apply(client, admin, plan, mode="one").status_code == 200
+
+    # 시간이 넉넉하면 다 — 처리한 것은 빠지고 다음 것이 선다.
+    monkeypatch.setattr(review_services, "COLLECT_SECONDS", 30.0)
+    again = _items(client, admin, kind="alias_candidate", type=tool)
+    assert again["kinds"][0]["late"] is False
+    assert [one["question"] for one in again["items"]] == [
+        "「Heron Solvr」 을(를) 무엇의 별칭으로 추가할까요?",
+        "「Kestrel Meshar」 을(를) 무엇의 별칭으로 추가할까요?",
+    ]
+
+
+def test_별칭_후보_창도_시간이_다_되면_나머지_줄의_제안을_건너뛴다(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """데이터 품질의 별칭 후보 창(50줄)도 줄마다 같은 질의다 — 시간이 다 되면 나머지 줄은
+    셈하지 않고 그렇다고 적는다(「다른 객체 선택」 으로 고른다). 후보 하나를 열면 그 줄은
+    셈한다."""
+    tool = _make_type(client, admin, "tool", label="툴")
+    fluent = _make_object(client, admin, tool, label="Kestrel Mesher")
+    first = _miss(db, tool, "Kestrel Meshr", times=5)
+    _miss(db, tool, "Kestrel Meshar", times=3)
+    monkeypatch.setattr(misses, "PAGE_SUGGEST_SECONDS", 0.0)
+
+    got = client.get(
+        "/api/objects/alias-candidates", params={"type": tool}, headers=admin.headers
+    )
+    assert got.status_code == 200, got.text
+    rows = got.json()["items"]
+    assert len(rows) == 2
+    for row in rows:
+        assert row["suggestions"] == []
+        assert "시간이 걸려 이 줄은 건너뛰었습니다" in row["suggest_note"]
+    one = client.get(f"/api/objects/alias-candidates/{first.id}", headers=admin.headers)
+    assert [hit["id"] for hit in one.json()["suggestions"]][:1] == [fluent["id"]]
 
 
 @pytest.fixture

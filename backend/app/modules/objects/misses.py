@@ -35,13 +35,16 @@ import re
 import time
 import unicodedata
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import BackgroundTasks
 from sqlalchemy import (
+    ColumnElement,
     String,
+    and_,
     case,
     delete,
     func,
@@ -49,8 +52,11 @@ from sqlalchemy import (
     literal_column,
     or_,
     select,
+    true,
     union,
+    update,
 )
+from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -69,6 +75,7 @@ from app.modules.objects.scope import find as find_scope
 from app.modules.ontology import interfaces, managed
 from app.modules.ontology.models import ObjectInterface, ObjectType
 from app.shared import audit, extensions
+from app.shared.batches import chunks
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 from app.shared.permissions import is_any_manager, require_owner_edit, visible_owner_clause
 from app.shared.text import clean, compare_key
@@ -105,6 +112,31 @@ SIMILARITY_MIN = 0.3
 #: 제안을 찾는 타입(들)의 객체가 이보다 많으면 건너뛴다 — 비슷함은 인덱스를 못 타서 행을 다
 #: 본다. 건너뛴 사실은 그 줄에 적는다.
 SUGGEST_MAX_ROWS = 50_000
+#: 후보 한 쪽(별칭 후보 창)에서 **아직 미리 셈하지 않은 줄**의 「이것 아닐까」 를 그 자리에서
+#: 셈하는 시간(초) — 줄마다 수십 ~ 수백 ms 라(`similar`) 50줄이면 운영에서 30초를 넘는다.
+#: 넘으면 나머지 줄은 셈하지 않고 그렇다고 적는다(「다른 객체 선택」 으로 고른다). 미리 셈한
+#: 줄은 읽기만 한다(ADR 0074).
+PAGE_SUGGEST_SECONDS = 10.0
+
+# --- 미리 셈(ADR 0074) — 워커가 1분마다 차례를 보고 작업을 넣는다(`schedule`) ---------------
+
+#: 작업의 종류 이름(`jobs/kinds.py`).
+SUGGEST_KIND = "alias_suggest"
+#: 미리 셈할 때 적어 두는 제안 수 — 보여 주는 것(`SUGGEST`)보다 넉넉히. 부서로 좁힌 설치에서 그
+#: 사람에게 안 보이는 것 · 셈한 뒤에 지워진 것을 빼고도 셋이 남게. 그 자리에서 셀 때도 같은
+#: 수를 셈해 앞의 셋을 보인다 — 미리 셈한 것과 같은 셋이 나오게.
+SUGGEST_KEEP = 6
+#: 작업 하나가 셈하는 시간의 상한(초). **다른 작업이 기다리면 그 전에도 멈춘다**(하던 묶음까지)
+#: — 워커는 작업을 하나씩 돌리므로, 오래 쥐면 사람이 넣은 일괄 입력이 그 뒤에 선다.
+SUGGEST_RUN_SECONDS = 600.0
+#: 몇 줄마다 적나(커밋) — 셈은 읽기만 하고, 적을 때만 그 줄들을 잠근다(못 찾은 말을 남기는 길이
+#: 같은 줄을 기다리지 않게).
+SUGGEST_BATCH = 20
+#: 몇 번 안 찾은 줄(`REPEAT_MIN` 미만)은 며칠마다 다시 셈하나 — 검토함에 서지 않고 별칭 후보
+#: 창의 뒤쪽에만 있는 줄이라 날마다 셀 까닭이 없다(대기의 대부분이 이 줄이다).
+RARE_REFRESH_DAYS = 7
+#: 지난 차례가 실패 · 취소됐으면 이만큼 기다린다 — 같은 실패를 1분마다 쌓지 않게.
+SUGGEST_RETRY_AFTER = timedelta(hours=1)
 
 _DIGITS = re.compile(r"[\d\s.,:;/\\\-+_#()\[\]%]+")
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
@@ -346,6 +378,11 @@ def purge(db: Session) -> int:
 # --- 보기 -----------------------------------------------------------------------
 
 
+#: 범위 → (그 범위의 축 타입들, 그 객체 수) — 목록 한 번 안에서 같은 범위(대개 몇 개뿐이다)를
+#: 줄마다 다시 묻지 않는다(별칭 후보 200줄이면 타입 · 수 질의가 400번이었다).
+Axes = dict[str, tuple[list[ObjectType], int]]
+
+
 @dataclass
 class Suggestion:
     id: uuid.UUID
@@ -370,6 +407,8 @@ class Candidate:
     suggestions: list[Suggestion] = field(default_factory=list)
     suggest_note: str = ""
     """제안을 못 낸 까닭 — 「기록 타입」 · 「객체가 많아 건너뜀」."""
+    suggested_at: datetime | None = None
+    """제안이 **미리 셈한 것**이면 셈한 때(ADR 0074). 비면 지금 셈했거나 셈하지 않았다."""
 
 
 def require_reviewer(db: Session, user: User) -> None:
@@ -427,7 +466,43 @@ def page(
         )
     )
     labels = _labels(db)
-    return [describe(db, user, one, suggest=suggest, labels=labels) for one in rows], total
+    axes: Axes = {}
+    ready = stored(db, user, rows) if suggest else {}
+    until = time.monotonic() + PAGE_SUGGEST_SECONDS
+    out: list[Candidate] = []
+    for one in rows:
+        # 미리 셈한 줄은 읽기만 한다 — 시간은 아직 안 셈한 줄을 그 자리에서 셀 때만 본다.
+        late = (
+            suggest
+            and one.status == "pending"
+            and one.id not in ready
+            and time.monotonic() >= until
+        )
+        found = describe(
+            db,
+            user,
+            one,
+            suggest=suggest and not late,
+            labels=labels,
+            axes=axes,
+            ready=ready,
+        )
+        if late:
+            found.suggest_note = LATE_NOTE
+        out.append(found)
+    return out, total
+
+
+#: 아직 미리 셈하지 않았고, 그 자리에서 셀 시간도 다 된 줄.
+LATE_NOTE = (
+    "「이것 아닐까」 를 아직 계산해 두지 않았고 계산에 시간이 걸려 이 줄은 건너뛰었습니다 — "
+    "워커가 계산해 두면 표시됩니다(몇 분). 「다른 객체 선택」 으로 찾을 수 있습니다."
+)
+#: 미리 셈한 제안이 다 지워졌거나 이 사람에게 안 보인다.
+GONE_NOTE = (
+    "제안했던 객체가 지워졌거나 보이지 않습니다 — 「다른 객체 선택」 으로 찾으세요(밤에 다시 "
+    "계산합니다)."
+)
 
 
 def describe(
@@ -437,7 +512,11 @@ def describe(
     *,
     suggest: bool,
     labels: dict[str, tuple[str, str]] | None = None,
+    axes: Axes | None = None,
+    ready: dict[uuid.UUID, tuple[list[Suggestion], str]] | None = None,
 ) -> Candidate:
+    """후보 한 줄 — `suggest` 면 「이것 아닐까」 도. **미리 셈한 것이 있으면 그것을 읽고**
+    (`ready` — 여러 줄이면 `stored` 로 한 번에 읽어 넘긴다), 없으면 그 자리에서 센다."""
     known = labels if labels is not None else _labels(db)
     label, kind = known.get(row.scope, ("통합 검색" if not row.scope else row.scope, ""))
     out = Candidate(row=row, scope_label=label, scope_kind=kind if row.scope else "")
@@ -455,42 +534,152 @@ def describe(
         if found is not None:
             out.object_label, out.object_type_slug = found[0], found[1]
     if suggest and row.status == "pending":
-        out.suggestions, out.suggest_note = suggestions(db, user, row)
+        if ready is None and row.suggested_at is not None:
+            ready = stored(db, user, [row])
+        if ready is not None and row.id in ready:
+            out.suggestions, out.suggest_note = ready[row.id]
+            out.suggested_at = row.suggested_at
+        else:
+            out.suggestions, out.suggest_note = suggestions(db, user, row, axes)
     return out
 
 
-def suggestions(db: Session, user: User, row: SearchMiss) -> tuple[list[Suggestion], str]:
-    """「이것 아닐까」 — 그 범위의 **축** 타입에서 이름 · 식별자 · 별칭이 비슷한 것(pg_trgm).
+def suggestions(
+    db: Session, user: User | None, row: SearchMiss, axes: Axes | None = None
+) -> tuple[list[Suggestion], str]:
+    """「이것 아닐까」 를 **지금 셈한다** — 그 범위의 **축** 타입에서 이름 · 식별자 · 별칭이
+    비슷한 것(pg_trgm). 화면은 대개 미리 셈한 것을 읽는다(`stored`).
 
     기록 타입(시장 서비스 건 · 시험 결과)에는 제안하지 않는다 — 별칭은 사람이 이름으로 부르는
-    것(모델 · 부품 · 공급사)에 붙는다. **짐작이다** — 사람이 고른 것만 붙는다."""
-    types = scope_types(db, row.scope) or []
-    axes = [one for one in types if one.usage == "axis"]
-    if not axes:
-        return [], "기록 타입이라 제안하지 않습니다 — 별칭은 이름으로 부르는 축에 붙습니다."
-    return similar(db, user, axes, row.norm)
+    것(모델 · 부품 · 공급사)에 붙는다. **짐작이다** — 사람이 고른 것만 붙는다. 여러 줄을
+    잇달아 보면 `axes` 를 함께 넘긴다(범위마다 한 번만 묻는다). `user` 가 없으면(워커의 미리
+    셈) 부서를 가리지 않고 `SUGGEST_KEEP` 개를 낸다."""
+    found, size = _axes_of(db, row.scope, axes)
+    if not found:
+        return [], RECORD_NOTE
+    hits, note = similar(db, user, found, row.norm, size=size, keep=SUGGEST_KEEP)
+    return (hits if user is None else hits[:SUGGEST]), note
 
 
-def similar(
-    db: Session, user: User, axes: list[ObjectType], norm: str
-) -> tuple[list[Suggestion], str]:
-    """`axes` 타입에서 이름 · 식별자 · 별칭이 `norm`(`compare_key`) 과 비슷한 것(pg_trgm) —
-    별칭 후보의 「이것 아닐까」 와 이름 풀이가 없을 때의 `near` 가 함께 쓴다. **짐작이다.**"""
-    ids = [one.id for one in axes]
-    size = int(
+RECORD_NOTE = "기록 타입이라 제안하지 않습니다 — 별칭은 이름으로 부르는 축에 붙습니다."
+
+
+def _axes_of(db: Session, scope: str, axes: Axes | None) -> tuple[list[ObjectType], int]:
+    memo: Axes = axes if axes is not None else {}
+    if scope not in memo:
+        types = scope_types(db, scope) or []
+        found = [one for one in types if one.usage == "axis"]
+        memo[scope] = (found, _size(db, found) if found else 0)
+    return memo[scope]
+
+
+def stored(
+    db: Session, user: User, rows: list[SearchMiss]
+) -> dict[uuid.UUID, tuple[list[Suggestion], str]]:
+    """**미리 셈해 둔** 「이것 아닐까」(ADR 0074) — 셈한 줄(`suggested_at`)만, 줄 id 마다.
+
+    이름 · 식별자 · 타입은 지금의 객체에서 읽는다(바꾼 이름이 보인다). **지워진 것 · 이
+    사람에게 안 보이는 것은 뺀다** — 워커는 부서를 가리지 않고 넉넉히(`SUGGEST_KEEP`) 셈해
+    두었다. 다 빠지면 그렇다고 말한다(`GONE_NOTE`)."""
+    ready = [one for one in rows if one.suggested_at is not None]
+    wanted: set[uuid.UUID] = set()
+    for one in ready:
+        for got in one.suggested or []:
+            try:
+                wanted.add(uuid.UUID(str(got.get("id"))))
+            except ValueError:
+                continue
+    alive: dict[uuid.UUID, tuple[str, str | None, str, str]] = {}
+    seen = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    for batch in chunks(sorted(wanted, key=str)):
+        for object_id, label, key, slug, type_label in db.execute(
+            select(
+                ObjectInstance.id,
+                ObjectInstance.label,
+                ObjectInstance.key,
+                ObjectType.slug,
+                ObjectType.label,
+            )
+            .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+            .where(ObjectInstance.id.in_(batch), ObjectInstance.deleted_at.is_(None), seen)
+        ):
+            alive[object_id] = (label, key, slug, type_label)
+    out: dict[uuid.UUID, tuple[list[Suggestion], str]] = {}
+    for one in ready:
+        kept: list[Suggestion] = []
+        for got in one.suggested or []:
+            try:
+                object_id = uuid.UUID(str(got.get("id")))
+            except ValueError:
+                continue
+            found = alive.get(object_id)
+            if found is None:
+                continue
+            label, key, slug, type_label = found
+            kept.append(
+                Suggestion(
+                    id=object_id,
+                    type_slug=slug,
+                    type_label=type_label,
+                    label=label,
+                    key=key,
+                    matched=str(got.get("matched") or "label"),
+                    matched_text=str(got.get("matched_text") or ""),
+                    score=float(got.get("score") or 0.0),
+                )
+            )
+            if len(kept) >= SUGGEST:
+                break
+        note = one.suggest_note or ""
+        if not kept and one.suggested:
+            note = GONE_NOTE
+        out[one.id] = (kept, note)
+    return out
+
+
+def _size(db: Session, axes: list[ObjectType]) -> int:
+    return int(
         db.scalar(
             select(func.count()).where(
-                ObjectInstance.type_id.in_(ids), ObjectInstance.deleted_at.is_(None)
+                ObjectInstance.type_id.in_([one.id for one in axes]),
+                ObjectInstance.deleted_at.is_(None),
             )
         )
         or 0
     )
+
+
+def similar(
+    db: Session,
+    user: User | None,
+    axes: list[ObjectType],
+    norm: str,
+    *,
+    size: int | None = None,
+    keep: int = SUGGEST,
+) -> tuple[list[Suggestion], str]:
+    """`axes` 타입에서 이름 · 식별자 · 별칭이 `norm`(`compare_key`) 과 비슷한 것(pg_trgm) —
+    별칭 후보의 「이것 아닐까」 와 이름 풀이가 없을 때의 `near` 가 함께 쓴다. **짐작이다.**
+    `user` 가 없으면 부서를 가리지 않는다(워커의 미리 셈 — 읽을 때 거른다).
+
+    **한 번에 수십 ms ~ 수백 ms 다** — 문턱(0.3)이 낮아 한 말에 축 객체의 절반 넘게 걸리기도
+    해서(모델 코드처럼 앞부분이 같은 이름) 계획기가 trigram 인덱스를 버리고 다 훑는다. 축 객체
+    1.3만 건에 45ms, 별칭 13만 건이 함께면 0.47초(2026-11-16 실측, ADR 0073) — 그래서 별칭
+    후보는 워커가 미리 셈한다(ADR 0074). 같은 점수는 이름 · id 차례로 — 미리 보기와 적용이 같은
+    추천을 고르게(지문)."""
+    ids = [one.id for one in axes]
+    if size is None:
+        size = _size(db, axes)
     if size > SUGGEST_MAX_ROWS:
         return [], (
             f"찾을 객체가 {size:,}건이라 제안을 건너뛰었습니다 — 타입을 정해 찾거나 "
             "객체를 직접 고르세요."
         )
-    seen = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    seen = (
+        visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+        if user is not None
+        else true()
+    )
     alive = (ObjectInstance.type_id.in_(ids), ObjectInstance.deleted_at.is_(None), seen)
     label_score = func.greatest(
         func.similarity(func.lower(ObjectInstance.label), norm),
@@ -501,8 +690,12 @@ def similar(
     for one, by_label, by_key in db.execute(
         select(ObjectInstance, label_score, key_score)
         .where(*alive, func.greatest(label_score, key_score) >= SIMILARITY_MIN)
-        .order_by(func.greatest(label_score, key_score).desc(), ObjectInstance.label)
-        .limit(SUGGEST)
+        .order_by(
+            func.greatest(label_score, key_score).desc(),
+            ObjectInstance.label,
+            ObjectInstance.id,
+        )
+        .limit(keep)
     ):
         if by_key > by_label:
             best[one.id] = (float(by_key), "key", one.key or "", one)
@@ -516,13 +709,15 @@ def similar(
         select(ObjectInstance, ObjectAlias.value, alias_score)
         .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
         .where(ObjectAlias.type_id.in_(ids), *alive, alias_score >= SIMILARITY_MIN)
-        .order_by(alias_score.desc())
-        .limit(SUGGEST)
+        .order_by(alias_score.desc(), ObjectInstance.label, ObjectInstance.id)
+        .limit(keep)
     ):
         if float(score) > best.get(one.id, (0.0, "", "", one))[0]:
             best[one.id] = (float(score), "alias", value, one)
     by_id = {one.id: one for one in axes}
-    ranked = sorted(best.values(), key=lambda got: (-got[0], got[3].label))[:SUGGEST]
+    ranked = sorted(best.values(), key=lambda got: (-got[0], got[3].label, str(got[3].id)))[
+        :keep
+    ]
     return [
         Suggestion(
             id=one.id,
@@ -545,6 +740,230 @@ def get(db: Session, miss_id: uuid.UUID) -> SearchMiss:
             code("OBJECTS", 112), "그 별칭 후보가 없습니다 — 이미 정리됐을 수 있습니다."
         )
     return row
+
+
+# --- 미리 셈(ADR 0074) -----------------------------------------------------------
+
+
+def night_mark(now: datetime) -> datetime:
+    """가장 최근의 밤 시각(`ALIAS_SUGGEST_NIGHT_HOUR`, 서버 현지) — 그 전에 셈한 것은 그 밤에
+    다시 센다(그 사이에 생긴 객체 · 별칭이 제안에 들게)."""
+    local = now.astimezone()
+    mark = local.replace(
+        hour=get_settings().alias_suggest_night_hour, minute=0, second=0, microsecond=0
+    )
+    if mark > local:
+        mark -= timedelta(days=1)
+    return mark
+
+
+def due_clause(mark: datetime) -> ColumnElement[bool]:
+    """셈할 대기 줄 — **검토함에 서는 줄**(`REPEAT_MIN` 번 이상)은 안 셈했거나 이 밤 전에 셈한
+    것(새로 세 번을 넘기면 곧), 나머지는 이 밤 전에 생겨 안 셈했거나 7일 넘게 지난 것.
+
+    몇 번 안 찾은 줄을 생기자마자 세지 않는 까닭: 오타 하나마다 작업이 하나씩 들어간다(그 줄은
+    별칭 후보 창의 뒤쪽에만 있고, 그 자리에서도 시간 안에서 센다)."""
+    shown = SearchMiss.hits >= REPEAT_MIN
+    never = SearchMiss.suggested_at.is_(None)
+    return and_(
+        SearchMiss.status == "pending",
+        or_(
+            and_(shown, or_(never, SearchMiss.suggested_at < mark)),
+            and_(
+                ~shown,
+                or_(
+                    and_(never, SearchMiss.first_at < mark),
+                    SearchMiss.suggested_at < mark - timedelta(days=RARE_REFRESH_DAYS - 1),
+                ),
+            ),
+        ),
+    )
+
+
+def _others_waiting(db: Session) -> bool:
+    """다른 작업이 기다리나 — 그러면 하던 묶음까지만 하고 비켜 준다(남은 것은 다음 차례)."""
+    from app.modules.jobs.models import Job
+
+    return (
+        db.scalar(
+            select(Job.id).where(Job.status == "queued", Job.kind != SUGGEST_KIND).limit(1)
+        )
+        is not None
+    )
+
+
+def refresh(
+    db: Session,
+    *,
+    progress: Callable[[str, int, int], None],
+    commit: Callable[[], None],
+    seconds: float = SUGGEST_RUN_SECONDS,
+    now: datetime | None = None,
+    scope: str | None = None,
+) -> dict[str, Any]:
+    """**셈할 줄의 「이것 아닐까」 를 셈해 적는다** — 검토함에 서는 줄(많이 찾은 것)부터. 작업
+    (`alias_suggest`)의 본문이다.
+
+    `SUGGEST_BATCH` 줄마다 적고 커밋한다 — 셈하는 동안은 읽기만 하고, 적을 때만 그 줄들이
+    잠긴다. `seconds` 가 지나거나 **다른 작업이 기다리면** 거기서 멈춘다(남은 것은 다음 차례 —
+    워커가 1분마다 다시 넣는다). 부서를 가리지 않고 넉넉히(`SUGGEST_KEEP`) 센다 — 읽을 때 그
+    사람에게 보이는 것만 남긴다(`stored`). `scope` 를 주면 그 범위(타입 · 인터페이스 slug)의
+    줄만."""
+    started = time.monotonic()
+    mark = night_mark(now or datetime.now(UTC))
+    due = due_clause(mark)
+    if scope is not None:
+        due = and_(due, SearchMiss.scope == scope)
+    order = (
+        (SearchMiss.hits >= REPEAT_MIN).desc(),
+        SearchMiss.suggested_at.is_(None).desc(),
+        SearchMiss.hits.desc(),
+        func.jsonb_array_length(SearchMiss.askers).desc(),
+        SearchMiss.last_at.desc(),
+        SearchMiss.id,
+    )
+    total = int(db.scalar(select(func.count()).where(due)) or 0)
+    axes: Axes = {}
+    done = suggested = 0
+    stopped = ""
+    progress("「이것 아닐까」 셈", 0, total)
+    while True:
+        rows = list(
+            db.scalars(select(SearchMiss).where(due).order_by(*order).limit(SUGGEST_BATCH))
+        )
+        if not rows:
+            break
+        results: list[tuple[uuid.UUID, list[dict[str, Any]], str]] = []
+        for row in rows:
+            hits, note = suggestions(db, None, row, axes)
+            results.append(
+                (
+                    row.id,
+                    [
+                        {
+                            "id": str(one.id),
+                            "matched": one.matched,
+                            "matched_text": one.matched_text[:200],
+                            "score": one.score,
+                        }
+                        for one in hits
+                    ],
+                    note[:300],
+                )
+            )
+        # 셈한 때 — `now` 를 받았으면 그것(밤 시각보다 앞서지 않게: 그러면 같은 줄을 또 센다).
+        stamp = now if now is not None else datetime.now(UTC)
+        # 적는 차례는 id 차례 — 다른 쓰기(못 찾은 말 남기기)와 잠금 차례가 엇갈리지 않게.
+        for row_id, found, note in sorted(results, key=lambda got: str(got[0])):
+            db.execute(
+                update(SearchMiss)
+                .where(SearchMiss.id == row_id)
+                .values(suggested=found, suggested_at=stamp, suggest_note=note)
+            )
+        commit()
+        done += len(results)
+        suggested += sum(1 for _, found, _ in results if found)
+        progress("「이것 아닐까」 셈", done, max(total, done))
+        if time.monotonic() - started >= seconds:
+            stopped = "time"
+            break
+        if _others_waiting(db):
+            stopped = "yield"
+            break
+    left = int(db.scalar(select(func.count()).where(due)) or 0)
+    took = time.monotonic() - started
+    if done:
+        log.info(
+            "별칭 후보 「이것 아닐까」 셈: %d줄(제안 있음 %d) · %.1f초 · 남은 %d",
+            done,
+            suggested,
+            took,
+            left,
+        )
+    why = {"time": " · 시간이 다 돼 멈춤", "yield": " · 다른 작업에 비켜 멈춤"}.get(
+        stopped, ""
+    )
+    return {
+        "summary": (
+            f"「이것 아닐까」 {done:,}줄 계산(제안 있음 {suggested:,}) · 남은 {left:,}{why} — "
+            "남은 것은 다음 차례에"
+            if left
+            else f"「이것 아닐까」 {done:,}줄 계산(제안 있음 {suggested:,}) · 남은 것 없음"
+        ),
+        "done": done,
+        "suggested": suggested,
+        "left": left,
+        "seconds": round(took, 1),
+        "stopped": stopped,
+        "night_mark": mark.isoformat(),
+    }
+
+
+def schedule(db: Session, now: datetime | None = None) -> bool:
+    """**워커가 1분마다 부른다** — 셈할 줄(`due_clause`)이 있으면 작업을 넣는다(넣었으면 True).
+
+    두 워커가 같은 때 봐도 하나만 넣고(자문 잠금), 이미 기다리거나 돌면 안 넣는다. 지난 차례가
+    실패 · 취소됐으면 한 시간 기다린다 — 같은 실패를 1분마다 쌓지 않게."""
+    from app.modules.jobs import services as job_services
+    from app.modules.jobs.models import Job
+
+    if not db.scalar(
+        sql_text("SELECT pg_try_advisory_xact_lock(hashtext(:key))"),
+        {"key": SUGGEST_KIND + ":schedule"},
+    ):
+        return False
+    if db.scalar(
+        select(Job.id)
+        .where(Job.kind == SUGGEST_KIND, Job.status.in_(("queued", "running")))
+        .limit(1)
+    ):
+        return False
+    now = now or datetime.now(UTC)
+    last = db.scalar(
+        select(Job)
+        .where(Job.kind == SUGGEST_KIND, Job.status.in_(("done", "failed", "cancelled")))
+        .order_by(Job.created_at.desc())
+        .limit(1)
+    )
+    if last is not None and last.status != "done":
+        failed_at = last.finished_at or last.created_at
+        if now - failed_at < SUGGEST_RETRY_AFTER:
+            return False
+    if db.scalar(select(SearchMiss.id).where(due_clause(night_mark(now))).limit(1)) is None:
+        return False
+    job_services.enqueue(
+        db, kind=SUGGEST_KIND, params={"reason": "timer"}, user=None, workspace_id=None
+    )
+    db.commit()
+    return True
+
+
+def suggest_state(
+    db: Session, now: datetime | None = None, scope: str | None = None
+) -> dict[str, int]:
+    """미리 셈이 어디까지 왔나 — 대기 줄 중 셈한 것 · 셈할 것(검토함에 서는 줄은 따로).
+    `scope` 를 주면 그 범위만(검토함을 타입으로 거른 때)."""
+    mark = night_mark(now or datetime.now(UTC))
+    shown = SearchMiss.hits >= REPEAT_MIN
+    where = [SearchMiss.status == "pending"]
+    if scope is not None:
+        where.append(SearchMiss.scope == scope)
+    row = db.execute(
+        select(
+            func.count().filter(shown),
+            func.count().filter(shown, SearchMiss.suggested_at.isnot(None)),
+            func.count(),
+            func.count().filter(SearchMiss.suggested_at.isnot(None)),
+            func.count().filter(due_clause(mark)),
+        ).where(*where)
+    ).one()
+    return {
+        "shown": int(row[0]),
+        "shown_ready": int(row[1]),
+        "pending": int(row[2]),
+        "ready": int(row[3]),
+        "due": int(row[4]),
+    }
 
 
 # --- 붙이기 · 무시 ----------------------------------------------------------------

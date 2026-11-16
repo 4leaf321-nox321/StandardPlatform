@@ -667,6 +667,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_proposals_rehearsal(repeat))
     if not only or "edgefields" in (only or ""):
         results.extend(_edgefields_rehearsal(client, admin, repeat))
+    if not only or "review" in (only or ""):
+        results.extend(_review_rehearsal())
     if only and "map" in only.split(","):
         # 판을 만들어 **남긴다**(지도는 계산해 둔 사본 — 화면이 이 판으로 선다). 덧붙임 · 쓰기
         # 비용은 롤백 안에서 잰다. 전체 측정에는 안 든다(판 만들기가 분 단위).
@@ -3667,6 +3669,174 @@ def _proposals_rehearsal(repeat: int) -> list[tuple[str, str, str, str]]:
     return out
 
 
+def _review_rehearsal() -> list[tuple[str, str, str, str]]:
+    """검토함의 종류마다 시간 상한(ADR 0073) — 못 찾은 말 3만(세 번 이상 2.4만)과 축 객체마다
+    외부 식별자 별칭 10개(13.4만 — 동기화의 `source:` 별칭 모양)를 **롤백 안에서** 심고, 별칭
+    후보가 느린 채로 검토함 전체 · 별칭 후보만 · 끊기 · 「추천대로 모두」 미리 보기를 잰다.
+    별칭 후보는 줄마다 「이것 아닐까」 질의(한 줄 0.5초 남짓)라 시간 상한에 걸려 앞의 것만 낸다
+    — 표의 `late` · 건수가 그것이다. 각 줄 한 번씩(한 번이 8 ~ 20초). 이어 워커의 미리 셈
+    (ADR 0074 — `misses.refresh`)을 5분 돌려 앞의 줄을 셈해 두고 같은 것을 다시 잰다(약
+    7분)."""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.objects import misses
+    from app.modules.objects.models import SearchMiss
+    from app.modules.ontology.models import ObjectType
+    from app.modules.review import services as review_services
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("review", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def listed(label: str, query: Any) -> None:
+        assert user is not None
+        started = time.perf_counter()
+        got = review_services.collect(db, user, query)
+        took = time.perf_counter() - started
+        alias = next(one for one in got.kinds if one.provider.kind == "alias_candidate")
+        others = sum(one.seconds for one in got.kinds if one is not alias)
+        row(
+            label,
+            took,
+            f"별칭 후보 {alias.scanned}건(late={alias.late}, {alias.seconds:.1f}초) · "
+            f"나머지 {len(got.kinds) - 1}종류 {others:.1f}초",
+        )
+
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == ADMIN))
+        assert user is not None
+        started = time.perf_counter()
+        db.execute(
+            text(
+                """
+                INSERT INTO search_misses
+                    (id, scope, norm, text, hits, askers, vias, status, first_at, last_at)
+                SELECT gen_random_uuid(),
+                       CASE WHEN g % 10 < 5 THEN '' WHEN g % 10 < 9 THEN 'plm_model'
+                            ELSE 'plm_task' END,
+                       lower(t), t, 3 + (g * 7919) % 50, '["a","b"]'::jsonb,
+                       '["search"]'::jsonb, 'pending',
+                       now() - make_interval(secs => g), now() - make_interval(secs => g)
+                  FROM (SELECT g, CASE g % 4
+                           WHEN 0 THEN 'SM-X0' || lpad((g % 6000)::text, 4, '0') || '_KR'
+                           WHEN 1 THEN '과제' || (g % 5000) || '번 ' || g
+                           WHEN 2 THEN 'galaxy ' || g
+                           ELSE '모델 ' || md5(g::text) END AS t
+                          FROM generate_series(1, 30000) g) s
+                ON CONFLICT DO NOTHING
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO object_aliases
+                    (id, object_id, type_id, kind, value, norm, source, note)
+                SELECT gen_random_uuid(), o.id, o.type_id, 'source:plm',
+                       'PLM-' || o.key || '-' || j, lower('PLM-' || o.key || '-' || j), '', ''
+                  FROM objects o JOIN object_types t ON t.id = o.type_id
+                 CROSS JOIN generate_series(1, 10) j
+                 WHERE t.usage = 'axis' AND o.deleted_at IS NULL
+                """
+            )
+        )
+        db.execute(text("ANALYZE search_misses"))
+        db.execute(text("ANALYZE object_aliases"))
+        row("넣기 · 못 찾은 말 3만 · 별칭 13.4만(롤백 안)", time.perf_counter() - started, "")
+
+        axes = [
+            one
+            for one in db.scalars(select(ObjectType).where(ObjectType.is_active.is_(True)))
+            if one.usage == "axis"
+        ]
+        sample = list(
+            db.scalars(
+                select(SearchMiss.norm)
+                .where(SearchMiss.status == "pending", SearchMiss.scope == "")
+                .order_by(SearchMiss.hits.desc(), SearchMiss.id)
+                .limit(20)
+            )
+        )
+        times: list[float] = []
+        for norm in sample:
+            began = time.perf_counter()
+            misses.similar(db, user, axes, norm)
+            times.append(time.perf_counter() - began)
+        row(
+            "「이것 아닐까」 한 줄(축 전부 · 별칭 포함)",
+            statistics.median(times),
+            f"중앙 · 최대 {max(times):.2f}초 — 200줄이면 그 200배",
+        )
+        listed("검토함 전체(종류마다 8초 · 합 15초)", review_services.Query())
+        listed("별칭 후보만(15초)", review_services.Query(kind="alias_candidate"))
+        kind_seconds, grace = review_services.KIND_SECONDS, review_services.KIND_GRACE
+        try:
+            review_services.KIND_SECONDS, review_services.KIND_GRACE = 1.0, 0.0
+            listed("끊기 — 상한 1초 · 틈 0(질의 중간에 취소)", review_services.Query())
+        finally:
+            review_services.KIND_SECONDS, review_services.KIND_GRACE = kind_seconds, grace
+        started = time.perf_counter()
+        planned = review_services.preview(
+            db,
+            user,
+            mode="recommended",
+            decisions=[],
+            query=review_services.Query(kind="alias_candidate"),
+            threshold=0.5,
+            action="accept",
+        )
+        row(
+            "「추천대로 모두」 미리 보기(별칭 후보만 · 문턱 0.5)",
+            time.perf_counter() - started,
+            f"결정 {len(planned.decisions)} · {planned.counts}",
+        )
+
+        # 미리 셈(ADR 0074) — 워커의 작업 본문(`misses.refresh`)을 돌려 검토함에 서는 줄의 앞
+        # 200줄 넘게 셈한 뒤 같은 것을 다시 잰다. 커밋하지 않는다(롤백 안 — 적는 것은 flush
+        # 뿐).
+        # 이 DB 에 남은 대기 작업이 있으면 비켜 주므로(`_others_waiting`) 여기서는 안 본다.
+        waiting = misses._others_waiting
+        misses._others_waiting = lambda _db: False  # type: ignore[assignment]
+        try:
+            started = time.perf_counter()
+            done = misses.refresh(db, progress=lambda *_: None, commit=db.flush, seconds=300.0)
+            took = time.perf_counter() - started
+        finally:
+            misses._others_waiting = waiting  # type: ignore[assignment]
+        row(
+            "미리 셈 — 워커의 작업 본문(300초 상한)",
+            took,
+            f"{done['done']:,}줄(제안 있음 {done['suggested']:,}) · 줄마다 "
+            f"{took / max(done['done'], 1):.2f}초 · 남은 {done['left']:,}",
+        )
+        listed("검토함 전체 — 앞의 줄을 미리 셈한 뒤", review_services.Query())
+        listed("별칭 후보만 — 미리 셈한 뒤", review_services.Query(kind="alias_candidate"))
+        started = time.perf_counter()
+        planned = review_services.preview(
+            db,
+            user,
+            mode="recommended",
+            decisions=[],
+            query=review_services.Query(kind="alias_candidate"),
+            threshold=0.5,
+            action="accept",
+        )
+        row(
+            "「추천대로 모두」 미리 보기 — 미리 셈한 뒤",
+            time.perf_counter() - started,
+            f"결정 {len(planned.decisions)} · {planned.counts}",
+        )
+    finally:
+        db.rollback()
+        db.close()
+    return out
+
+
 def uuid_hex() -> str:
     import uuid as uuid_module
 
@@ -3725,7 +3895,7 @@ def main() -> None:
         help=(
             "이 영역만 잰다(list · profile · graph · summary · metrics · recipes · visits · "
             "alerts · incremental · rules · periods · explode · lineage · proposals · "
-            "edgefields · map …). map 은 이름으로만(판을 만들어 남긴다)"
+            "edgefields · review · map …). map 은 이름으로만(판을 만들어 남긴다)"
         ),
     )
     args = parser.parse_args()

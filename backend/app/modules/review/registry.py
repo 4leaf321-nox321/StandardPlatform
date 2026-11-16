@@ -49,6 +49,11 @@ class Filters:
     """전역(부서 없음)만."""
     item_ids: frozenset[str] | None = None
     """이 항목들만 — 미리 보기 · 적용이 결정의 항목을 **원래 자리에서 다시** 읽을 때."""
+    deadline: float | None = None
+    """이 시각(`time.monotonic()`)이 지나면 **줄마다 드는 일을 멈추고 거기까지만** 낸다
+    (`Collected.cut`). 종류 하나가 느려도 검토함 전체가 막히지 않게 검토함이 정한다
+    (`services.collect` — 스스로 멈추지 못하는 종류는 조금 뒤에 검토함이 끊는다). 결정할 항목을
+    다시 읽을 때(`item_ids`)는 없다 — 고른 것은 다 읽는다."""
 
 
 @dataclass
@@ -111,6 +116,9 @@ class Collected:
     """원래 자리에 있는 수 — `items` 는 그중 읽은 만큼(상한)이다."""
     notes: list[str] = field(default_factory=list)
     """빠진 것 · 어림한 것 — 「큰 타입은 훑지 않았다」 같은 말. 0건의 이유도 여기."""
+    cut: bool = False
+    """시간(`Filters.deadline`)이 다 돼 일부만 읽었다(줄마다 드는 일을 멈췄다) — 무엇을
+    건너뛰었는지는 `notes` 에."""
 
 
 @dataclass

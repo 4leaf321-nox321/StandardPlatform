@@ -29,6 +29,7 @@ import {
 } from '@/shared/components/ui/dialog'
 import { Input } from '@/shared/components/ui/input'
 import { useResource } from '@/shared/hooks/useResource'
+import { shownDateTime } from '@/shared/lib/datetime'
 
 const VIAS: Record<string, string> = {
   resolve: '이름 풀이',
@@ -163,6 +164,11 @@ export function AliasCandidatesDialog({ onClose, onDone }: AliasCandidatesDialog
                   ))}
                   {one.suggest_note && (
                     <span className="text-muted-foreground">{one.suggest_note}</span>
+                  )}
+                  {one.suggestions.length > 0 && one.suggested_at && (
+                    <span className="text-muted-foreground">
+                      ({shownDateTime(one.suggested_at)} 계산)
+                    </span>
                   )}
                   <Button
                     size="sm"

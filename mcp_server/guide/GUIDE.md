@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-14a
+GUIDE_VERSION: 2026-11-16a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -507,7 +507,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 어떤 객체의 별칭으로 붙이면 **다음부터 찾힌다** — 「앤시스」 로 못 찾던 것이 「Ansys」 로 풀린다.
 
 1. `alias_candidates(type_slug=)` — 많이 · 여럿이 찾은 것부터. 줄마다 `suggestions`(이름 ·
-   식별자 · 별칭이 비슷한 것)가 온다. **짐작이다** — 첫 줄을 고르지 않는다.
+   식별자 · 별칭이 비슷한 것)가 온다. **짐작이다** — 첫 줄을 고르지 않는다. `suggested_at` 이
+   있으면 서버가 **미리 셈해 둔 것**이다(밤마다 다시) — 그 뒤에 만든 객체는 안 들 수 있다.
 2. 사람에게 「「앤시스」 를 Ansys 의 별칭으로 붙일까요?」 를 묻고 객체를 받는다(제안에 없으면
    `object_resolve` 로 정한다).
 3. `alias_candidate_apply(candidate_id, object_id=, apply=false)` — 붙기 전 · 뒤 별칭과
@@ -529,6 +530,9 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
    (`total` 원래 자리에 있는 수 · `matched` 거르기에 맞는 수)를 센다. 요약은 그것으로. 줄의
    `reason` 이 확신도의 근거, `blocked` 가 이 토큰의 주인이 처리할 수 없는 까닭이다.
    `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄이 한 줄로 접힌다(`members`).
+   **`kinds[].late` 면 그 종류는 시간 안에 다 못 읽었다**(종류마다 시간 상한 — 한 종류가 느려도
+   나머지는 온다). 앞의 `scanned` 건만 왔거나(0 이면 건너뜀) — 「없다」 가 아니다. 그 종류의
+   `notes` 를 전하고 `review_list(kind=<그 종류>)` 로 다시 부른다.
 2. 사람에게 보이고 무엇을 할지 받는다. **추천은 규칙의 짐작이다** — 사람이 「추천대로」 라고
    말하지 않았으면 고르지 않는다.
 3. `review_decide(decisions=[{kind, item_id, action, value?}])` 또는 「추천대로 모두」

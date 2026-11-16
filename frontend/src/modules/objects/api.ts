@@ -981,6 +981,8 @@ export interface AliasCandidate {
   decided_at: string | null
   suggestions: AliasSuggestion[]
   suggest_note: string
+  /** 「이것 아닐까」 를 미리 셈한 때(ADR 0074 — 워커가 세고 밤마다 다시). 비면 지금 셈했거나 셈하지 않았다. */
+  suggested_at: string | null
 }
 
 export interface AliasCandidatePage {

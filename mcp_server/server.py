@@ -1658,7 +1658,9 @@ async def alias_candidates(
     그 말이 어떤 객체의 다른 이름이면 `alias_candidate_apply(action="attach")` 로 그 객체의
     별칭으로 붙인다 — **다음부터 찾힌다.** 줄마다 `suggestions`(「이것 아닐까」 — 이름 ·
     식별자 · 별칭이 비슷한 것)가 오지만 **짐작이다**: 사람에게 보이고 어느 객체인지 받은 뒤에
-    붙인다. 별칭이 될 말이 아니면(오타 · 엉뚱한 말) `action="ignore"`.
+    붙인다. `suggested_at` 이 있으면 서버가 미리 셈해 둔 것(밤마다 다시 — 그 뒤에 만든 객체는
+    안 들 수 있다, 없으면 `object_resolve` 로 찾는다). 별칭이 될 말이 아니면(오타 · 엉뚱한 말)
+    `action="ignore"`.
 
     `type_slug` 로 그 타입에서 못 찾은 것만(빈 글자 `""` 면 통합 검색에서 못 찾은 것).
     `status` 는 `pending`(기본) · `attached` · `ignored` · `all`. 부서 관리자 이상. 누가
@@ -1761,7 +1763,9 @@ async def review_list(
     `confidence`(0~1) · `reason`(왜 이 추천인가) · `rows`(한 결정이 손대는 줄 수) · `blocked`
     (이 토큰의 주인이 처리할 수 없는 까닭) · `link`(원래 화면 — 사람에게는 옆의 `url`).
     `kinds` 가 종류마다 수를 센다(`total` 원래 자리에 있는 수 · `matched` 거르기에 맞는 수) —
-    **요약할 때 이것으로.**
+    **요약할 때 이것으로.** 종류마다 시간 상한이 있다(ADR 0073): `kinds[].late` 면 그 종류는
+    시간 안에 다 못 읽었다(앞의 `scanned` 건만, 0 이면 건너뜀) — **「없다」 고 말하지 말고**
+    그 종류의 `notes` 를 전하고 `kind=` 로 그 종류만 다시 부른다(그러면 시간을 더 쓴다).
 
     거르기: `kind`(종류 하나) · `type_slug` · `workspace`(부서 slug, `@global` 은 전역) ·
     `min_confidence`. `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄을 한 줄로
