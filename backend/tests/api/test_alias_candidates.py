@@ -250,13 +250,51 @@ def test_부서_관리자_이상만_보고_자기_부서_것에만_붙인다(
     assert got.status_code == 404
 
 
-def test_여러_번_찾은_말이_남은_일에_뜬다(client: TestClient, admin: Signed) -> None:
+def test_여러_사람이_찾은_말이_남은_일에_뜨고_한_사람이_몰아_친_것은_안_뜬다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """한 사람이 같은 말을 한 번에 세 번 친 것(오타를 고쳐 가며 · AI 가 한 대화에서 되물음)은
+    별칭 감이 아니다 — 횟수만 보던 때는 그런 줄이 운영에서 몇만 건 쌓였다(ADR 0075). 다른
+    사람이 또 찾으면 선다."""
     tool = _make_type(client, admin, label="툴")
     before = maintenance_counts(client, admin).get("alias_candidates", 0)
     for _ in range(misses.REPEAT_MIN):
         assert _resolve(client, admin, tool, "자주찾는말") == "none"
+    assert maintenance_counts(client, admin).get("alias_candidates", 0) == before
+    assert _resolve(client, manager, tool, "자주찾는말") == "none"
     after = maintenance_counts(client, admin)
     assert after.get("alias_candidates", 0) == before + 1
+
+
+def test_한_사람이라도_다른_날_또_찾으면_서고_오래전에만_찾던_말은_안_선다(
+    db: Session,
+) -> None:
+    """사람 수만 보면 한 사람이 날마다 찾는 진짜 별칭 감을 놓친다 — 처음과 마지막이 하루 넘게
+    떨어지면 선다. 30일 넘게 아무도 안 찾은 말은 이미 다른 길로 풀렸을 때가 많다."""
+    now = datetime.now(UTC)
+    rows = {
+        "한 사람 · 몰아 침": dict(
+            askers=["a"], first_at=now - timedelta(hours=1), last_at=now
+        ),
+        "한 사람 · 다른 날": dict(askers=["a"], first_at=now - timedelta(days=3), last_at=now),
+        "두 사람": dict(askers=["a", "b"], first_at=now - timedelta(hours=1), last_at=now),
+        "두 사람 · 오래전": dict(
+            askers=["a", "b"],
+            first_at=now - timedelta(days=60),
+            last_at=now - timedelta(days=40),
+        ),
+    }
+    scope = f"scope_{uuid.uuid4().hex[:8]}"
+    for text, extra in rows.items():
+        db.add(SearchMiss(scope=scope, norm=text, text=text, hits=5, **extra))
+    db.commit()
+    shown = set(
+        db.scalars(
+            select(SearchMiss.text).where(SearchMiss.scope == scope, misses.shown_clause())
+        )
+    )
+    assert shown == {"한 사람 · 다른 날", "두 사람"}
+    assert misses.hidden_count(db, scope) == 2
 
 
 def test_오래된_것과_지운_타입의_줄은_정리한다(db: Session) -> None:
@@ -266,13 +304,17 @@ def test_오래된_것과_지운_타입의_줄은_정리한다(db: Session) -> N
         SearchMiss(scope="", norm=f"rare-{uuid.uuid4().hex}", text="드문 말", hits=1),
         SearchMiss(scope="gone_type_x", norm=f"gone-{uuid.uuid4().hex}", text="지운 타입"),
         SearchMiss(scope="", norm=f"keep-{uuid.uuid4().hex}", text="최근 대기", hits=1),
+        # 세 번 넘게 찾은 말도 90일 아무도 안 찾으면 간다 — 예전에는 영영 남아 쌓였다(ADR
+        # 0075).
+        SearchMiss(scope="", norm=f"many-{uuid.uuid4().hex}", text="옛날 자주", hits=40),
     ]
     db.add_all(rows)
     db.flush()
     rows[0].last_at = old
-    rows[1].last_at = datetime.now(UTC) - timedelta(days=misses.KEEP_RARE_DAYS + 1)
+    rows[1].last_at = datetime.now(UTC) - timedelta(days=misses.KEEP_PENDING_DAYS + 1)
+    rows[4].last_at = datetime.now(UTC) - timedelta(days=misses.KEEP_PENDING_DAYS + 1)
     db.commit()
-    assert misses.purge(db) >= 3
+    assert misses.purge(db) >= 4
     db.commit()
     left = set(
         db.scalars(select(SearchMiss.text).where(SearchMiss.id.in_([r.id for r in rows])))

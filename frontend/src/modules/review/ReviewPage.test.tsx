@@ -12,17 +12,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const reviewApi = vi.hoisted(() => ({
   items: vi.fn(),
+  kinds: vi.fn(),
   plan: vi.fn(),
   apply: vi.fn(),
+  bulk: vi.fn(),
   batches: vi.fn(),
   undo: vi.fn(),
   accuracy: vi.fn(),
+  auto: vi.fn(),
+  setAuto: vi.fn(),
 }))
 vi.mock('@/modules/review/api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/modules/review/api')>()
   return { ...real, reviewApi }
 })
-const jobsApi = vi.hoisted(() => ({ waitFor: vi.fn() }))
+const jobsApi = vi.hoisted(() => ({ waitFor: vi.fn(), apply: vi.fn(), download: vi.fn() }))
 vi.mock('@/modules/jobs/api', () => ({ jobsApi }))
 
 function item(id: string, extra: Record<string, unknown> = {}) {
@@ -86,6 +90,48 @@ function page(items: unknown[], shown: unknown[] = kinds) {
   }
 }
 
+/** 볼 수 있는 종류 — 「전체」 는 이 차례로 종류마다 따로 부른다(ADR 0075). */
+const infos = [
+  ['alias_candidate', '별칭 후보'],
+  ['stale_lineage', '낡은 파생물'],
+  ['proposed_relation', '제안된 관계'],
+  ['broken_ref', '지워진 것을 가리키는 칸'],
+].map(([kind, label]) => ({
+  kind,
+  label,
+  description: '',
+  link: '/quality',
+  actionable: true,
+  undo_note: '',
+}))
+
+interface Row {
+  kind: string
+  [key: string]: unknown
+}
+interface Summary {
+  kind: string | null
+  [key: string]: unknown
+}
+
+/** 종류마다 따로 묻는 것에 그 종류의 줄 · 요약만 돌려준다 — 종류 없이 물으면 전부. */
+function serve(all: Row[], shown: Summary[] = kinds, extra: Record<string, unknown> = {}) {
+  reviewApi.items.mockImplementation((filters: { kind?: string | null }) => {
+    const kind = filters.kind ?? null
+    const mine = all.filter((one) => !kind || one.kind === kind)
+    const summary = shown.filter((one) => !kind || one.kind === kind)
+    const fallback = {
+      ...kinds[0],
+      kind,
+      label: kind,
+      total: mine.length,
+      matched: mine.length,
+      scanned: mine.length,
+    }
+    return Promise.resolve({ ...page(mine, summary.length ? summary : [fallback]), ...extra })
+  })
+}
+
 function plan(extra: Record<string, unknown> = {}) {
   return {
     fingerprint: 'fp',
@@ -128,6 +174,7 @@ function plan(extra: Record<string, unknown> = {}) {
     rows: 1,
     as_job: false,
     notes: [],
+    unread: 0,
     ...extra,
   }
 }
@@ -148,9 +195,11 @@ function rowOf(id: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  reviewApi.items.mockResolvedValue(page([item('r1'), item('r2')]))
+  reviewApi.kinds.mockResolvedValue(infos)
+  serve([item('r1'), item('r2')])
   reviewApi.batches.mockResolvedValue([])
   reviewApi.accuracy.mockResolvedValue({ kinds: [], bands: [] })
+  reviewApi.auto.mockResolvedValue([])
 })
 
 describe('검토함', () => {
@@ -180,9 +229,7 @@ describe('검토함', () => {
     fireEvent.keyDown(window, { key: 'k' })
     await waitFor(() => expect(rowOf('r1')).toHaveAttribute('data-focused', 'true'))
     fireEvent.keyDown(window, { key: 'x' })
-    await waitFor(() =>
-      expect(within(rowOf('r1')).getByRole('checkbox')).toBeChecked(),
-    )
+    await waitFor(() => expect(within(rowOf('r1')).getByRole('checkbox')).toBeChecked())
 
     fireEvent.keyDown(window, { key: 'a' })
     await waitFor(() =>
@@ -204,9 +251,7 @@ describe('검토함', () => {
     await waitFor(() =>
       expect(reviewApi.plan).toHaveBeenCalledWith({
         mode: 'decisions',
-        decisions: [
-          { kind: 'alias_candidate', item_id: 'r1', action: 'choose', value: 'r1-b' },
-        ],
+        decisions: [{ kind: 'alias_candidate', item_id: 'r1', action: 'choose', value: 'r1-b' }],
       }),
     )
     // 막히는 것이 있으면 바로 적용하지 않고 미리 보기를 띄운다.
@@ -293,9 +338,13 @@ describe('검토함', () => {
   })
 
   it('묶은 줄의 결정은 펼친 줄마다 간다', async () => {
-    reviewApi.items.mockResolvedValue(
-      page([item('r1', { id: 'group:x', members: ['m1', 'm2'], question: '「r1」 을(를) 무엇의 별칭으로 추가할까요?' })]),
-    )
+    serve([
+      item('r1', {
+        id: 'group:x',
+        members: ['m1', 'm2'],
+        question: '「r1」 을(를) 무엇의 별칭으로 추가할까요?',
+      }),
+    ])
     reviewApi.plan.mockResolvedValue(plan({ counts: { apply: 2, blocked: 0 } }))
     await open()
     fireEvent.keyDown(window, { key: 'a' })
@@ -345,24 +394,22 @@ describe('검토함', () => {
 
 describe('확신도가 없는 추천(낡은 파생물, ADR 0041)', () => {
   it('추천은 있는데 확신도가 없으면 「추천 없음」 이 아니라 「확신도 없음」 으로 적는다', async () => {
-    reviewApi.items.mockResolvedValue(
-      page([
-        item('r1'),
-        item('r2', {
-          kind: 'stale_lineage',
-          kind_label: '낡은 파생물',
-          choices: [
-            { value: 'checked', label: '영향 없음 확인', detail: '', score: null },
-            { value: 'rebuilt', label: '다시 만들었음', detail: '', score: null },
-          ],
-          recommended: 'checked',
-          recommended_label: '영향 없음 확인',
-          confidence: null,
-          reason: '메시 M-12 의 개정 B → C',
-          ignorable: false,
-        }),
-      ]),
-    )
+    serve([
+      item('r1'),
+      item('r2', {
+        kind: 'stale_lineage',
+        kind_label: '낡은 파생물',
+        choices: [
+          { value: 'checked', label: '영향 없음 확인', detail: '', score: null },
+          { value: 'rebuilt', label: '다시 만들었음', detail: '', score: null },
+        ],
+        recommended: 'checked',
+        recommended_label: '영향 없음 확인',
+        confidence: null,
+        reason: '메시 M-12 의 개정 B → C',
+        ignorable: false,
+      }),
+    ])
     await open()
     const row = rowOf('r2')
     const badge = within(row).getByText('확신도 없음')
@@ -395,23 +442,21 @@ describe('제안된 관계(ADR 0042)', () => {
         link: '/o/part/bolt',
         ...extra,
       })
-    reviewApi.items.mockResolvedValue(
-      page([
-        item('r1'),
-        proposal('p1', 'ACME', {
-          recommended: 'accept',
-          recommended_label: '확정',
-          confidence: 0.95,
-          reason: '제안한 쪽의 확신도 0.95 — 「확정」 을 앞에 둡니다.',
-        }),
-        proposal('p2', 'BETA', {
-          recommended: null,
-          recommended_label: null,
-          confidence: null,
-          reason: '확신도가 없는 제안이라 추천하지 않습니다 — 근거를 보고 고르세요.',
-        }),
-      ]),
-    )
+    serve([
+      item('r1'),
+      proposal('p1', 'ACME', {
+        recommended: 'accept',
+        recommended_label: '확정',
+        confidence: 0.95,
+        reason: '제안한 쪽의 확신도 0.95 — 「확정」 을 앞에 둡니다.',
+      }),
+      proposal('p2', 'BETA', {
+        recommended: null,
+        recommended_label: null,
+        confidence: null,
+        reason: '확신도가 없는 제안이라 추천하지 않습니다 — 근거를 보고 고르세요.',
+      }),
+    ])
     await open()
     const high = screen.getByText('「볼트」 —공급받음→ 「ACME」 을(를) 이을까요?').closest('li')!
     expect(within(high).getByText('확신도 0.95')).toBeInTheDocument()
@@ -436,7 +481,9 @@ describe('종류마다 시간 상한(ADR 0073)', () => {
         scanned: 18,
         late: true,
         seconds: 8.4,
-        notes: ['아직 미리 계산하지 않은 182건은 그 자리에서 계산하는 데 시간이 걸려 이번에 건너뛰었습니다'],
+        notes: [
+          '아직 미리 계산하지 않은 182건은 그 자리에서 계산하는 데 시간이 걸려 이번에 건너뛰었습니다',
+        ],
       },
       {
         kind: 'broken_ref',
@@ -453,7 +500,7 @@ describe('종류마다 시간 상한(ADR 0073)', () => {
         seconds: 12.0,
       },
     ]
-    reviewApi.items.mockResolvedValue(page([item('r1')], slow))
+    serve([item('r1')], slow)
     await open()
     const notice = screen.getByRole('status', { name: '시간 안에 다 읽지 못한 종류' })
     expect(notice).toHaveTextContent('시간이 걸려 18건만 읽었습니다.')
@@ -475,8 +522,7 @@ describe('종류마다 시간 상한(ADR 0073)', () => {
   })
 
   it('항목이 없어도 늦은 종류가 있으면 「검토할 항목이 없습니다」 라고 하지 않는다', async () => {
-    reviewApi.items.mockResolvedValue({
-      ...page([], [{ ...kinds[0], total: 0, matched: 0, scanned: 0, late: true, notes: [] }]),
+    serve([], [{ ...kinds[0], total: 0, matched: 0, scanned: 0, late: true, notes: [] }], {
       notes: ['시간 안에 다 읽지 못한 종류가 있습니다(별칭 후보) — 없는 것이 아닙니다.'],
     })
     const { default: ReviewPage } = await import('@/modules/review/ReviewPage')
@@ -487,5 +533,156 @@ describe('종류마다 시간 상한(ADR 0073)', () => {
     )
     expect(await screen.findByText('시간 안에 다 읽지 못했습니다')).toBeInTheDocument()
     expect(screen.queryByText('검토할 항목이 없습니다')).not.toBeInTheDocument()
+  })
+})
+
+describe('검토함이 많을 때(ADR 0075)', () => {
+  it('「전체」 는 종류마다 따로 부르고 먼저 온 종류부터 그린다 — 느린 종류는 「읽는 중」', async () => {
+    const never = new Promise(() => {})
+    reviewApi.items.mockImplementation((filters: { kind?: string | null }) =>
+      filters.kind === 'broken_ref'
+        ? never
+        : Promise.resolve(
+            page(filters.kind === 'alias_candidate' ? [item('r1'), item('r2')] : [], [
+              {
+                ...kinds[0],
+                kind: filters.kind,
+                total: filters.kind === 'alias_candidate' ? 2 : 0,
+                matched: filters.kind === 'alias_candidate' ? 2 : 0,
+              },
+            ]),
+          ),
+    )
+    await open()
+    expect(reviewApi.items).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'alias_candidate' }),
+      expect.objectContaining({ limit: 20, offset: 0 }),
+    )
+    expect(reviewApi.items).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'broken_ref' }),
+      expect.anything(),
+    )
+    // 느린 종류는 칩의 수 대신 「읽는 중」, 자리에도 「읽는 중…」 — 나머지는 이미 섰다.
+    expect(screen.getByText('지워진 것을 가리키는 칸 — 읽는 중…')).toBeInTheDocument()
+    expect(rowOf('r2')).toBeInTheDocument()
+  })
+
+  it('종류의 줄이 더 있으면 「이 종류 N건 모두 보기」 로 그 종류만 쪽을 넘겨 본다', async () => {
+    serve([item('r1'), item('r2')], [{ ...kinds[0], total: 45, matched: 45, scanned: 45 }], {
+      total: 45,
+    })
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: '이 종류 45건 모두 보기' }))
+    await waitFor(() =>
+      expect(reviewApi.items).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'alias_candidate' }),
+        expect.objectContaining({ limit: 50 }),
+      ),
+    )
+  })
+
+  it('「추천 없음」 — 추천이 없는 줄만 거르고, 글자가 다른 이름일 수 있다고 말한다', async () => {
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: '추천 없음' }))
+    await waitFor(() =>
+      expect(reviewApi.items).toHaveBeenLastCalledWith(
+        expect.objectContaining({ recommendation: 'without' }),
+        expect.anything(),
+      ),
+    )
+    expect(screen.getByRole('note')).toHaveTextContent('「앤시스」 → Ansys')
+  })
+
+  it('상한 밖이 있으면 「전부 작업으로」 — 작업이 미리 보고, 적용은 그 작업의 적용으로', async () => {
+    reviewApi.plan.mockResolvedValue(
+      plan({ mode: 'recommended', threshold: 0.9, counts: { apply: 2, blocked: 0 }, unread: 5 }),
+    )
+    reviewApi.bulk.mockResolvedValue({ job_id: 'plan-job' })
+    const whole = plan({
+      mode: 'recommended',
+      threshold: 0.9,
+      decisions: [],
+      counts: { apply: 7, blocked: 0 },
+      as_job: true,
+    })
+    jobsApi.waitFor.mockImplementation((id: string) =>
+      Promise.resolve(
+        id === 'plan-job'
+          ? { id, status: 'done', error: null, result: whole }
+          : {
+              id,
+              status: 'done',
+              error: null,
+              result: {
+                applied: true,
+                batch_id: 'b7',
+                counts: { done: 7, refused: 0 },
+                undoable: 7,
+              },
+            },
+      ),
+    )
+    jobsApi.apply.mockResolvedValue({ id: 'apply-job' })
+    await open()
+    await userEvent.click(screen.getByRole('button', { name: '추천대로 모두' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('note', { name: '보지 않은 것' })).toHaveTextContent('5건')
+    await userEvent.click(within(dialog).getByRole('button', { name: '전부 작업으로' }))
+    await waitFor(() =>
+      expect(reviewApi.bulk).toHaveBeenCalledWith({
+        mode: 'recommended',
+        filters: expect.objectContaining({ kind: null }),
+        threshold: 0.9,
+        action: undefined,
+      }),
+    )
+    const full = await screen.findByRole('dialog')
+    expect(within(full).getByText('추천대로 모두 — 확신도 0.90 이상 — 전부')).toBeInTheDocument()
+    await userEvent.click(within(full).getByRole('button', { name: '결정 전부 받기(CSV)' }))
+    expect(jobsApi.download).toHaveBeenCalledWith('plan-job', '검토함-전부-미리보기.csv')
+    await userEvent.click(within(full).getByRole('button', { name: '7건 적용' }))
+    await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('plan-job'))
+    expect(await screen.findByText('7건을 처리했습니다.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '복원' })).toBeInTheDocument()
+    expect(reviewApi.apply).not.toHaveBeenCalled()
+  })
+
+  it('자동 확인 — 켰나만이 아니라 지금 돌 수 있나와 그 까닭을 보이고, 시스템 관리자가 켠다', async () => {
+    reviewApi.auto.mockResolvedValue([
+      {
+        kind: 'alias_candidate',
+        label: '별칭 후보',
+        enabled: false,
+        threshold: 0.95,
+        enabled_by_name: null,
+        enabled_at: null,
+        last_run_at: null,
+        last_job_id: null,
+        last_note: '',
+        decided: 12,
+        followed: 12,
+        rate: 1,
+        ready: false,
+        why: '꺼져 있습니다.',
+        min_decided: 30,
+        min_rate: 0.95,
+        max_per_night: 1000,
+        hour: 6,
+        can_edit: true,
+      },
+    ])
+    reviewApi.setAuto.mockResolvedValue({})
+    await open()
+    await userEvent.click(screen.getByText(/자동 확인\(밤마다 추천대로\)/))
+    expect(
+      await screen.findByText(/확신도 0.95 이상에서 사람이 하나씩 정한 결정 12건 · 추천대로 100%/),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '켜기' }))
+    await waitFor(() =>
+      expect(reviewApi.setAuto).toHaveBeenCalledWith('alias_candidate', {
+        enabled: true,
+        threshold: 0.95,
+      }),
+    )
   })
 })

@@ -115,7 +115,7 @@ def test_아직_셈하지_않은_줄만_그_자리에서_세고_셈하는_중이
     assert item["recommended"] == kestrel["id"]
     assert not any("에 계산한 것" in line for line in item["evidence"])
     # 타입으로 거른 검토함이면 그 타입의 수로 말한다.
-    assert "세 번 이상 찾은 1건 중 0건을 계산했습니다" in " ".join(page["kinds"][0]["notes"])
+    assert "검토함에 서는 1건 중 0건을 계산했습니다" in " ".join(page["kinds"][0]["notes"])
 
 
 @pytest.mark.usefixtures("department_scope")

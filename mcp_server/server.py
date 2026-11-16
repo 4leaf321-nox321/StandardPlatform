@@ -1733,12 +1733,14 @@ def _review_filters(
     type_slug: str | None,
     workspace: str | None,
     min_confidence: float | None,
+    recommendation: str | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": kind,
         "type": type_slug,
         "workspace": workspace,
         "min_confidence": min_confidence,
+        "recommendation": recommendation,
     }
 
 
@@ -1752,6 +1754,7 @@ async def review_list(
     group: bool = False,
     limit: int = 20,
     offset: int = 0,
+    recommendation: str | None = None,
 ) -> Any:
     """**검토함** — 사람이 판단할 일을 한 곳에서(ADR 0027). 별칭 후보(못 찾은 말) · 검수 대기
     별칭 · 병합 후보(이름이 같은 객체) · 지워진 것을 가리키는 칸, 그리고 원래 화면에서만
@@ -1768,13 +1771,18 @@ async def review_list(
     그 종류의 `notes` 를 전하고 `kind=` 로 그 종류만 다시 부른다(그러면 시간을 더 쓴다).
 
     거르기: `kind`(종류 하나) · `type_slug` · `workspace`(부서 slug, `@global` 은 전역) ·
-    `min_confidence`. `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄을 한 줄로
-    접는다(`members` 가 펼친 줄의 id — 결정은 그것마다).
+    `min_confidence` · `recommendation`(`with` 추천이 있는 것만 · `without` 추천이 없는 것만 —
+    별칭 후보면 글자가 비슷한 객체가 없는 말, ADR 0075). 별칭 후보는 세 번 넘게 찾았어도 한
+    사람이 한 번에 몰아 찾은 말 · 30일 넘게 아무도 안 찾은 말은 안 선다(`notes` 가 그 수를
+    말한다). `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄을 한 줄로 접는다
+    (`members` 가 펼친 줄의 id — 결정은 그것마다).
 
     **추천은 규칙의 짐작이다** — 처리는 `review_decide` 로, 사람에게 보이고 확인받은 뒤에.
     부서 관리자 이상."""
     params: list[tuple[str, Any]] = [("limit", str(limit)), ("offset", str(offset))]
-    for key, value in _review_filters(kind, type_slug, workspace, min_confidence).items():
+    for key, value in _review_filters(
+        kind, type_slug, workspace, min_confidence, recommendation
+    ).items():
         if value is not None:
             params.append((key, str(value)))
     if group:
@@ -1811,7 +1819,9 @@ async def review_decide(
     **스스로 고르지 마라** — 추천은 규칙의 짐작이다. 사람이 「추천대로 해」 라고 했을 때만
     `recommended=True`, 줄마다 정한 것은 `decisions` 로. 큰 묶음은 작업이 되어 `job` 으로
     온다(끝날 때까지 기다려 결과를 준다). 적용하면 `batch_id` — 화면의 검토함 › 최근 적용에서
-    복원한다."""
+    복원한다. 미리 보기의 `unread` 가 있으면 한 번에 읽는 상한(별칭 후보 200줄) 밖은 고르지
+    않은 것이다 — 그것까지는 사람이 화면의 「전부 작업으로」 로 한다(작업이 전부 미리 보고
+    사람이 적용, ADR 0075)고 전한다."""
     if not recommended and not decisions:
         return {
             "error": "decisions 를 주거나 recommended=True 로 부르세요 — 무엇을 정할지 "

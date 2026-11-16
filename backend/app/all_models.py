@@ -85,7 +85,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
-from app.modules.review.models import ReviewDecision
+from app.modules.review.models import ReviewAutoRule, ReviewDecision
 from app.modules.semantic.models import ObjectEmbedding, SemanticMark, SemanticTarget
 from app.modules.server.models import ExtensionState, PlatformProfile
 from app.modules.slides.models import Slide, SlideRef, SlideTemplate
@@ -166,6 +166,7 @@ __all__ = [
     "RelationProposal",
     "RelationType",
     "RequestTiming",
+    "ReviewAutoRule",
     "ReviewDecision",
     "SavedView",
     "SearchMiss",

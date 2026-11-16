@@ -3831,6 +3831,48 @@ def _review_rehearsal() -> list[tuple[str, str, str, str]]:
             time.perf_counter() - started,
             f"결정 {len(planned.decisions)} · {planned.counts}",
         )
+
+        # 「전부 작업으로」(ADR 0075) — 계산해 둔 줄 전부를 미리 본다(작업 본문 `bulk_plan`).
+        # 적용은 앞의 50건만, 커밋을 flush 로 바꿔 잰다(롤백 안 — 아무것도 남지 않는다).
+        started = time.perf_counter()
+        whole, data = review_services.bulk_plan(
+            db,
+            user,
+            {"mode": "recommended", "threshold": 0.5, "filters": {"kind": "alias_candidate"}},
+            lambda *_: None,
+        )
+        took = time.perf_counter() - started
+        decided = int(whole["decided"])
+        row(
+            "「전부 작업으로」 미리 보기(계산한 줄 전부 · 문턱 0.5)",
+            took,
+            f"결정 {decided:,} · {whole['counts']} · 결정마다 "
+            f"{took / max(decided, 1) * 1000:.1f}ms · 결과 파일 {len(data) / 1024:.0f}KB",
+        )
+        sample = review_services.bulk_decisions(data)[:50]
+        real_commit = db.commit
+        db.commit = db.flush  # type: ignore[method-assign]
+        try:
+            started = time.perf_counter()
+            outcomes = review_services.plan(db, user, sample)
+            done = review_services.apply(
+                db,
+                user,
+                sample,
+                review_services.fingerprint_of(outcomes),
+                mode="recommended",
+                threshold=0.5,
+                planned=outcomes,
+            )
+            took = time.perf_counter() - started
+        finally:
+            db.commit = real_commit  # type: ignore[method-assign]
+        row(
+            "「전부 작업으로」 적용 50건(커밋 대신 flush)",
+            took,
+            f"{done.counts} · 결정마다 {took / max(len(sample), 1) * 1000:.0f}ms — 3만 건이면 "
+            f"{took / max(len(sample), 1) * 30000 / 60:.0f}분",
+        )
     finally:
         db.rollback()
         db.close()

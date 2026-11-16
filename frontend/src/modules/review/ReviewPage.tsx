@@ -14,6 +14,11 @@
  * 한 줄 결정은 복원할 수 있는 것이면 바로 적용하고(아래에 「복원」), 복원할 수 없는 것(병합) ·
  * 막히는 것이 있으면 미리 보기를 먼저 띄운다. 처리는 원래 기능이 한다 — 권한도 원래 화면의
  * 것이라, 못 고치는 줄은 「막힘」 배지에 까닭을 적는다.
+ *
+ * **「전체」 는 종류마다 따로 부른다**(ADR 0075) — 종류 목록을 먼저 받고 종류마다 앞의
+ * `PER_KIND` 줄을 나란히 받아, 먼저 끝난 종류부터 그린다. 한 종류가 느려도(별칭 후보 몇만 건)
+ * 나머지가 먼저 선다. 더 보려면 그 종류만(쪽 넘김). 화면이 읽는 상한 밖까지 하려면 미리 보기의
+ * 「전부 작업으로」(작업이 전부 읽어 미리 보고 사람이 적용), 밤마다 하려면 「자동 확인」.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -21,6 +26,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { ExternalLink, Inbox, Loader2, Timer } from 'lucide-react'
 
 import { jobsApi } from '@/modules/jobs/api'
+import { ReviewAutoPanel } from '@/modules/review/ReviewAutoPanel'
 import { ReviewPlanDialog } from '@/modules/review/ReviewPlanDialog'
 import { ReviewRecent, ReviewUndoDialog } from '@/modules/review/ReviewRecent'
 import { reviewApi, targetsOf } from '@/modules/review/api'
@@ -29,9 +35,12 @@ import type {
   ReviewApplyMode,
   ReviewChoice,
   ReviewDecision,
+  ReviewFacet,
   ReviewFilters,
   ReviewItem,
   ReviewKind,
+  ReviewKindInfo,
+  ReviewPage as ReviewPageData,
   ReviewPlan,
   ReviewPlanRequest,
 } from '@/modules/review/api'
@@ -51,15 +60,43 @@ import { Input } from '@/shared/components/ui/input'
 import { useResource } from '@/shared/hooks/useResource'
 
 const PAGE = 50
+/** 「전체」 에서 종류마다 앞의 몇 줄 — 더 보려면 그 종류만(ADR 0075). */
+const PER_KIND = 20
 const DEFAULT_THRESHOLD = 0.9
 
-/** 확신도 거르기 — 「추천대로 모두」 의 문턱과는 따로다(보는 것과 적용하는 것). */
-const BANDS: { key: string; label: string; min?: number; max?: number }[] = [
+/** 확신도 거르기 — 「추천대로 모두」 의 문턱과는 따로다(보는 것과 적용하는 것). 「추천 없음」 은
+ * 추천이 없는 줄만(별칭 후보면 글자가 비슷한 객체가 없는 말 — 훑어본 뒤 「거른 전부 무시」). */
+const BANDS: {
+  key: string
+  label: string
+  min?: number
+  max?: number
+  recommendation?: 'without'
+}[] = [
   { key: '', label: '전체' },
   { key: '0.9', label: '0.9 이상', min: 0.9 },
   { key: '0.7', label: '0.7 이상', min: 0.7 },
   { key: 'low', label: '0.7 미만', max: 0.7 },
+  { key: 'none', label: '추천 없음', recommendation: 'without' },
 ]
+
+/** 종류마다 받은 것 — 아직이면 없다. */
+interface KindLoad {
+  page?: ReviewPageData
+  error?: Error
+}
+
+/** 종류마다의 타입 · 부서 칩을 합친다 — 같은 값은 수를 더한다. */
+function mergeFacets(pages: ReviewPageData[], pick: (one: ReviewPageData) => ReviewFacet[]) {
+  const merged = new Map<string, ReviewFacet>()
+  for (const one of pages) {
+    for (const facet of pick(one)) {
+      const seen = merged.get(facet.value)
+      merged.set(facet.value, seen ? { ...seen, count: seen.count + facet.count } : { ...facet })
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+}
 
 function rowKey(item: ReviewItem): string {
   return `${item.kind}:${item.id}`
@@ -104,6 +141,10 @@ interface Pending {
   plan: ReviewPlan
   title: string
   mode: ReviewApplyMode
+  /** 그 미리 보기를 만든 요청 — 「전부 작업으로」 가 같은 거르기로 다시 넣는다. */
+  request?: ReviewPlanRequest
+  /** 「전부 작업으로」 의 미리 보기 작업 — 적용은 그 작업의 적용(`jobsApi.apply`). */
+  job?: string
 }
 
 export default function ReviewPage() {
@@ -125,25 +166,80 @@ export default function ReviewPage() {
       workspace,
       min_confidence: chosen?.min ?? null,
       max_confidence: chosen?.max ?? null,
+      recommendation: chosen?.recommendation ?? null,
       actionable,
     }
   }, [kind, type, workspace, band, actionable])
 
-  const page = useResource(
-    () => reviewApi.items(filters, { group, offset, limit: PAGE }),
-    [filters, group, offset],
-  )
-  const items = useMemo(() => page.data?.items ?? [], [page.data])
+  /** 볼 수 있는 종류 — 모으지 않는다(빠르다). 칩과 「전체」 의 차례가 이것이다. */
+  const kindList = useResource(() => reviewApi.kinds(), [])
+  const order: ReviewKindInfo[] = useMemo(() => kindList.data ?? [], [kindList.data])
+  const allView = !kind
 
-  /** 종류 칩 — 종류로 거르면 서버는 그 종류만 세므로, 전체를 본 마지막 답을 기억해 둔다. */
-  const [allKinds, setAllKinds] = useState<ReviewKind[]>([])
+  /** 종류 하나만 볼 때 — 한 번에 받고 쪽을 넘긴다. */
+  const page = useResource(
+    () =>
+      allView
+        ? Promise.resolve(null)
+        : reviewApi.items(filters, { group, offset, limit: PAGE }),
+    [filters, group, offset, allView],
+  )
+
+  /** 「전체」 — 종류마다 따로 받아 먼저 온 것부터 그린다(ADR 0075). 종류만 볼 때는 앞의 답을
+   * 든 채다(칩의 수). */
+  const [byKind, setByKind] = useState<Record<string, KindLoad>>({})
+  const [round, setRound] = useState(0)
   useEffect(() => {
-    if (page.data && !kind) setAllKinds(page.data.kinds)
-  }, [page.data, kind])
-  const shownKinds = page.data?.kinds ?? []
-  const kinds = kind && allKinds.length > 0 ? allKinds : shownKinds
+    if (!allView || !kindList.data) return
+    let alive = true
+    setByKind({})
+    for (const one of kindList.data) {
+      reviewApi
+        .items({ ...filters, kind: one.kind }, { group, offset: 0, limit: PER_KIND })
+        .then((got) => {
+          if (alive) setByKind((current) => ({ ...current, [one.kind]: { page: got } }))
+        })
+        .catch((caught: unknown) => {
+          if (!alive) return
+          const error = caught instanceof Error ? caught : new Error('알 수 없는 오류')
+          setByKind((current) => ({ ...current, [one.kind]: { error } }))
+        })
+    }
+    return () => {
+      alive = false
+    }
+  }, [allView, kindList.data, filters, group, round])
+
+  const loadedPages = useMemo(
+    () =>
+      allView
+        ? order
+            .map((one) => byKind[one.kind]?.page)
+            .filter((one): one is ReviewPageData => Boolean(one))
+        : page.data
+          ? [page.data]
+          : [],
+    [allView, order, byKind, page.data],
+  )
+  const items = useMemo(
+    () =>
+      allView
+        ? order.flatMap((one) => byKind[one.kind]?.page?.items ?? [])
+        : (page.data?.items ?? []),
+    [allView, order, byKind, page.data],
+  )
+  /** 종류의 요약 — 지금 보는 종류는 그 답에서, 다른 종류는 「전체」 에서 받은 마지막 답에서. */
+  const summaryOf = (name: string): ReviewKind | undefined =>
+    (!allView ? page.data?.kinds.find((one) => one.kind === name) : undefined) ??
+    byKind[name]?.page?.kinds.find((one) => one.kind === name)
+  const shownKinds = loadedPages.flatMap((one) => one.kinds)
   /** 시간 안에 다 못 읽은 종류 — 「없다」 가 아니다(ADR 0073). */
   const lateKinds = shownKinds.filter((one) => one.late)
+  const loading = allView
+    ? !kindList.data || order.some((one) => !byKind[one.kind])
+    : page.loading && !page.data
+  const types = mergeFacets(loadedPages, (one) => one.types)
+  const workspaces = mergeFacets(loadedPages, (one) => one.workspaces)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   /** 「거른 전부」 — 쪽을 넘어 지금 거르기에 맞는 전부. 결정은 서버가 다시 읽어 고른다. */
@@ -174,7 +270,8 @@ export default function ReviewPage() {
   const reset = () => {
     setSelected(new Set())
     setEverything(false)
-    page.reload()
+    if (allView) setRound((value) => value + 1)
+    else page.reload()
     setVersion((value) => value + 1)
   }
 
@@ -228,6 +325,54 @@ export default function ReviewPage() {
     finish(done.batch_id, done.counts, done.undoable)
   }
 
+  /** 「전부 작업으로」 — 작업이 상한 밖까지 전부 읽어 미리 보고, 그 미리 보기를 창에 띄운다. */
+  const startBulk = (request: ReviewPlanRequest, title: string) =>
+    guard(async () => {
+      if (request.mode === 'decisions') return
+      setPending(null)
+      setProgress('전부 미리 보는 중…')
+      const started = await reviewApi.bulk({
+        mode: request.mode,
+        filters: request.filters,
+        threshold: request.threshold,
+        action: request.action,
+      })
+      const job = await jobsApi.waitFor(started.job_id, (tick) => {
+        if (tick.progress.total) {
+          setProgress(
+            `전부 미리 보는 중 — ${tick.progress.done.toLocaleString()} / ${tick.progress.total.toLocaleString()}`,
+          )
+        }
+      })
+      if (job.status !== 'done') throw new Error(job.error ?? '미리 보기 작업이 끝나지 않았습니다.')
+      setPending({
+        plan: job.result as unknown as ReviewPlan,
+        title: `${title} — 전부`,
+        mode: request.mode === 'recommended' ? 'recommended' : 'all',
+        job: started.job_id,
+      })
+    })
+
+  /** 「전부 작업으로」 의 적용 — 그 미리 보기 작업의 적용 작업을 넣고 끝까지 본다. */
+  async function runBulkApply(planJob: string) {
+    const applying = await jobsApi.apply(planJob)
+    setProgress('작업으로 실행하는 중…')
+    const job = await jobsApi.waitFor(applying.id, (tick) => {
+      if (tick.progress.total) {
+        setProgress(
+          `작업으로 실행하는 중 — ${tick.progress.done.toLocaleString()} / ${tick.progress.total.toLocaleString()}`,
+        )
+      }
+    })
+    if (job.status !== 'done') throw new Error(job.error ?? '작업이 끝나지 않았습니다.')
+    const result = (job.result ?? {}) as {
+      batch_id?: string
+      counts?: Record<string, number>
+      undoable?: number
+    }
+    finish(result.batch_id ?? null, result.counts ?? {}, result.undoable ?? 0)
+  }
+
   /** 미리 보기 — 한 줄이고 복원할 수 있고 막힘이 없으면 바로 적용한다(아래 「복원」 이 선다). */
   const start = (request: ReviewPlanRequest, title: string, mode: ReviewApplyMode) =>
     guard(async () => {
@@ -243,7 +388,7 @@ export default function ReviewPage() {
         await runApply(plan, mode)
         return
       }
-      setPending({ plan, title, mode })
+      setPending({ plan, title, mode, request })
     })
 
   const decide = (rows: ReviewItem[], action: ReviewAction, value?: string) => {
@@ -357,13 +502,21 @@ export default function ReviewPage() {
     })
     return out
   }, [items])
-  const kindOf = (name: string) =>
-    (page.data?.kinds ?? []).find((one) => one.kind === name) ??
-    allKinds.find((one) => one.kind === name)
+  const sectionOf = new Map(sections.map((one) => [one.kind, one]))
+  const kindOf = (name: string) => summaryOf(name)
+  const infoOf = (name: string) => order.find((one) => one.kind === name)
   const pageRows = items.filter((one) => one.actionable)
   const allOnPage = pageRows.length > 0 && pageRows.every((one) => selected.has(rowKey(one)))
   const common = commonChoices(chosenRows)
-  const total = page.data?.total ?? 0
+  const total = allView
+    ? order.reduce((sum, one) => sum + (byKind[one.kind]?.page?.total ?? 0), 0)
+    : (page.data?.total ?? 0)
+  const emptyNotes = [
+    ...new Set([
+      ...loadedPages.flatMap((one) => one.notes),
+      ...shownKinds.flatMap((one) => one.notes),
+    ]),
+  ]
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -383,32 +536,39 @@ export default function ReviewPage() {
         >
           전체
         </Button>
-        {kinds.map((one) => (
-          <Button
-            key={one.kind}
-            size="sm"
-            variant={kind === one.kind ? 'default' : 'outline'}
-            onClick={() => {
-              setOffset(0)
-              setParams({ kind: one.kind })
-            }}
-          >
-            {one.label}
-            {one.late && (
-              <Timer
-                className="ml-1 size-3.5 text-amber-600 dark:text-amber-400"
-                aria-label="시간 안에 다 읽지 못함"
-              />
-            )}
-            <Badge variant="secondary" className="ml-1">
-              {one.late && one.scanned === 0
-                ? '?'
-                : one.matched === one.total
-                  ? one.total
-                  : `${one.matched}/${one.total}`}
-            </Badge>
-          </Button>
-        ))}
+        {order.map((info) => {
+          const one = summaryOf(info.kind)
+          return (
+            <Button
+              key={info.kind}
+              size="sm"
+              variant={kind === info.kind ? 'default' : 'outline'}
+              onClick={() => {
+                setOffset(0)
+                setParams({ kind: info.kind })
+              }}
+            >
+              {info.label}
+              {one?.late && (
+                <Timer
+                  className="ml-1 size-3.5 text-amber-600 dark:text-amber-400"
+                  aria-label="시간 안에 다 읽지 못함"
+                />
+              )}
+              <Badge variant="secondary" className="ml-1">
+                {!one ? (
+                  <Loader2 className="size-3 animate-spin" aria-label="읽는 중" />
+                ) : one.late && one.scanned === 0 ? (
+                  '?'
+                ) : one.matched === one.total ? (
+                  one.total
+                ) : (
+                  `${one.matched}/${one.total}`
+                )}
+              </Badge>
+            </Button>
+          )
+        })}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
@@ -452,15 +612,23 @@ export default function ReviewPage() {
         </label>
       </div>
 
-      {((page.data?.types.length ?? 0) > 1 || type || (page.data?.workspaces.length ?? 0) > 1 || workspace) && (
+      {band === 'none' && (
+        <p className="text-muted-foreground text-xs" role="note">
+          추천이 없는 줄입니다 — 별칭 후보면 글자가 비슷한 객체가 없는 말이라 대개 별칭으로 추가할
+          말이 아닙니다. 다만 글자가 다른 이름(「앤시스」 → Ansys)일 수 있으니 훑어본 뒤 「거른 전부
+          선택」 → 「무시」 로 한 번에 정리하세요.
+        </p>
+      )}
+
+      {(types.length > 1 || type || workspaces.length > 1 || workspace) && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="text-muted-foreground">타입</span>
           {type ? (
             <Button size="sm" variant="secondary" onClick={() => setType(null)}>
-              {page.data?.types.find((one) => one.value === type)?.label ?? type} ✕
+              {types.find((one) => one.value === type)?.label ?? type} ✕
             </Button>
           ) : (
-            (page.data?.types ?? []).slice(0, 8).map((one) => (
+            types.slice(0, 8).map((one) => (
               <Button key={one.value} size="sm" variant="ghost" onClick={() => setType(one.value)}>
                 {one.label} {one.count}
               </Button>
@@ -469,10 +637,10 @@ export default function ReviewPage() {
           <span className="text-muted-foreground ml-3">부서</span>
           {workspace ? (
             <Button size="sm" variant="secondary" onClick={() => setWorkspace(null)}>
-              {page.data?.workspaces.find((one) => one.value === workspace)?.label ?? workspace} ✕
+              {workspaces.find((one) => one.value === workspace)?.label ?? workspace} ✕
             </Button>
           ) : (
-            (page.data?.workspaces ?? []).slice(0, 8).map((one) => (
+            workspaces.slice(0, 8).map((one) => (
               <Button
                 key={one.value}
                 size="sm"
@@ -614,8 +782,9 @@ export default function ReviewPage() {
           )}
         </p>
       )}
+      {kindList.error && <ErrorNotice error={kindList.error} />}
       {page.error && <ErrorNotice error={page.error} />}
-      {page.loading && !page.data && (
+      {(kindList.loading || (!allView && page.loading && !page.data)) && (
         <Loader2 className="text-muted-foreground size-5 animate-spin" />
       )}
 
@@ -665,20 +834,41 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {page.data && items.length === 0 && (
+      {!loading && kindList.data && items.length === 0 && (
         <EmptyState
           title={lateKinds.length > 0 ? '시간 안에 다 읽지 못했습니다' : '검토할 항목이 없습니다'}
-          hint={[...page.data.notes, ...page.data.kinds.flatMap((one) => one.notes)].join(' ')}
+          hint={emptyNotes.join(' ')}
         />
       )}
 
-      {sections.map((section) => {
-        const info = kindOf(section.kind)
+      {(allView ? order.map((one) => one.kind) : sections.map((one) => one.kind)).map((name) => {
+        const load = allView ? byKind[name] : undefined
+        const meta = infoOf(name)
+        if (allView && !load) {
+          return (
+            <p key={name} className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Loader2 className="size-4 animate-spin" />
+              {meta?.label ?? name} — 읽는 중…
+            </p>
+          )
+        }
+        if (load?.error) {
+          return (
+            <section key={name} className="space-y-1">
+              <h2 className="text-base font-medium">{meta?.label ?? name}</h2>
+              <ErrorNotice error={load.error} />
+            </section>
+          )
+        }
+        const section = sectionOf.get(name)
+        if (!section) return null
+        const info = kindOf(name)
+        const more = allView ? (load?.page?.total ?? 0) - section.rows.length : 0
         return (
           <section key={section.kind} className="space-y-2">
             <h2 className="flex flex-wrap items-center gap-2 text-base font-medium">
               <Inbox className="text-muted-foreground size-4" />
-              {info?.label ?? section.kind}
+              {info?.label ?? meta?.label ?? section.kind}
               <Badge variant="secondary">
                 {info && info.matched !== info.total
                   ? `${info.matched}/${info.total}`
@@ -826,11 +1016,23 @@ export default function ReviewPage() {
                 )
               })}
             </ul>
+            {more > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setOffset(0)
+                  setParams({ kind: section.kind })
+                }}
+              >
+                이 종류 {(load?.page?.total ?? 0).toLocaleString()}건 모두 보기
+              </Button>
+            )}
           </section>
         )
       })}
 
-      {page.data && total > PAGE && (
+      {!allView && page.data && total > PAGE && (
         <Pagination total={total} limit={PAGE} offset={offset} onChange={setOffset} unit="줄" />
       )}
 
@@ -843,6 +1045,8 @@ export default function ReviewPage() {
         }}
       />
 
+      <ReviewAutoPanel />
+
       {pending && (
         <ReviewPlanDialog
           title={pending.title}
@@ -850,7 +1054,21 @@ export default function ReviewPage() {
           busy={busy}
           progress={progress}
           error={error}
-          onApply={() => void guard(() => runApply(pending.plan, pending.mode))}
+          onApply={() =>
+            void guard(() =>
+              pending.job ? runBulkApply(pending.job) : runApply(pending.plan, pending.mode),
+            )
+          }
+          onBulk={
+            pending.request && pending.request.mode !== 'decisions' && !pending.job
+              ? () => void startBulk(pending.request!, pending.title.replace(/ — 미리 보기$/, ''))
+              : undefined
+          }
+          onDownload={
+            pending.job
+              ? () => void jobsApi.download(pending.job!, '검토함-전부-미리보기.csv')
+              : undefined
+          }
           onClose={() => {
             setPending(null)
             setError(null)

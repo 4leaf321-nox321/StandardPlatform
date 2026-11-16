@@ -94,17 +94,21 @@ VIAS = {"resolve": "이름 풀이", "search": "통합 검색", "list": "목록 �
 TYPING_SECONDS = 30
 #: 정리 — 처리한 줄(붙임 · 무시)은 이만큼 아무도 안 찾으면 지운다.
 KEEP_DECIDED_DAYS = 90
-#: 정리 — 몇 번 안 찾은 대기 줄은 이만큼 아무도 안 찾으면 지운다.
-KEEP_RARE_DAYS = 180
-RARE_HITS = 3
+#: 정리 — 대기 줄은 **횟수와 상관없이** 이만큼 아무도 안 찾으면 지운다(ADR 0075). 예전에는
+#: 몇 번 안 찾은 줄만 180일 뒤에 지워, 세 번을 넘긴 줄은 처리하기 전까지 영영 남아 쌓였다
+#: (운영에서 몇만 건 — 2026-11-16). 또 찾으면 새로 선다.
+KEEP_PENDING_DAYS = 90
 #: 대기 줄의 상한. 넘으면 적게 · 오래전에 찾은 것부터 지운다 — 무작위 말을 퍼붓는 스크립트가
 #: 표를 끝없이 키우지 않게.
 PENDING_MAX = 100_000
 #: 프로세스마다 정리를 몇 초에 한 번.
 PURGE_EVERY = 3600.0
-#: 홈 「남은 일」 에 올리는 문턱 — 이만큼 찾은 말만. 한 번 친 오타까지 세면 그 수는 늘
-#: 크고, 늘 큰 수는 아무도 안 읽는다.
+#: 홈 「남은 일」 · 검토함에 올리는 문턱 — 이만큼 찾은 말만. 한 번 친 오타까지 세면 그 수는
+#: 늘 크고, 늘 큰 수는 아무도 안 읽는다. 사람 수 · 최근도 함께 본다(`shown_clause`).
 REPEAT_MIN = 3
+#: 한 사람이 찾은 말도 **처음과 마지막이 이만큼 떨어지면**(다른 날 또 찾았다) 세운다 — 한 번에
+#: 몰아 친 것(오타를 고쳐 가며 · AI 가 한 대화에서 되물음)과 가른다.
+RETURN_AFTER = timedelta(days=1)
 #: 후보마다 「이것 아닐까」 몇 개.
 SUGGEST = 3
 #: 비슷함(pg_trgm) 문턱 — 이 아래는 제안하지 않는다.
@@ -334,8 +338,9 @@ def _maybe_purge(db: Session) -> None:
 def purge(db: Session) -> int:
     """오래된 것을 지운다 — 지운 줄 수. **부르는 쪽이 커밋한다.**
 
-    처리한 것(붙임 · 무시)은 90일, 몇 번 안 찾은 대기는 180일 아무도 안 찾으면 간다. 계속 찾는
-    말은 남는다 — 무시한 말을 또 찾아도 무시한 채로 남아야 다시 안 뜬다. 지운 타입의 줄도 간다.
+    처리한 것(붙임 · 무시)도 대기도 90일 아무도 안 찾으면 간다(대기는 횟수와 상관없이 — ADR
+    0075). 계속 찾는 말은 남는다 — 무시한 말을 또 찾아도 무시한 채로 남아야 다시 안 뜬다. 지운
+    타입의 줄도 간다.
     """
     total = 0
     total += extensions.rows_changed(
@@ -350,8 +355,7 @@ def purge(db: Session) -> int:
         db.execute(
             delete(SearchMiss).where(
                 SearchMiss.status == "pending",
-                SearchMiss.hits < RARE_HITS,
-                SearchMiss.last_at < func.now() - timedelta(days=KEEP_RARE_DAYS),
+                SearchMiss.last_at < func.now() - timedelta(days=KEEP_PENDING_DAYS),
             )
         )
     )
@@ -376,6 +380,44 @@ def purge(db: Session) -> int:
 
 
 # --- 보기 -----------------------------------------------------------------------
+
+
+def shown_clause() -> ColumnElement[bool]:
+    """**검토함 · 홈 「남은 일」 에 세우는 줄**(대기 줄 중 — ADR 0075): 세 번 이상 찾았고
+    (`REPEAT_MIN`), 두 사람 이상이 찾았거나 한 사람이라도 다른 날에 또 찾았고
+    (`ALIAS_CANDIDATE_MIN_PEOPLE` · `RETURN_AFTER`), 최근에 찾은 것
+    (`ALIAS_CANDIDATE_RECENT_DAYS`).
+
+    예전에는 횟수만 봤다 — 한 사람이 오타를 고쳐 가며 세 번 친 것 · AI 가 한 대화에서 같은
+    이름을 세 번 물은 것 · 1년 전에만 찾던 말이 다 서서 운영에서 몇만 건이 쌓였다(2026-11-16).
+    빠진 줄은 별칭 후보 창에 그대로 있다."""
+    settings = get_settings()
+    parts: list[ColumnElement[bool]] = [SearchMiss.hits >= REPEAT_MIN]
+    people = settings.alias_candidate_min_people
+    if people > 1:
+        parts.append(
+            or_(
+                func.jsonb_array_length(SearchMiss.askers) >= people,
+                SearchMiss.last_at - SearchMiss.first_at >= RETURN_AFTER,
+            )
+        )
+    days = settings.alias_candidate_recent_days
+    if days > 0:
+        parts.append(SearchMiss.last_at >= func.now() - timedelta(days=days))
+    return and_(*parts)
+
+
+def hidden_count(db: Session, scope: str | None = None) -> int:
+    """세 번 넘게 찾았지만 검토함에 세우지 않은 대기 줄 수(`shown_clause` 밖) — 검토함이 「없는
+    것이 아니라 올리지 않았다」 고 말할 때."""
+    where = [
+        SearchMiss.status == "pending",
+        SearchMiss.hits >= REPEAT_MIN,
+        ~shown_clause(),
+    ]
+    if scope is not None:
+        where.append(SearchMiss.scope == scope)
+    return int(db.scalar(select(func.count()).where(*where)) or 0)
 
 
 #: 범위 → (그 범위의 축 타입들, 그 객체 수) — 목록 한 번 안에서 같은 범위(대개 몇 개뿐이다)를
@@ -758,12 +800,12 @@ def night_mark(now: datetime) -> datetime:
 
 
 def due_clause(mark: datetime) -> ColumnElement[bool]:
-    """셈할 대기 줄 — **검토함에 서는 줄**(`REPEAT_MIN` 번 이상)은 안 셈했거나 이 밤 전에 셈한
+    """셈할 대기 줄 — **검토함에 서는 줄**(`shown_clause`)은 안 셈했거나 이 밤 전에 셈한
     것(새로 세 번을 넘기면 곧), 나머지는 이 밤 전에 생겨 안 셈했거나 7일 넘게 지난 것.
 
     몇 번 안 찾은 줄을 생기자마자 세지 않는 까닭: 오타 하나마다 작업이 하나씩 들어간다(그 줄은
     별칭 후보 창의 뒤쪽에만 있고, 그 자리에서도 시간 안에서 센다)."""
-    shown = SearchMiss.hits >= REPEAT_MIN
+    shown = shown_clause()
     never = SearchMiss.suggested_at.is_(None)
     return and_(
         SearchMiss.status == "pending",
@@ -815,7 +857,7 @@ def refresh(
     if scope is not None:
         due = and_(due, SearchMiss.scope == scope)
     order = (
-        (SearchMiss.hits >= REPEAT_MIN).desc(),
+        shown_clause().desc(),
         SearchMiss.suggested_at.is_(None).desc(),
         SearchMiss.hits.desc(),
         func.jsonb_array_length(SearchMiss.askers).desc(),
@@ -944,7 +986,7 @@ def suggest_state(
     """미리 셈이 어디까지 왔나 — 대기 줄 중 셈한 것 · 셈할 것(검토함에 서는 줄은 따로).
     `scope` 를 주면 그 범위만(검토함을 타입으로 거른 때)."""
     mark = night_mark(now or datetime.now(UTC))
-    shown = SearchMiss.hits >= REPEAT_MIN
+    shown = shown_clause()
     where = [SearchMiss.status == "pending"]
     if scope is not None:
         where.append(SearchMiss.scope == scope)
@@ -1148,16 +1190,13 @@ def decide(
 
 
 def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
-    """**여러 번 찾았는데 못 찾은 이름** — 부서 관리자 이상에게. 한 번 친 오타까지 세지 않는다
-    (`REPEAT_MIN`) — 그 수는 늘 크고, 늘 큰 수는 아무도 안 읽는다."""
+    """**여러 번 찾았는데 못 찾은 이름** — 부서 관리자 이상에게. 검토함과 같은 줄만 센다
+    (`shown_clause` — 세 번 이상 · 두 사람이거나 다른 날 또 · 최근) — 한 번 친 오타 · 한 번에
+    몰아 친 것까지 세면 그 수는 늘 크고, 늘 큰 수는 아무도 안 읽는다."""
     if not is_any_manager(db, viewer):
         return []
     count = int(
-        db.scalar(
-            select(func.count()).where(
-                SearchMiss.status == "pending", SearchMiss.hits >= REPEAT_MIN
-            )
-        )
+        db.scalar(select(func.count()).where(SearchMiss.status == "pending", shown_clause()))
         or 0
     )
     return [

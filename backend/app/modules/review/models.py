@@ -28,8 +28,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
-#: 결정을 어떻게 내렸나 — 한 줄 · 고른 것 · 거른 전부 · 추천대로 모두.
-REVIEW_MODES = ("one", "selected", "all", "recommended")
+#: 결정을 어떻게 내렸나 — 한 줄 · 고른 것 · 거른 전부 · 추천대로 모두 · 자동 확인(ADR 0075).
+REVIEW_MODES = ("one", "selected", "all", "recommended", "auto")
 
 
 class ReviewDecision(Base):
@@ -87,3 +87,33 @@ class ReviewDecision(Base):
     undone_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class ReviewAutoRule(Base):
+    """**자동 확인** — 종류 하나를 밤마다 「추천대로」 처리하는 규칙(ADR 0075). 시스템 관리자가
+    켜고, **켠 사람의 이름으로** 처리한다(감사 기록 · 결정 기록에 그 사람이 남는다 — 사람 없는
+    처리는 권한을 볼 수 없다).
+
+    켜 둔다고 늘 도는 것이 아니다 — 그 종류에서 **사람이 하나씩 정한 결정**의 기록이 그 확신도
+    구간에서 충분히 맞아야(`services.AUTO_MIN_DECIDED` · `AUTO_MIN_RATE`) 돈다. 자동으로 정한
+    것을 누가 복원하면 멈춘다(다시 켜면 이어 한다). 밤마다 상한(`AUTO_MAX`)까지 — 결정은 묶음
+    하나로 남아 「복원」 으로 되돌린다."""
+
+    __tablename__ = "review_auto_rules"
+
+    kind: Mapped[str] = mapped_column(String(40), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    threshold: Mapped[float] = mapped_column(Float, default=0.95, server_default="0.95")
+    """이 확신도 이상인 것만 — 0.9 아래로는 못 둔다."""
+    enabled_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """켠 때 — 그 뒤에 자동으로 정한 것을 누가 복원했으면 멈춘다."""
+    last_run_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """마지막으로 작업을 넣은 때 — 하루에 한 번."""
+    last_job_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    last_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    """마지막 차례의 말 — 「312건 처리 · 막힘 4」 · 「조건 미달 — 결정 12건(30건 필요)」."""

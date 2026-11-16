@@ -89,6 +89,9 @@ class ReviewFilterIn(BaseModel):
     min_confidence: float | None = Field(default=None, ge=0, le=1)
     max_confidence: float | None = Field(default=None, ge=0, le=1.01)
     actionable: bool = False
+    recommendation: Literal["with", "without"] | None = Field(
+        default=None, description="`with` 추천이 있는 것만 · `without` 추천이 없는 것만"
+    )
 
 
 class ReviewDecisionIn(BaseModel):
@@ -155,6 +158,9 @@ class ReviewPlanOut(BaseModel):
     as_job: bool
     """적용하면 작업이 된다(큰 묶음)."""
     notes: list[str]
+    unread: int = 0
+    """한 번에 읽는 상한 때문에 **보지 않은** 수 — 그만큼은 고르지 않았다. 그것까지 하려면
+    `POST /api/review/bulk`(「전부 작업으로」, ADR 0075)."""
 
 
 class ReviewApplyRequest(BaseModel):
@@ -253,3 +259,63 @@ class ReviewAccuracyLineOut(BaseModel):
 class ReviewAccuracyOut(BaseModel):
     kinds: list[ReviewAccuracyLineOut]
     bands: list[ReviewAccuracyLineOut]
+
+
+class ReviewKindInfoOut(BaseModel):
+    """종류 하나 — **모으지 않고** 이름만(화면이 종류마다 따로 부르기 전에, ADR 0075)."""
+
+    kind: str
+    label: str
+    description: str
+    link: str
+    actionable: bool
+    undo_note: str
+
+
+class ReviewBulkRequest(BaseModel):
+    mode: Literal["recommended", "all"] = "recommended"
+    """`recommended` — 거르기에 맞고 확신도가 `threshold` 이상인 것을 추천대로 · `all` — 거른
+    전부에
+    `action` 하나."""
+    filters: ReviewFilterIn = Field(default_factory=ReviewFilterIn)
+    threshold: float = Field(default=0.9, ge=0, le=1)
+    action: Literal["accept", "ignore"] = "accept"
+
+
+class ReviewBulkOut(BaseModel):
+    job_id: uuid.UUID
+    """미리 보기 작업 — 끝나면 결과(`result`)가 미리 보기이고, 결정 전부는 결과 파일(CSV)이다.
+    적용은 `POST /api/jobs/{job_id}/apply`."""
+
+
+class ReviewAutoIn(BaseModel):
+    enabled: bool
+    threshold: float = Field(default=0.95, ge=0.9, le=1)
+
+
+class ReviewAutoOut(BaseModel):
+    """자동 확인 한 종류(ADR 0075) — 켜져 있나 · 근거 · 지금 돌 수 있나."""
+
+    kind: str
+    label: str
+    enabled: bool
+    threshold: float
+    enabled_by_name: str | None
+    enabled_at: datetime | None
+    last_run_at: datetime | None
+    last_job_id: uuid.UUID | None
+    last_note: str
+    decided: int
+    """그 확신도 이상에서 사람이 하나씩 정한 결정 수(추천이 있던 것)."""
+    followed: int
+    rate: float | None
+    ready: bool
+    """켜져 있고 근거가 충분하다 — 다음 차례에 돈다."""
+    why: str
+    """못 도는 까닭. 돌 수 있으면 빈 글자."""
+    min_decided: int
+    min_rate: float
+    max_per_night: int
+    hour: int
+    """하루 한 번, 이 시각(서버 현지)이 지난 뒤."""
+    can_edit: bool

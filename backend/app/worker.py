@@ -167,6 +167,14 @@ class Worker:
                 queued = graph_calc.schedule(db)
             if queued:
                 log.info("밤 그래프 계산을 넣었습니다: %s", queued)
+            # 검토함의 자동 확인(ADR 0075)도 같은 바퀴에 **넣기만** 한다 — 켠 종류가 없으면 안
+            # 넣는다.
+            from app.modules.review import services as review_services
+
+            with SessionLocal() as db:
+                auto = review_services.schedule_auto(db)
+            if auto:
+                log.info("검토함 자동 확인을 넣었습니다: %s", auto)
         if now - self._last_semantic >= SEMANTIC_CHECK_EVERY:
             # 뜻으로 찾기의 계산도 **넣기만** 한다 — 켠 타입이 없거나 끔이면 아무것도 안
             # 넣는다.

@@ -1291,3 +1291,48 @@ def review_apply(work: Work) -> dict[str, Any]:
 
 # 검토함 — 계획(미리 보기)은 요청 안에서 사람이 이미 봤다. 적용만 작업이라 두 단계가 아니다.
 register(Kind("review_apply", "검토함 일괄 확인", False, False, review_apply))
+
+
+def review_bulk(work: Work) -> dict[str, Any]:
+    """「전부 작업으로」(ADR 0075) — 화면이 읽는 상한(별칭 후보 200줄) 밖까지 **전부** 읽어
+    미리 보고(결과 파일에 결정 전부 — 사람도 받아 본다), 확인하면 그 결정들을 같은 지문으로
+    적용한다."""
+    from app.modules.review import services as review_services
+
+    user = _user(work)
+    if not work.params.get("apply"):
+        result, data = review_services.bulk_plan(work.db, user, work.params, work.progress)
+        work.emit(
+            name="검토함-전부-미리보기.csv", content_type="text/csv; charset=utf-8", data=data
+        )
+        return result
+    parent = work.db.get(Job, work.job.parent_id) if work.job.parent_id else None
+    stored = (
+        work.db.get(JobFile, parent.output_file_id)
+        if parent is not None and parent.output_file_id
+        else None
+    )
+    if stored is None:
+        raise Conflict(
+            code("REVIEW", 9),
+            "미리 보기의 결과 파일이 없습니다(7일이 지나 지워졌을 수 있습니다) — 다시 미리 "
+            "보세요.",
+        )
+    decisions = review_services.bulk_decisions(files.read_bytes(stored))
+    return review_services.bulk_apply(work.db, user, work.params, decisions, work.progress)
+
+
+def review_auto(work: Work) -> dict[str, Any]:
+    """검토함의 자동 확인(ADR 0075) — 켠 시스템 관리자의 이름으로, 근거가 충분할 때만, 밤마다
+    상한까지. 결정은 묶음 하나로 남아 「복원」 으로 되돌린다."""
+    from app.modules.review import services as review_services
+
+    return review_services.run_auto(work.db, _user(work), work.params, work.progress)
+
+
+# 검토함의 「전부 작업으로」 — 두 단계(미리 보기 → 사람 확인 → 적용). 전용 경로
+# (`POST /api/review/bulk`)로 넣고 적용은 `POST /api/jobs/{id}/apply`.
+register(Kind("review_bulk", "검토함 전부 확인", False, True, review_bulk))
+# 검토함의 자동 확인 — 타이머(워커가 5분마다 `review.services.schedule_auto`)가 켠 사람의
+# 이름으로 넣는다.
+register(Kind("review_auto", "검토함 자동 확인", False, False, review_auto, admin_only=True))

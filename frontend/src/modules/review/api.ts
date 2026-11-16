@@ -90,6 +90,8 @@ export interface ReviewFilters {
   min_confidence?: number | null
   max_confidence?: number | null
   actionable?: boolean
+  /** `with` 추천이 있는 것만 · `without` 추천이 없는 것만(ADR 0075). */
+  recommendation?: 'with' | 'without' | null
 }
 
 export interface ReviewDecision {
@@ -141,6 +143,43 @@ export interface ReviewPlan {
   rows: number
   as_job: boolean
   notes: string[]
+  /** 한 번에 읽는 상한 때문에 보지 않은 수 — 그것까지 하려면 「전부 작업으로」(ADR 0075). */
+  unread: number
+}
+
+/** 모으지 않은 종류 — 화면이 종류마다 따로 부르기 전에 받는다(ADR 0075). */
+export interface ReviewKindInfo {
+  kind: string
+  label: string
+  description: string
+  link: string
+  actionable: boolean
+  undo_note: string
+}
+
+/** 자동 확인 한 종류(ADR 0075). */
+export interface ReviewAuto {
+  kind: string
+  label: string
+  enabled: boolean
+  threshold: number
+  enabled_by_name: string | null
+  enabled_at: string | null
+  last_run_at: string | null
+  last_job_id: string | null
+  last_note: string
+  /** 그 확신도 이상에서 사람이 하나씩 정한 결정 수. */
+  decided: number
+  followed: number
+  rate: number | null
+  /** 켜져 있고 근거가 충분하다 — 다음 차례에 돈다. */
+  ready: boolean
+  why: string
+  min_decided: number
+  min_rate: number
+  max_per_night: number
+  hour: number
+  can_edit: boolean
 }
 
 export type ReviewPlanMode = 'decisions' | 'recommended' | 'all'
@@ -242,6 +281,18 @@ export const reviewApi = {
   undo: (batchId: string, apply: boolean) =>
     api.post<ReviewUndo>(`/review/batches/${batchId}/undo`, { apply }),
   accuracy: () => api.get<ReviewAccuracy>('/review/decisions/accuracy'),
+  /** 볼 수 있는 종류 — 모으지 않는다(빠르다). */
+  kinds: () => api.get<ReviewKindInfo[]>('/review/kinds'),
+  /** 「전부 작업으로」 — 미리 보는 작업을 넣는다. 적용은 그 작업의 `jobsApi.apply`. */
+  bulk: (body: {
+    mode: 'recommended' | 'all'
+    filters?: ReviewFilters
+    threshold?: number
+    action?: 'accept' | 'ignore'
+  }) => api.post<{ job_id: string }>('/review/bulk', body),
+  auto: () => api.get<ReviewAuto[]>('/review/auto'),
+  setAuto: (kind: string, body: { enabled: boolean; threshold: number }) =>
+    api.put<ReviewAuto>(`/review/auto/${kind}`, body),
 }
 
 /** 접은 줄이면 펼친 줄마다, 아니면 그 줄 하나 — 결정이 가는 항목들. */

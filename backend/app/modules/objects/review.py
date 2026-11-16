@@ -49,6 +49,7 @@ from typing import Any
 from sqlalchemy import ColumnElement, Select, and_, false, func, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
+from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.objects import (
     aliases,
@@ -162,31 +163,42 @@ def _candidate_confidence(found: misses.Candidate) -> tuple[float | None, str]:
 
 
 def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
-    """대기 중인 못 찾은 말 — **세 번 이상 찾은 것**(홈 「남은 일」 과 같은 문턱). 한 번 친
-    오타까지 실으면 그 수는 늘 크고, 늘 큰 수는 아무도 안 읽는다. 결정할 항목을 다시 읽을
-    때(`item_ids`)는 문턱을 안 본다 — MCP 가 원래 목록에서 고른 후보도 처리된다."""
+    """대기 중인 못 찾은 말 — **검토함에 세우는 줄**(`misses.shown_clause` — 세 번 이상 · 두
+    사람이거나 다른 날 또 · 최근, 홈 「남은 일」 과 같은 문턱, ADR 0075). 한 번 친 오타 · 한
+    번에 몰아 친 것까지 실으면 그 수는 늘 크고, 늘 큰 수는 아무도 안 읽는다. 결정할 항목을 다시
+    읽을 때(`item_ids`)는 문턱을 안 본다 — MCP 가 원래 목록에서 고른 후보도 처리된다.
+
+    보통은 많이 찾은 것부터 `CANDIDATE_CAP` 줄이다. **전부**(`Filters.whole` — 「전부
+    작업으로」 · 자동 확인)면 상한 없이 읽되 「이것 아닐까」 를 미리 계산한 줄만 낸다 — 안
+    계산한 줄을 추천 없이 내면 「추천 없음 → 무시」 에 잘못 들어간다."""
     base = select(SearchMiss).where(SearchMiss.status == "pending")
     notes: list[str] = []
+    ids: list[uuid.UUID] = []
     if flt.item_ids is not None:
         ids = _uuids(flt.item_ids)
         if not ids:
             return Collected(items=[], total=0)
-        base = base.where(SearchMiss.id.in_(ids))
     else:
-        base = base.where(SearchMiss.hits >= misses.REPEAT_MIN)
+        base = base.where(misses.shown_clause())
     if flt.type_slug is not None:
         base = base.where(SearchMiss.scope == flt.type_slug)
-    total = int(db.scalar(select(func.count()).select_from(base.subquery())) or 0)
-    rows = list(
-        db.scalars(
-            base.order_by(
-                SearchMiss.hits.desc(),
-                func.jsonb_array_length(SearchMiss.askers).desc(),
-                SearchMiss.last_at.desc(),
-                SearchMiss.id,
-            ).limit(CANDIDATE_CAP)
-        )
+    order = (
+        SearchMiss.hits.desc(),
+        func.jsonb_array_length(SearchMiss.askers).desc(),
+        SearchMiss.last_at.desc(),
+        SearchMiss.id,
     )
+    rows: list[SearchMiss] = []
+    if ids:
+        # 고른 항목을 다시 읽는다 — 「전부」 의 적용이면 수만 개라 나눠 읽는다(IN 의 자리 수).
+        for batch in chunks(ids):
+            rows.extend(db.scalars(base.where(SearchMiss.id.in_(batch))))
+        rows.sort(key=lambda one: (-one.hits, -len(one.askers or []), str(one.id)))
+        total = len(rows)
+    else:
+        total = int(db.scalar(select(func.count()).select_from(base.subquery())) or 0)
+        listed = base.order_by(*order)
+        rows = list(db.scalars(listed if flt.whole else listed.limit(CANDIDATE_CAP)))
     labels = misses._labels(db)
     axes: misses.Axes = {}
     # 「이것 아닐까」 는 워커가 미리 셈해 둔 것을 읽는다(ADR 0074) — 한 번에 읽고 지금의 객체로
@@ -194,7 +206,11 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
     ready = misses.stored(db, user, rows)
     found: list[misses.Candidate] = []
     skipped = 0
+    unready = 0
     for miss in rows:
+        if flt.whole and miss.id not in ready:
+            unready += 1
+            continue
         # 시간이 다 되면 안 셈한 줄은 건너뛴다 — 셈한 줄은 그래도 낸다(읽기만 한다).
         if (
             miss.id not in ready
@@ -209,10 +225,25 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
             )
         )
     cut = skipped > 0
-    if len(ready) < len(rows) and flt.item_ids is None:
+    if flt.item_ids is None:
+        hidden = misses.hidden_count(db, flt.type_slug)
+        if hidden:
+            settings = get_settings()
+            notes.append(
+                f"세 번 넘게 찾았지만 한 사람이 한 번에 몰아 찾았거나(같은 날) "
+                f"{settings.alias_candidate_recent_days}일 넘게 아무도 안 찾은 {hidden:,}건은 "
+                "올리지 않았습니다 — 데이터 품질의 별칭 후보 창에 있습니다(90일 아무도 안 "
+                "찾으면 지웁니다)."
+            )
+    if unready:
+        notes.append(
+            f"「이것 아닐까」 를 아직 계산하지 않은 {unready:,}건은 빼고 골랐습니다 — 워커가 "
+            "계산해 두면 다음에 듭니다."
+        )
+    elif len(ready) < len(rows) and flt.item_ids is None:
         state = misses.suggest_state(db, scope=flt.type_slug)
         notes.append(
-            f"「이것 아닐까」 는 워커가 미리 계산합니다 — 세 번 이상 찾은 "
+            f"「이것 아닐까」 는 워커가 미리 계산합니다 — 검토함에 서는 "
             f"{state['shown']:,}건 중 {state['shown_ready']:,}건을 계산했습니다. 아직 "
             "계산하지 않은 줄은 그 자리에서 계산합니다(몇 분 뒤면 바로 열립니다)."
         )
@@ -224,8 +255,8 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
         )
     elif total > len(rows):
         notes.append(
-            f"별칭 후보는 많이 찾은 것부터 {CANDIDATE_CAP}건만 후보를 셉니다 — 나머지 "
-            f"{total - len(rows):,}건은 이것을 처리한 뒤에 표시됩니다."
+            f"별칭 후보는 많이 찾은 것부터 {CANDIDATE_CAP}건만 읽습니다 — 나머지 "
+            f"{total - len(rows):,}건까지 한 번에 하려면 「전부 작업으로」."
         )
     tops = [one.suggestions[0].id for one in found if one.suggestions]
     owners: dict[uuid.UUID, uuid.UUID | None] = {}

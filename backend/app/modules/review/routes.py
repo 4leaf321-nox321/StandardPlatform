@@ -1,8 +1,13 @@
 """검토함 라우터 — **사람이 판단할 일을 한 곳에서, 한꺼번에**(ADR 0027).
 
-    GET  /api/review/items                 모아 거른 한 쪽(종류 · 타입 · 부서 · 확신도 · 묶기)
+    GET  /api/review/kinds                 볼 수 있는 종류(모으지 않는다 — 화면이 종류마다)
+    GET  /api/review/items                 모아 거른 한 쪽(종류 · 타입 · 부서 · 확신도 · 추천)
     POST /api/review/plan                  미리 보기(고른 것 · 추천대로 모두 · 거른 전부)
     POST /api/review/apply                 미리 본 그대로(지문) — 크면 작업(202)
+    POST /api/review/bulk                  「전부 작업으로」 — 상한 밖까지 미리 보는 작업(202),
+                                           적용은 `POST /api/jobs/{id}/apply`
+    GET  /api/review/auto                  자동 확인 — 종류마다 켜졌나 · 근거
+    PUT  /api/review/auto/{kind}           자동 확인 켜고 끄기(시스템 관리자)
     GET  /api/review/decisions             결정 기록(추천을 따랐나)
     GET  /api/review/decisions/accuracy    추천이 얼마나 맞나 — 종류 · 확신도 구간마다
     GET  /api/review/batches               최근 적용한 묶음
@@ -31,7 +36,11 @@ from app.modules.review.schemas import (
     ReviewAccuracyOut,
     ReviewApplyOut,
     ReviewApplyRequest,
+    ReviewAutoIn,
+    ReviewAutoOut,
     ReviewBatchOut,
+    ReviewBulkOut,
+    ReviewBulkRequest,
     ReviewChoiceOut,
     ReviewDecisionIn,
     ReviewDecisionOut,
@@ -39,6 +48,7 @@ from app.modules.review.schemas import (
     ReviewFacetOut,
     ReviewFilterIn,
     ReviewItemOut,
+    ReviewKindInfoOut,
     ReviewKindOut,
     ReviewKindPlanOut,
     ReviewOutcomeOut,
@@ -64,6 +74,7 @@ def _query(filters: ReviewFilterIn) -> services.Query:
         min_confidence=filters.min_confidence,
         max_confidence=filters.max_confidence,
         actionable=filters.actionable,
+        recommendation=filters.recommendation,
     )
 
 
@@ -139,6 +150,29 @@ def _facets(
     )
 
 
+@router.get("/kinds", response_model=list[ReviewKindInfoOut])
+def review_kinds(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[ReviewKindInfoOut]:
+    """**볼 수 있는 종류** — 모으지 않고 이름 · 설명만(ADR 0075). 화면은 이것을 먼저 받아
+    종류마다 따로 `GET /items?kind=` 를 불러 먼저 끝난 종류부터 그린다 — 한 종류가 느려도
+    나머지가 먼저 선다."""
+    services.require_viewer(db, user)
+    return [
+        ReviewKindInfoOut(
+            kind=one.kind,
+            label=one.label,
+            description=one.description,
+            link=one.link,
+            actionable=one.check is not None,
+            undo_note=one.undo_note,
+        )
+        for one in registry.providers()
+        if one.can_view(db, user)
+    ]
+
+
 @router.get("/items", response_model=ReviewPageOut)
 def review_items(
     kind: str | None = Query(default=None, description="종류 하나만 — `/items` 의 `kinds`"),
@@ -152,6 +186,11 @@ def review_items(
     max_confidence: float | None = Query(default=None, ge=0, le=1.01),
     actionable: bool = Query(
         default=False, description="처리할 수 있는 것만(막힌 것 · 링크만 빼고)"
+    ),
+    recommendation: str | None = Query(
+        default=None,
+        pattern="^(with|without)$",
+        description="`with` 추천이 있는 것만 · `without` 추천이 없는 것만(ADR 0075)",
     ),
     group: bool = Query(default=False, description="같은 것끼리 묶기"),
     limit: int | None = Query(default=None),
@@ -174,6 +213,7 @@ def review_items(
         min_confidence=min_confidence,
         max_confidence=max_confidence,
         actionable=actionable,
+        recommendation=recommendation,
     )
     listed = services.collect(db, user, query)
     items = services.grouped(listed.items) if group else listed.items
@@ -304,6 +344,7 @@ def review_plan(
         rows=planned.rows,
         as_job=planned.as_job,
         notes=notes,
+        unread=planned.unread,
     )
 
 
@@ -518,3 +559,87 @@ def review_undo(
             for line in lines
         ],
     )
+
+
+@router.post("/bulk", response_model=ReviewBulkOut, status_code=202)
+def review_bulk(
+    payload: ReviewBulkRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ReviewBulkOut:
+    """**「전부 작업으로」**(ADR 0075) — 「추천대로 모두」 · 「거른 전부」 를 화면이 읽는
+    상한(별칭 후보 200줄) 밖까지. 작업이 상한 없이 전부 읽어 미리 보고(**아무것도 안 바꾼다** —
+    결과가 미리 보기, 결정 전부는 결과 파일 CSV), 사람이 보고 `POST /api/jobs/{job_id}/apply`
+    로 적용한다 (같은 결정 · 같은 지문 — 그 사이 바뀌면 거절). 별칭 후보는 「이것 아닐까」 를
+    미리 계산한 줄만 고른다."""
+    services.require_viewer(db, user)
+    job = services.enqueue_bulk(
+        db,
+        user,
+        mode=payload.mode,
+        filters=payload.filters.model_dump(),
+        threshold=payload.threshold,
+        action=payload.action,
+    )
+    return ReviewBulkOut(job_id=job.id)
+
+
+def _auto_out(db: Session, user: User, state: services.AutoState) -> ReviewAutoOut:
+    from app.config import get_settings
+
+    rule = state.rule
+    names = (
+        services.user_names(db, {rule.enabled_by_id})
+        if rule is not None and rule.enabled_by_id
+        else {}
+    )
+    return ReviewAutoOut(
+        kind=state.provider.kind,
+        label=state.provider.label,
+        enabled=bool(rule and rule.enabled),
+        threshold=rule.threshold if rule is not None else 0.95,
+        enabled_by_name=names.get(rule.enabled_by_id) if rule and rule.enabled_by_id else None,
+        enabled_at=rule.enabled_at if rule is not None else None,
+        last_run_at=rule.last_run_at if rule is not None else None,
+        last_job_id=rule.last_job_id if rule is not None else None,
+        last_note=rule.last_note if rule is not None else "",
+        decided=state.evidence.decided,
+        followed=state.evidence.followed,
+        rate=state.evidence.rate,
+        ready=state.ready,
+        why=state.why,
+        min_decided=services.AUTO_MIN_DECIDED,
+        min_rate=services.AUTO_MIN_RATE,
+        max_per_night=services.AUTO_MAX,
+        hour=get_settings().review_auto_hour,
+        can_edit=user.is_system_admin,
+    )
+
+
+@router.get("/auto", response_model=list[ReviewAutoOut])
+def review_auto_list(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[ReviewAutoOut]:
+    """**자동 확인**(ADR 0075) — 처리 길이 있는 종류마다 켜졌나 · 근거(그 확신도 이상에서
+    사람이 하나씩 정한 결정 · 추천대로 한 몫) · 지금 돌 수 있나. 켜고 끄는 것은 시스템
+    관리자."""
+    services.require_viewer(db, user)
+    return [_auto_out(db, user, one) for one in services.auto_states(db)]
+
+
+@router.put("/auto/{kind}", response_model=ReviewAutoOut)
+def review_auto_set(
+    kind: str,
+    payload: ReviewAutoIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ReviewAutoOut:
+    """자동 확인을 켜고 끈다 — **시스템 관리자만**. 켜면 그 사람의 이름으로 밤마다(하루 한 번)
+    처리하고, 근거가 모자라거나 자동으로 정한 것을 누가 복원했으면 돌지 않는다. 감사 기록에
+    남는다."""
+    services.require_viewer(db, user)
+    services.set_auto(db, user, kind, enabled=payload.enabled, threshold=payload.threshold)
+    db.commit()
+    state = next(one for one in services.auto_states(db) if one.provider.kind == kind)
+    return _auto_out(db, user, state)

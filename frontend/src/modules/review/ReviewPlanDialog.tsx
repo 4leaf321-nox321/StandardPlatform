@@ -5,6 +5,10 @@
  * 것(다른 객체가 이미 쓰는 별칭 · 남의 부서 · 병합 묶음에 못 고치는 것)은 따로 세어 먼저 보이고
  * 적용에서 빠진다. 복원할 수 없는 종류(병합)는 그렇다고 적는다 — 「정말 하시겠습니까」 만 묻는
  * 창은 아무도 안 읽는다(AGENTS.md 의 `ConfirmDialog` 규칙).
+ *
+ * 화면이 읽는 상한(별칭 후보 200줄) 때문에 보지 않은 것이 있으면(`unread`) 그렇다고 말하고
+ * 「전부 작업으로」 를 준다 — 작업이 전부를 읽어 미리 보고, 이 창에 다시 띄운다(ADR 0075). 그
+ * 미리 보기는 결정 전부를 결과 파일(CSV)로 받을 수 있다.
  */
 
 import { Loader2 } from 'lucide-react'
@@ -31,6 +35,10 @@ interface ReviewPlanDialogProps {
   error: Error | null
   onApply: () => void
   onClose: () => void
+  /** 상한 밖까지 — 「전부 작업으로」. 주면 `unread` 가 있을 때 단추를 세운다. */
+  onBulk?: () => void
+  /** 「전부 작업으로」 의 미리 보기면 — 결정 전부(CSV)를 받는다. */
+  onDownload?: () => void
 }
 
 export function ReviewPlanDialog({
@@ -41,6 +49,8 @@ export function ReviewPlanDialog({
   error,
   onApply,
   onClose,
+  onBulk,
+  onDownload,
 }: ReviewPlanDialogProps) {
   const going = plan.counts.apply
   const irreversible = plan.by_kind.filter((one) => one.apply > 0 && !one.undoable)
@@ -90,8 +100,7 @@ export function ReviewPlanDialog({
 
         {irreversible.length > 0 && (
           <p className="text-sm text-amber-700 dark:text-amber-400">
-            {irreversible.map((one) => one.label).join(' · ')}은(는) 적용하면 복원할 수
-            없습니다.
+            {irreversible.map((one) => one.label).join(' · ')}은(는) 적용하면 복원할 수 없습니다.
           </p>
         )}
         {plan.notes.map((line) => (
@@ -99,6 +108,31 @@ export function ReviewPlanDialog({
             {line}
           </p>
         ))}
+        {(plan.unread ?? 0) > 0 && onBulk && (
+          <div
+            role="note"
+            aria-label="보지 않은 것"
+            className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-950/40"
+          >
+            <span>
+              한 번에 읽는 상한 때문에 <strong>{plan.unread.toLocaleString()}건</strong>은 보지
+              않았습니다.
+            </span>
+            <Button size="sm" variant="outline" disabled={busy} onClick={onBulk}>
+              전부 작업으로
+            </Button>
+          </div>
+        )}
+        {onDownload && (
+          <p className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">
+              아래는 앞의 {plan.outcomes.length.toLocaleString()}건입니다.
+            </span>
+            <Button size="xs" variant="outline" onClick={onDownload}>
+              결정 전부 받기(CSV)
+            </Button>
+          </p>
+        )}
 
         <ul className="max-h-[38vh] divide-y overflow-auto rounded-md border text-sm">
           {plan.outcomes.map((one) => (

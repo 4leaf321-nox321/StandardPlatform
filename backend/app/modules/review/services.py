@@ -44,7 +44,7 @@ from app.modules.accounts.models import User
 from app.modules.jobs import services as job_services
 from app.modules.jobs.models import Job
 from app.modules.review import registry
-from app.modules.review.models import ReviewDecision
+from app.modules.review.models import REVIEW_MODES, ReviewAutoRule, ReviewDecision
 from app.modules.review.registry import IGNORE, Filters, Item, Provider
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.shared import querycap, readguard
@@ -83,6 +83,17 @@ KIND_SECONDS = 8.0
 KIND_GRACE = 4.0
 
 MODES = ("decisions", "recommended", "all")
+#: 「전부 작업으로」(ADR 0075)가 한 번에 정하는 결정의 상한 — 넘으면 거르기로 나눈다.
+BULK_MAX_DECISIONS = 50_000
+#: 자동 확인(ADR 0075) — 문턱의 아래 끝 · 근거가 되는 결정 수(사람이 하나씩 정한 것) · 그
+#: 구간에서 추천대로 한 몫 · 밤마다 상한.
+AUTO_MIN_THRESHOLD = 0.9
+AUTO_MIN_DECIDED = 30
+AUTO_MIN_RATE = 0.95
+AUTO_MAX = 1000
+#: 자동 확인의 근거로 세는 결정 — 사람이 하나씩 본 것만. 「추천대로 모두」 · 「거른 전부」 ·
+#: 자동은 늘 추천을 「따른」 것으로 남아, 세면 정확도가 저절로 오른다.
+AUTO_EVIDENCE_MODES = ("one", "selected")
 
 
 def require_viewer(db: Session, user: User) -> None:
@@ -132,6 +143,10 @@ class Query:
     max_confidence: float | None = None
     actionable: bool = False
     """처리할 수 있는 것만 — 처리 길이 있고 막히지 않은 것."""
+    recommendation: str | None = None
+    """`with` — 추천이 있는 것만 · `without` — 추천이 없는 것만(ADR 0075). 별칭 후보에서 추천이
+    없는 줄은 글자가 비슷한 객체가 없는 말이다 — 대개 별칭 감이 아니지만, 글자가 다른 이름
+    (「앤시스」 → Ansys)일 수 있다."""
 
 
 def filters_of(db: Session, query: Query) -> Filters:
@@ -168,6 +183,10 @@ def _passes(item: Item, provider: Provider, flt: Filters, query: Query) -> bool:
     if query.max_confidence is not None and (
         item.confidence is None or item.confidence >= query.max_confidence
     ):
+        return False
+    if query.recommendation == "with" and item.recommended is None:
+        return False
+    if query.recommendation == "without" and item.recommended is not None:
         return False
     return not (query.actionable and (provider.check is None or item.blocked))
 
@@ -237,7 +256,7 @@ def _late_note(provider: Provider, took: float, alone: bool) -> str:
     )
 
 
-def collect(db: Session, user: User, query: Query) -> Listed:
+def collect(db: Session, user: User, query: Query, *, whole: bool = False) -> Listed:
     """종류마다 원래 자리에서 읽어 거른다 — **볼 수 있는 종류만.** 못 보는 종류는 수도 안
     말한다 (데이터 소스는 시스템 관리자의 것이다).
 
@@ -245,20 +264,39 @@ def collect(db: Session, user: User, query: Query) -> Listed:
     `COLLECT_SECONDS`(종류 하나만 보면 그것을 다 쓴다). 시간이 다 되면 줄마다 일하는 종류는
     거기까지 내고(`Collected.cut`), 스스로 멈추지 못하는 종류는 `KIND_GRACE` 뒤에 끊고
     건너뛴다. 어느 쪽이든 그 종류는 `late` 이고 까닭은 그 종류의 `notes` 에 선다 — 한 종류가
-    느려도 나머지는 보인다."""
+    느려도 나머지는 보인다.
+
+    `whole` 이면(작업 안 — 「전부 작업으로」 · 자동 확인, ADR 0075) 시간을 안 보고 상한 없이
+    읽는다(`Filters.whole` — 지원하는 종류만, 나머지는 평소 상한)."""
     flt = filters_of(db, query)
     kinds: list[KindSummary] = []
     items: list[Item] = []
     notes: list[str] = []
     alone = query.kind is not None
-    whole = time.monotonic() + COLLECT_SECONDS
+    until = time.monotonic() + COLLECT_SECONDS
     for provider in _chosen(query.kind):
         if not provider.can_view(db, user):
             if alone:
                 notes.append(f"「{provider.label}」 은(는) 볼 수 없는 종류입니다.")
             continue
         started = time.monotonic()
-        if started >= whole:
+        if whole:
+            got = provider.collect(db, user, dataclasses.replace(flt, whole=True))
+            mine = [one for one in got.items if _passes(one, provider, flt, query)]
+            mine.sort(key=lambda one: (-one.priority, one.question))
+            kinds.append(
+                KindSummary(
+                    provider=provider,
+                    total=got.total,
+                    matched=len(mine),
+                    scanned=len(got.items),
+                    notes=got.notes,
+                    seconds=round(time.monotonic() - started, 2),
+                )
+            )
+            items.extend(mine)
+            continue
+        if started >= until:
             kinds.append(
                 KindSummary(
                     provider=provider,
@@ -273,7 +311,7 @@ def collect(db: Session, user: User, query: Query) -> Listed:
                 )
             )
             continue
-        soft = whole if alone else min(started + KIND_SECONDS, whole)
+        soft = until if alone else min(started + KIND_SECONDS, until)
         timed = dataclasses.replace(flt, deadline=soft)
         try:
             got = _within(db, soft + KIND_GRACE, partial(provider.collect, db, user, timed))
@@ -440,6 +478,9 @@ class Planned:
     skipped: int = 0
     """「추천대로 모두」 에서 문턱 아래 · 추천 없음이라 고르지 않은 수."""
     notes: list[str] = field(default_factory=list)
+    unread: int = 0
+    """상한 때문에 **읽지 않은** 수(종류마다 원래 자리에 있는 수 - 읽은 수) — 그만큼은 고르지
+    않았다. 전부에 하려면 「전부 작업으로」(ADR 0075)."""
 
     @property
     def counts(self) -> dict[str, int]:
@@ -502,18 +543,30 @@ def resolve(
     query: Query,
     threshold: float,
     action: str,
-) -> tuple[list[Decision], int, list[str]]:
+    whole: bool = False,
+) -> tuple[list[Decision], int, list[str], int]:
     """화면이 보낸 것을 결정 목록으로 — 고른 것은 그대로, 「추천대로 모두」 · 「거른 전부」 는
     **지금 거르기에 맞는 항목을 원래 자리에서 다시 읽어** 고른다. (결정들, 문턱 아래로 뺀
-    수, 시간 안에 다 못 읽은 종류의 말)."""
+    수, 시간 안에 다 못 읽은 종류의 말, 상한 때문에 읽지 않은 수). `whole` 이면 상한 없이
+    (작업 안 — ADR 0075)."""
     notes: list[str] = []
+    unread = 0
     if mode == "decisions":
         out = decisions
         skipped = 0
     else:
-        listed = collect(db, user, query)
+        listed = collect(db, user, query, whole=whole)
         notes = late_notes(listed)
         handled = {one.provider.kind for one in listed.kinds if one.provider.check is not None}
+        for one in listed.kinds:
+            if one.provider.kind in handled and one.total > one.scanned and not one.late:
+                unread += one.total - one.scanned
+                if whole:
+                    notes.append(
+                        f"「{one.provider.label}」 은(는) 한 번에 {one.scanned:,}건까지만 "
+                        f"읽습니다(전체 {one.total:,}건) — 처리한 뒤 다시 하면 다음 것을 "
+                        "고릅니다."
+                    )
         out = []
         skipped = 0
         for item in listed.items:
@@ -530,14 +583,15 @@ def resolve(
                 out.append(Decision(item.kind, item.id, "accept"))
             else:
                 out.append(Decision(item.kind, item.id, action))
-    if len(out) > MAX_DECISIONS:
+    limit = BULK_MAX_DECISIONS if whole else MAX_DECISIONS
+    if len(out) > limit:
         raise AppError(
             code("REVIEW", 4),
-            f"한 번에 {MAX_DECISIONS:,}건까지 정합니다({len(out):,}건) — 종류 · 타입 · 부서로 "
+            f"한 번에 {limit:,}건까지 정합니다({len(out):,}건) — 종류 · 타입 · 부서로 "
             "좁혀 나눠 하세요.",
             status=422,
         )
-    return out, skipped, notes
+    return out, skipped, notes, unread
 
 
 def _blocked(decision: Decision, message: str, item: Item | None = None) -> Outcome:
@@ -552,8 +606,11 @@ def _blocked(decision: Decision, message: str, item: Item | None = None) -> Outc
     )
 
 
-def plan(db: Session, user: User, decisions: list[Decision]) -> list[Outcome]:
-    """결정마다 무엇이 되나 — **항목을 원래 자리에서 다시 읽어** 본다. 아무것도 안 바꾼다."""
+def plan(
+    db: Session, user: User, decisions: list[Decision], progress: Progress | None = None
+) -> list[Outcome]:
+    """결정마다 무엇이 되나 — **항목을 원래 자리에서 다시 읽어** 본다. 아무것도 안 바꾼다.
+    `progress` 를 주면(작업 안) 200건마다 알린다 — 수만 건이면 몇 분이다."""
     wanted: dict[str, set[str]] = {}
     for one in decisions:
         wanted.setdefault(one.kind, set()).add(one.item_id)
@@ -566,7 +623,9 @@ def plan(db: Session, user: User, decisions: list[Decision]) -> list[Outcome]:
             items[(kind, got.id)] = got
     outcomes: list[Outcome] = []
     seen: set[tuple[str, str]] = set()
-    for one in decisions:
+    for index, one in enumerate(decisions):
+        if progress is not None and index % 200 == 0:
+            progress("미리 보기", index, len(decisions))
         provider = registry.get(one.kind)
         if provider is None:
             outcomes.append(_blocked(one, f"모르는 종류입니다: {one.kind}"))
@@ -651,7 +710,7 @@ def preview(
     threshold: float,
     action: str,
 ) -> Planned:
-    resolved, skipped, notes = resolve(
+    resolved, skipped, notes, unread = resolve(
         db,
         user,
         mode=mode,
@@ -666,12 +725,18 @@ def preview(
             f"추천이 없거나 확신도가 {threshold:.2f} 아래인 {skipped:,}건은 선택하지 "
             "않았습니다 — 사람이 봐야 합니다."
         )
+    if unread:
+        notes.append(
+            f"한 번에 읽는 상한 때문에 {unread:,}건은 보지 않았습니다 — 그것까지 하려면 "
+            "「전부 작업으로」(작업이 전부를 읽어 미리 보고, 확인하면 적용합니다)."
+        )
     return Planned(
         decisions=resolved,
         outcomes=outcomes,
         fingerprint=fingerprint_of(outcomes),
         skipped=skipped,
         notes=notes,
+        unread=unread,
     )
 
 
@@ -718,7 +783,7 @@ def _record(
             confidence=item.confidence if item else None,
             # 추천을 따랐나 — 추천이 없었으면 셈하지 않는다(NULL). 무시는 따르지 않은 것이다.
             followed=None if recommended is None else one.choice == recommended,
-            mode=mode if mode in ("one", "selected", "all", "recommended") else "selected",
+            mode=mode if mode in REVIEW_MODES else "selected",
             threshold=threshold if mode == "recommended" else None,
             status=one.status,
             message=one.message[:500],
@@ -879,6 +944,512 @@ def run_job(
         "batch_id": str(result.batch_id),
         "counts": result.counts,
         "rows": [outcome_dict(one) for one in result.outcomes],
+    }
+
+
+# --- 전부 작업으로(ADR 0075) --------------------------------------------------------
+#
+# 「추천대로 모두」 · 「거른 전부」 는 화면이 읽은 것(별칭 후보 200줄) 안에서만 고른다 — 대기가
+# 3만 건이면 150번을 눌러야 한다. 여기는 **작업이** 상한 없이 전부 읽어(`whole`) 미리 보고,
+# 사람이 그 미리 보기를 보고 적용한다(두 단계 작업 `review_bulk` — 같은 결정 · 같은 지문). 수만
+# 건의 결정은 결과에 싣지 않고 결과 파일(CSV — 사람도 받아 본다)에 둔다 — 작업 목록이 결과를
+# 싣기 때문이다.
+
+#: 결과 파일의 열 — 앞의 넷을 적용이 다시 읽는다.
+BULK_COLUMNS = ("종류", "항목", "동작", "값", "물음", "무엇이 되나", "상태", "말")
+
+
+def _query_of(raw: dict[str, Any]) -> Query:
+    return Query(
+        kind=raw.get("kind") or None,
+        type_slug=raw.get("type") if raw.get("type") is not None else None,
+        workspace=raw.get("workspace") or None,
+        min_confidence=raw.get("min_confidence"),
+        max_confidence=raw.get("max_confidence"),
+        actionable=bool(raw.get("actionable")),
+        recommendation=raw.get("recommendation") or None,
+    )
+
+
+def kind_lines(outcomes: list[Outcome]) -> list[dict[str, Any]]:
+    """종류마다 — 적용 · 막힘 · 줄 수 · 복원할 수 있나(미리 보기 창의 표)."""
+    by_kind: dict[str, dict[str, Any]] = {}
+    for one in outcomes:
+        provider = registry.get(one.decision.kind)
+        line = by_kind.setdefault(
+            one.decision.kind,
+            {
+                "kind": one.decision.kind,
+                "label": provider.label if provider else one.decision.kind,
+                "apply": 0,
+                "blocked": 0,
+                "rows": 0,
+                "undoable": True,
+                "undo_note": provider.undo_note if provider else "",
+            },
+        )
+        if one.status == "apply":
+            line["apply"] += 1
+            line["rows"] += one.rows
+            line["undoable"] = line["undoable"] and one.undoable
+        else:
+            line["blocked"] += 1
+    return list(by_kind.values())
+
+
+def bulk_csv(outcomes: list[Outcome]) -> bytes:
+    """미리 본 전부 — 결정마다 한 줄. 엑셀이 한글을 알아보게 BOM 을 붙인다."""
+    import csv
+    import io
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(BULK_COLUMNS)
+    for one in outcomes:
+        writer.writerow(
+            [
+                one.decision.kind,
+                one.decision.item_id,
+                one.decision.action,
+                one.decision.value or "",
+                one.question,
+                one.effect,
+                one.status,
+                one.message,
+            ]
+        )
+    return ("﻿" + buffer.getvalue()).encode("utf-8")
+
+
+def bulk_decisions(data: bytes) -> list[Decision]:
+    """결과 파일에서 결정을 다시 읽는다 — 미리 본 그 결정들(`bulk_csv`)."""
+    import csv
+    import io
+
+    reader = csv.reader(io.StringIO(data.decode("utf-8-sig")))
+    header = next(reader, None)
+    if header is None or tuple(header[:4]) != BULK_COLUMNS[:4]:
+        raise AppError(
+            code("REVIEW", 9),
+            "미리 보기의 결과 파일 모양이 다릅니다 — 다시 미리 보세요.",
+            status=409,
+        )
+    return [
+        Decision(kind=row[0], item_id=row[1], action=row[2], value=row[3] or None)
+        for row in reader
+        if len(row) >= 4
+    ]
+
+
+def bulk_plan(
+    db: Session, user: User, params: dict[str, Any], progress: Progress
+) -> tuple[dict[str, Any], bytes]:
+    """「전부 작업으로」 의 미리 보기 — (결과, 결과 파일). **아무것도 안 바꾼다.**"""
+    mode = str(params.get("mode") or "recommended")
+    if mode not in ("recommended", "all"):
+        raise AppError(code("REVIEW", 4), f"모르는 방식입니다: {mode}", status=422)
+    threshold = float(params.get("threshold") or DEFAULT_THRESHOLD)
+    action = str(params.get("action") or "accept")
+    progress("읽기", 0, 0)
+    resolved, skipped, notes, _unread = resolve(
+        db,
+        user,
+        mode=mode,
+        decisions=[],
+        query=_query_of(dict(params.get("filters") or {})),
+        threshold=threshold,
+        action=action,
+        whole=True,
+    )
+    outcomes = plan(db, user, resolved, progress=progress)
+    progress("미리 보기", len(resolved), len(resolved))
+    if mode == "recommended" and skipped:
+        notes.append(
+            f"추천이 없거나 확신도가 {threshold:.2f} 아래인 {skipped:,}건은 선택하지 "
+            "않았습니다 — 사람이 봐야 합니다."
+        )
+    found = Counter(one.status for one in outcomes)
+    counts = {"apply": found.get("apply", 0), "blocked": found.get("blocked", 0)}
+    shown = sorted(outcomes, key=lambda one: 0 if one.status == "blocked" else 1)
+    result = {
+        "summary": (
+            f"전부 미리 보기 — 적용 {counts['apply']:,} · 막힘 {counts['blocked']:,}"
+            + (f" · 고르지 않음 {skipped:,}" if skipped else "")
+            + (" — 「적용」 으로 처리합니다" if counts["apply"] else "")
+        ),
+        "ok": counts["apply"] > 0,
+        "applied": False,
+        "fingerprint": fingerprint_of(outcomes),
+        "mode": mode,
+        "threshold": threshold if mode == "recommended" else None,
+        "decisions": [],
+        "decided": len(resolved),
+        "counts": counts,
+        "by_kind": kind_lines(outcomes),
+        "outcomes": [outcome_dict(one) for one in shown[:SHOWN_OUTCOMES]],
+        "outcomes_omitted": max(0, len(shown) - SHOWN_OUTCOMES),
+        "skipped": skipped,
+        "rows": sum(one.rows for one in outcomes if one.status == "apply"),
+        "as_job": True,
+        "unread": 0,
+        "notes": notes,
+    }
+    return result, bulk_csv(outcomes)
+
+
+def bulk_apply(
+    db: Session,
+    user: User,
+    params: dict[str, Any],
+    decisions: list[Decision],
+    progress: Progress,
+) -> dict[str, Any]:
+    """「전부 작업으로」 의 적용 — 미리 본 **그 결정들**을(결과 파일에서) 다시 계획해 지문이
+    같을 때만. 그 사이 새로 생긴 항목은 들지 않는다(다음에 다시)."""
+    mode = str(params.get("mode") or "recommended")
+    threshold = params.get("threshold")
+    outcomes = plan(db, user, decisions, progress=progress)
+    require_same(outcomes, str(params.get("fingerprint") or ""))
+    result = apply(
+        db,
+        user,
+        decisions,
+        str(params.get("fingerprint") or ""),
+        mode=mode,
+        threshold=float(threshold)
+        if mode == "recommended" and threshold is not None
+        else None,
+        in_job=True,
+        progress=progress,
+        planned=outcomes,
+    )
+    counts = result.counts
+    undoable = sum(1 for one in result.outcomes if one.status == "done" and one.undoable)
+    return {
+        "summary": (
+            f"{counts['done']:,}건 처리"
+            + (
+                f" · 그 사이 막혀 처리 안 함 {counts['refused']:,}"
+                if counts["refused"]
+                else ""
+            )
+        ),
+        "applied": True,
+        "batch_id": str(result.batch_id),
+        "counts": counts,
+        "undoable": undoable,
+        "rows": [outcome_dict(one) for one in result.outcomes[:SHOWN_OUTCOMES]],
+    }
+
+
+def enqueue_bulk(
+    db: Session,
+    user: User,
+    *,
+    mode: str,
+    filters: dict[str, Any],
+    threshold: float,
+    action: str,
+) -> Job:
+    """「전부 작업으로」 의 미리 보기 작업을 넣는다 — 적용은 그 작업의 `POST
+    /api/jobs/{id}/apply`."""
+    job = job_services.enqueue(
+        db,
+        kind="review_bulk",
+        params={
+            "mode": mode,
+            "filters": filters,
+            "threshold": threshold,
+            "action": action,
+        },
+        user=user,
+        workspace_id=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+# --- 자동 확인(ADR 0075) -----------------------------------------------------------
+
+
+@dataclass
+class AutoEvidence:
+    decided: int
+    """그 구간(확신도 ≥ 문턱)에서 사람이 하나씩 정한 결정 수 — 추천이 있던 것만."""
+    followed: int
+    """그중 추천대로 한 것(복원하지 않은 것)."""
+    undone_auto: int
+    """켠 뒤 자동으로 정한 것을 누가 복원한 수 — 하나라도 있으면 멈춘다."""
+
+    @property
+    def rate(self) -> float | None:
+        return self.followed / self.decided if self.decided else None
+
+
+@dataclass
+class AutoState:
+    provider: Provider
+    rule: ReviewAutoRule | None
+    evidence: AutoEvidence
+    ready: bool
+    """지금 돌릴 수 있나 — 켜져 있고 근거가 충분하다."""
+    why: str
+    """못 도는 까닭(사람 말). 돌 수 있으면 빈 글자."""
+
+
+def auto_evidence(
+    db: Session, kind: str, threshold: float, since: datetime | None
+) -> AutoEvidence:
+    """자동 확인의 근거 — **사람이 하나씩 정한 결정**(`AUTO_EVIDENCE_MODES`)만 센다. 부서와
+    상관없이 그 종류 전부(설치 전체의 규칙이다)."""
+    decided, followed = db.execute(
+        select(
+            func.count(),
+            func.count().filter(
+                ReviewDecision.followed.is_(True), ReviewDecision.undone_at.is_(None)
+            ),
+        ).where(
+            ReviewDecision.kind == kind,
+            ReviewDecision.status == "done",
+            ReviewDecision.recommended.isnot(None),
+            ReviewDecision.confidence >= threshold,
+            ReviewDecision.mode.in_(AUTO_EVIDENCE_MODES),
+        )
+    ).one()
+    undone = 0
+    if since is not None:
+        undone = int(
+            db.scalar(
+                select(func.count()).where(
+                    ReviewDecision.kind == kind,
+                    ReviewDecision.mode == "auto",
+                    ReviewDecision.undone_at.isnot(None),
+                    ReviewDecision.decided_at >= since,
+                )
+            )
+            or 0
+        )
+    return AutoEvidence(decided=int(decided), followed=int(followed), undone_auto=undone)
+
+
+def _auto_why(rule: ReviewAutoRule | None, evidence: AutoEvidence) -> str:
+    if rule is None or not rule.enabled:
+        return "꺼져 있습니다."
+    if evidence.undone_auto:
+        return (
+            f"자동으로 처리한 것을 {evidence.undone_auto:,}건 복원한 적이 있어 멈췄습니다 — "
+            "추천을 확인한 뒤 다시 켜면 이어 합니다."
+        )
+    if evidence.decided < AUTO_MIN_DECIDED:
+        return (
+            f"근거가 모자랍니다 — 확신도 {rule.threshold:.2f} 이상에서 사람이 하나씩 정한 "
+            f"결정이 {evidence.decided:,}건입니다({AUTO_MIN_DECIDED}건 필요)."
+        )
+    rate = evidence.rate or 0.0
+    if rate < AUTO_MIN_RATE:
+        return (
+            f"추천이 충분히 맞지 않습니다 — 확신도 {rule.threshold:.2f} 이상에서 추천대로 "
+            f"한 몫이 {rate:.0%}입니다({AUTO_MIN_RATE:.0%} 이상 필요, 결정 "
+            f"{evidence.decided:,}건)."
+        )
+    return ""
+
+
+def auto_states(db: Session) -> list[AutoState]:
+    """처리 길이 있는 종류마다 자동 확인의 상태 — 켜져 있나 · 근거 · 지금 돌 수 있나."""
+    rules = {one.kind: one for one in db.scalars(select(ReviewAutoRule))}
+    out: list[AutoState] = []
+    for provider in registry.providers():
+        if provider.check is None:
+            continue
+        rule = rules.get(provider.kind)
+        threshold = rule.threshold if rule is not None else 0.95
+        evidence = auto_evidence(
+            db, provider.kind, threshold, rule.enabled_at if rule is not None else None
+        )
+        why = _auto_why(rule, evidence)
+        out.append(
+            AutoState(provider=provider, rule=rule, evidence=evidence, ready=not why, why=why)
+        )
+    return out
+
+
+def set_auto(
+    db: Session, user: User, kind: str, *, enabled: bool, threshold: float
+) -> ReviewAutoRule:
+    """자동 확인을 켜고 끈다 — **시스템 관리자만**(설치 전체의 자료를 밤마다 고친다). 켜면 그
+    사람의 이름으로 처리하고, 켠 때부터 「자동으로 정한 것을 복원했나」 를 다시 센다. 부르는
+    쪽이 커밋한다."""
+    from app.shared import audit
+
+    if not user.is_system_admin:
+        raise Forbidden(
+            code("REVIEW", 10),
+            "자동 확인은 시스템 관리자가 켭니다 — 설치 전체의 자료를 밤마다 처리합니다.",
+        )
+    provider = registry.get(kind)
+    if provider is None or provider.check is None:
+        raise AppError(
+            code("REVIEW", 2), f"처리 길이 있는 종류가 아닙니다: {kind}", status=422
+        )
+    if not AUTO_MIN_THRESHOLD <= threshold <= 1.0:
+        raise AppError(
+            code("REVIEW", 11),
+            f"자동 확인의 문턱은 {AUTO_MIN_THRESHOLD} 이상 1 이하입니다({threshold}).",
+            status=422,
+        )
+    rule = db.get(ReviewAutoRule, kind)
+    before = (
+        {"enabled": rule.enabled, "threshold": rule.threshold} if rule is not None else None
+    )
+    if rule is None:
+        rule = ReviewAutoRule(kind=kind)
+        db.add(rule)
+    changed = rule.enabled != enabled or rule.threshold != threshold
+    rule.threshold = threshold
+    if enabled and changed:
+        rule.enabled_by_id = user.id
+        rule.enabled_at = datetime.now(UTC)
+        rule.last_note = ""
+    rule.enabled = enabled
+    db.flush()
+    if changed:
+        audit.record(
+            db,
+            action="review.auto",
+            actor=user,
+            target_table="review_auto_rules",
+            target_id=None,
+            target_label=f"자동 확인: {provider.label}",
+            changes={
+                "rule": {
+                    "before": before,
+                    "after": {"enabled": enabled, "threshold": threshold},
+                }
+            },
+            reason="검토함 자동 확인 " + ("켬" if enabled else "끔"),
+        )
+    return rule
+
+
+def schedule_auto(db: Session, now: datetime | None = None) -> list[str]:
+    """**워커가 5분마다 부른다** — 켠 종류마다 하루 한 번(`REVIEW_AUTO_HOUR` 이 지난 뒤) 작업을
+    넣는다(넣은 종류들). 근거가 모자라면 넣지 않고 그 까닭을 규칙에 적는다. 켠 사람이 더 시스템
+    관리자가 아니면 끈다 — 그 이름으로 처리하기 때문이다."""
+    from sqlalchemy import text as sql_text
+
+    from app.config import get_settings
+
+    if not db.scalar(
+        sql_text("SELECT pg_try_advisory_xact_lock(hashtext(:key))"),
+        {"key": "review_auto:schedule"},
+    ):
+        return []
+    now = now or datetime.now(UTC)
+    local = now.astimezone()
+    if local.hour < get_settings().review_auto_hour:
+        return []
+    queued: list[str] = []
+    for rule in db.scalars(select(ReviewAutoRule).where(ReviewAutoRule.enabled.is_(True))):
+        if (
+            rule.last_run_at is not None
+            and rule.last_run_at.astimezone().date() >= local.date()
+        ):
+            continue
+        busy = db.scalar(
+            select(Job.id)
+            .where(
+                Job.kind == "review_auto",
+                Job.status.in_(("queued", "running")),
+                Job.params["kind"].astext == rule.kind,
+            )
+            .limit(1)
+        )
+        if busy is not None:
+            continue
+        rule.last_run_at = now
+        owner = db.get(User, rule.enabled_by_id) if rule.enabled_by_id else None
+        if owner is None or owner.deleted_at is not None or not owner.is_system_admin:
+            rule.enabled = False
+            rule.last_note = (
+                "켠 사람이 더 시스템 관리자가 아니어서 껐습니다 — 그 이름으로 처리합니다. "
+                "다시 켜세요."
+            )
+            continue
+        provider = registry.get(rule.kind)
+        if provider is None:
+            rule.last_note = "이 프로세스에 그 종류가 없습니다 — 확장을 껐을 수 있습니다."
+            continue
+        why = _auto_why(rule, auto_evidence(db, rule.kind, rule.threshold, rule.enabled_at))
+        if why:
+            rule.last_note = f"{local:%m-%d} 건너뜀 — {why}"
+            continue
+        job = job_services.enqueue(
+            db, kind="review_auto", params={"kind": rule.kind}, user=owner, workspace_id=None
+        )
+        rule.last_job_id = job.id
+        queued.append(rule.kind)
+    db.commit()
+    return queued
+
+
+def run_auto(
+    db: Session, user: User, params: dict[str, Any], progress: Progress
+) -> dict[str, Any]:
+    """작업 `review_auto` — 그 종류의 「추천대로 모두」 를 **상한 없이 · 밤마다 `AUTO_MAX`
+    까지**. 도는 때에 근거를 다시 본다(그 사이 복원했을 수 있다). 결정은 묶음 하나
+    (`mode="auto"`)."""
+    kind = str(params.get("kind") or "")
+    rule = db.get(ReviewAutoRule, kind)
+    if rule is None or not rule.enabled:
+        return {"summary": "자동 확인이 꺼져 있어 건너뛰었습니다.", "applied": False}
+    threshold = rule.threshold
+    why = _auto_why(rule, auto_evidence(db, kind, threshold, rule.enabled_at))
+    if why:
+        rule.last_note = f"건너뜀 — {why}"
+        return {"summary": f"건너뜀 — {why}", "applied": False}
+    progress("읽기", 0, 0)
+    resolved, _skipped, _notes, _unread = resolve(
+        db,
+        user,
+        mode="recommended",
+        decisions=[],
+        query=Query(kind=kind),
+        threshold=threshold,
+        action="accept",
+        whole=True,
+    )
+    more = max(0, len(resolved) - AUTO_MAX)
+    resolved = resolved[:AUTO_MAX]
+    outcomes = plan(db, user, resolved, progress=progress)
+    blocked = sum(1 for one in outcomes if one.status == "blocked")
+    result = apply(
+        db,
+        user,
+        resolved,
+        fingerprint_of(outcomes),
+        mode="auto",
+        threshold=threshold,
+        in_job=True,
+        progress=progress,
+        planned=outcomes,
+    )
+    counts = result.counts
+    summary = (
+        f"자동 확인 — {counts['done']:,}건 처리"
+        + (f" · 막힘 {blocked:,}" if blocked else "")
+        + (f" · 그 사이 막힘 {counts['refused']:,}" if counts["refused"] else "")
+        + (f" · 남은 {more:,}건은 다음 밤" if more else "")
+    )
+    rule = db.get(ReviewAutoRule, kind) or rule
+    rule.last_note = summary
+    return {
+        "summary": summary,
+        "applied": True,
+        "batch_id": str(result.batch_id),
+        "counts": counts,
+        "rows": [outcome_dict(one) for one in result.outcomes[:SHOWN_OUTCOMES]],
     }
 
 
