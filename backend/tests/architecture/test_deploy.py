@@ -1355,6 +1355,93 @@ def test_임베딩_꾸러미는_deploy_sh_의_확인_짝으로_바꾼_리랭커�
     assert "sentencepiece==0.2.2" in builder  # 그 판의 목록대로면 변환이 떨어진다(ADR 0072)
 
 
+def _publish_ai_bundle(
+    tmp_path: Path, *, tag_exists: bool = False, ai_repo: str | None = "owner/repo-ai-bundle"
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    """`publish_ai_bundle.sh` 를 가짜 GitHub(`curl` 흉내)으로 — 올린 것은 `uploaded/` 에."""
+    stage = tmp_path / "stage" / "ai"
+    stage.mkdir(parents=True)
+    (stage / "MANIFEST.txt").write_text(
+        "임베딩 꾸러미\nbuilt  : 2026-11-13T23:49:29Z\n", encoding="utf-8"
+    )
+    (stage / "blob").write_bytes(bytes(range(256)) * 14)
+    bundle = tmp_path / "release" / "ai-bundle-v0-test.tar"
+    bundle.parent.mkdir()
+    subprocess.run(["tar", "-C", str(stage.parent), "-cf", str(bundle), "ai"], check=True)
+    bin_dir, uploaded, log = tmp_path / "bin", tmp_path / "uploaded", tmp_path / "calls.log"
+    bin_dir.mkdir()
+    uploaded.mkdir()
+    _stub(
+        bin_dir / "curl",
+        'method=GET; file=""; url=""; data=""; prev=""\n'
+        'for a in "$@"; do\n'
+        '  case "$prev" in -X) method="$a";; -T) file="$a";; --data) data="$a";; esac\n'
+        '  case "$a" in http*) url="$a";; esac; prev="$a"\n'
+        "done\n"
+        f'echo "$method $url" >> "{log}"\n'
+        'case "$method $url" in\n'
+        f'  "GET "*/releases/tags/*) echo "{"200" if tag_exists else "404"}" ;;\n'
+        f'  "POST "*/releases) printf \'%s\' "$data" > "{tmp_path}/created.json";'
+        " printf '{\"id\": 7}\\n201' ;;\n"
+        f'  "POST "*/assets*) cp "$file" "{uploaded}/${{url##*name=}}";'
+        ' printf \'{"size": %s}\\n201\' "$(wc -c < "$file")" ;;\n'
+        '  "PATCH "*) printf \'{"html_url": "https://example.test/r"}\\n200\' ;;\n'
+        "esac\n",
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", str(DEPLOY / "publish_ai_bundle.sh"), str(bundle)],
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "GITHUB_TOKEN": "t",
+            "PART_SIZE": "1K",
+            **({"AI_REPO": ai_repo} if ai_repo else {}),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return done, bundle, uploaded
+
+
+@_no_bash
+def test_AI_꾸러미는_조각과_지문으로_초안에_올린_뒤_게시한다(tmp_path: Path) -> None:
+    """GitHub 첨부 상한(2GB)보다 큰 꾸러미 — 조각을 합치면 원본이고, 지문 목록이 조각마다 ·
+    전체를 담고, 다 올린 뒤에야 게시한다(끊겨도 「최신」 이 반쪽을 가리키지 않게)."""
+    import hashlib
+
+    done, bundle, uploaded = _publish_ai_bundle(tmp_path)
+    assert done.returncode == 0, done.stderr
+    # 태그는 꾸러미를 만든 날(한국 시각) — 23:49Z 는 다음 날이다.
+    assert "ai-2026-11-14" in done.stdout
+    created = json.loads((tmp_path / "created.json").read_text(encoding="utf-8"))
+    assert created["tag_name"] == "ai-2026-11-14" and created["draft"] is True
+    parts = sorted(uploaded.glob("*.part-*"))
+    size = bundle.stat().st_size  # tar 는 10KB 단위로 채운다
+    assert len(parts) == -(-size // 1024) > 1
+    assert all(one.stat().st_size <= 1024 for one in parts)
+    assert b"".join(one.read_bytes() for one in parts) == bundle.read_bytes()
+    sums: dict[str, str] = {}
+    for line in (uploaded / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
+        digest, file_name = line.split("  ", 1)
+        sums[file_name] = digest
+    for one in [*parts, bundle]:
+        assert sums[one.name] == hashlib.sha256(one.read_bytes()).hexdigest(), one.name
+    assert "built" in (uploaded / "MANIFEST.txt").read_text(encoding="utf-8")
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()
+    assert calls[-1].startswith("PATCH ")  # 게시는 맨 끝
+    assert not list(bundle.parent.glob("ai-publish.*"))  # 조각은 치운다
+
+
+@_no_bash
+def test_AI_꾸러미는_같은_태그가_있으면_올리지_않는다(tmp_path: Path) -> None:
+    """저장소를 주지 않으면 이 저장소(origin) 이름에 `-ai-bundle` — 포크하면 그 포크의 것."""
+    done, _, uploaded = _publish_ai_bundle(tmp_path, tag_exists=True, ai_repo=None)
+    assert done.returncode != 0 and "이미 있습니다" in done.stderr
+    assert not list(uploaded.iterdir())
+    calls = (tmp_path / "calls.log").read_text(encoding="utf-8")
+    assert "-ai-bundle/releases/tags/ai-2026-11-14" in calls
+
+
 # --- update 의 안전장치 — 내리기 전에 보고, 내린 뒤 실패하면 되돌린다 --------------------
 
 

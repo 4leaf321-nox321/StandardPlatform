@@ -24,7 +24,7 @@ Exception)가 든다 — 그래프 사본(ADR 0069). 앱이 링크하는 것이 
 | MCP 서버 · 정제 키트의 파이썬 휠(mcp · httpx · openpyxl …) | MIT · BSD · Apache-2.0 · PSF, certifi 는 MPL-2.0 | 각 휠의 `*.dist-info/licenses/` · 키트의 내장 CPython 은 PSF-2.0 |
 | 이미지(SIF)의 OS 패키지(Ubuntu 24.04 · python3.12 · libpq5 …) | GPL · LGPL · MIT 등 패키지마다 | 릴리스 번들의 `os-packages.txt`(패키지 · 판) — 각 패키지의 `/usr/share/doc/<패키지>/copyright` |
 | 번들에 함께 넣는 `apptainer_debs/` · `pgvector_debs/` | Apptainer BSD-3, fuse-overlayfs · squashfs-tools 등 GPL-2, pgvector PostgreSQL License | 각 .deb 안의 `copyright` |
-| 뜻으로 찾기의 Ollama · bge-m3(사내 서버로만 옮기는 AI 꾸러미) | Ollama MIT(안의 CUDA 런타임은 NVIDIA CUDA EULA), bge-m3 MIT | 꾸러미 안의 각 라이선스 파일 |
+| 뜻으로 찾기의 Ollama · bge-m3(AI 꾸러미 — 따로 된 저장소 <https://github.com/4leaf321-nox321/StandardPlatform-ai-bundle> 의 릴리스로 나눈다) | Ollama MIT(안의 CUDA 런타임은 NVIDIA CUDA EULA), bge-m3 MIT | 그 저장소의 `THIRD_PARTY_NOTICES.md` · `licenses/` |
 | 리랭커의 llama.cpp `llama-server`(공식 릴리스 실행 파일, 같은 AI 꾸러미) · bge-reranker-v2-m3(원본 가중치를 GGUF 로 바꾼 것) | llama.cpp MIT(GPU 판에 함께 담는 CUDA 런타임 `cudart-*` 는 NVIDIA CUDA EULA), bge-reranker-v2-m3 Apache-2.0 | 꾸러미 `ai/rerank/` 의 각 묶음 안 `LICENSE` · 모델은 Hugging Face `BAAI/bge-reranker-v2-m3` 의 카드 |
 
 ## 조건이 붙는 것

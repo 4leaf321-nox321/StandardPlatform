@@ -706,6 +706,12 @@ SP 를 고치지 않고, SP 가 정본이다.
   ```
 
   꾸러미는 앱 판과 무관하다 — 한 번 만들어 두고 서버를 새로 세울 때마다 쓴다. 이미 깔린 서버는 다시 안 받는다.
+
+  **만들어 둔 꾸러미는 AI 꾸러미 저장소에서 받는다** — <https://github.com/4leaf321-nox321/StandardPlatform-ai-bundle> 의 릴리스. 꾸러미(약 4.5GB)가 GitHub 첨부
+  상한(2GB)보다 커서 조각으로 올라가 있고, 그 저장소의 `fetch-ai-bundle.bat`(WSL 없는 Windows PC 도 — `<> Code` →
+  `Download ZIP` 으로 받아 더블클릭) · `fetch-ai-bundle.sh` 가 조각을 받아 지문을 맞추고 하나로 합친다. 새로 만든
+  꾸러미를 올리는 것은 `GITHUB_TOKEN=<repo 권한 토큰> ./deploy/publish_ai_bundle.sh`(초안으로 다 올린 뒤 게시,
+  태그 `ai-<만든 날>`).
 - **디스크** — Ollama 약 2GB(`/usr/local/lib/ollama`, GPU 라이브러리 포함) + 모델 1.2GB
   (`/usr/share/ollama/.ollama/models`). DB 는 **뜻의 자리를 담은 객체 하나에 약 14KB**(실측 — 표 5.7KB + 찾는
   색인 8.2KB) — 100만 건이면 약 14GB, 1,000만 건이면 약 140GB. 무엇을 담을지는 관리자가 칸마다 고른다(고른 것만 늘어난다).

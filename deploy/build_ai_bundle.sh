@@ -6,6 +6,9 @@
 #   RERANK=0 ./deploy/build_ai_bundle.sh  → 리랭커 없이(약 2.7GB)
 #   RERANK_CHECK=0 ./deploy/build_ai_bundle.sh → 바꾼 리랭커를 이 PC 에서 매겨 보지 않고(llama.cpp 를 못 띄우는 PC)
 #
+# 만든 뒤 `./deploy/publish_ai_bundle.sh` 가 AI 꾸러미 저장소(<이 저장소>-ai-bundle)의 릴리스로 조각내어 올린다 —
+# 다른 PC 는 그 저장소의 `fetch-ai-bundle.bat`(.sh)으로 받는다(WSL 없이).
+#
 # 인터넷이 되는 PC 에서 만든다 — sudo 도 Ollama 도 필요 없다(모델은 Ollama 저장소에서 바로 받는다). 필요한 것:
 # curl · zstd · python3(venv) · sha256sum. 리랭커 모델은 원본(BAAI 가중치, 커밋을 박아서)을 받아 llama.cpp 의
 # 변환 스크립트(같은 판, 그 판이 밝힌 파이썬 패키지로 임시 환경)로 GGUF 로 바꿔 담는다. 서버에서는 릴리스 번들을 푼 폴더 안에 풀면(`ai/` 가 생긴다) `deploy.sh` 의
