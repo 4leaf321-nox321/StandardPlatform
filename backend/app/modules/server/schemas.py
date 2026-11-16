@@ -308,6 +308,69 @@ class CutQuestionsOut(BaseModel):
     """그 기간의 모양 수(`items` 는 많이 끊긴 것부터 일부)."""
 
 
+class ToolCodeOut(BaseModel):
+    code: str
+    """오류 코드(`APP-OBJECTS-0152` …)."""
+    count: int
+
+
+class ToolStatOut(BaseModel):
+    """MCP 도구 하나(ADR 0078)."""
+
+    tool: str
+    calls: int
+    """부른 수 — 한 부름이 백엔드를 여러 번 부르기도 해서(관리자 확인 · 작업 기다리기) 부름 id
+    로 센다."""
+    requests: int
+    """그 부름들이 백엔드를 부른 수."""
+    people: int
+    empty: int
+    """0건이었던 요청(성공 응답 가운데)."""
+    rejected: int
+    """4xx — 권한 · 모양 · 없는 이름."""
+    failed: int
+    """5xx — 서버 오류 · 시간 상한."""
+    p50_ms: int
+    p95_ms: int
+    last_at: datetime
+    codes: list[ToolCodeOut]
+    """많이 난 오류 코드(셋까지)."""
+
+
+class AiUsageOut(BaseModel):
+    period: str
+    since: datetime
+    first_recorded_at: datetime | None
+    """도구 이름이 남은 가장 오래된 기록 — 없으면 MCP 가 아직 이름을 싣지 않았다(옛 판 · 안
+    씀)."""
+    items: list[ToolStatOut]
+
+
+class ToolPathOut(BaseModel):
+    path: str
+    requests: int
+
+
+class ToolRouteOut(BaseModel):
+    method: str
+    route: str
+    requests: int
+    empty: int
+    rejected: int
+    failed: int
+    p95_ms: int
+    paths: list[ToolPathOut]
+    """많이 부른 원 경로(지표 slug · 타입이 든다) — 틀과 같으면 빈다."""
+
+
+class AiToolOut(BaseModel):
+    tool: str
+    period: str
+    since: datetime
+    routes: list[ToolRouteOut]
+    codes: list[ToolCodeOut]
+
+
 class JobStatsOut(BaseModel):
     period: str
     since: datetime

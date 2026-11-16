@@ -5,7 +5,7 @@
 #   sudo ./deploy.sh install   SIF 배치 + .env 생성 + systemd + 마이그레이션 + 시드 + 기동
 #   sudo ./deploy.sh update    SIF 교체 + 마이그레이션 + 재시작 (자료 그대로)
 #   sudo ./deploy.sh reset     DB 통째로 초기화 (파괴적)
-#   sudo ./deploy.sh status    서비스 상태 + /api/health
+#   sudo ./deploy.sh status    서비스 상태 + /api/health/ready(준비됨)
 #   sudo ./deploy.sh           자동: 설치된 흔적이 없으면 install, 있으면 update
 #   sudo ./deploy.sh remove    이 인스턴스를 서버에서 지운다 — 유닛 · DB · 설치 폴더 (공용 폴더는 남긴다)
 #   sudo ./deploy.sh setup     **물어보고 알아서** — 이름 · 역할 · 상대 서버를 답하면 prepare → (DB 주/대기)
@@ -1557,12 +1557,27 @@ cmd_rdf_copy() {
 
 health_check() {
     # 기동 직후에는 아직 안 뜬다. 몇 초 기다려 준다.
-    local url="http://127.0.0.1:$APP_PORT/api/health"
+    # **준비됨(/api/health/ready)을 본다**(ADR 0077) — 살아 있음(/api/health)은 DB 가 끊겼거나
+    # 마이그레이션이 덜 올라가도 200 이라, 여기가 「응답함」 이라 말하고 사람은 화면의 500 으로 먼저
+    # 알았다. 503 이면 본문(무엇이 아닌지)을 보인다. 준비됨이 없는 옛 판(되돌린 SIF — 404)이면
+    # 살아 있음으로 본다.
+    local base="http://127.0.0.1:$APP_PORT/api/health" got code body last=""
     for _ in $(seq 1 10); do
-        if curl -fsS --max-time 2 "$url" 2>/dev/null; then echo; return 0; fi
+        got="$(curl -sS --max-time 4 -w $'\n%{http_code}' "$base/ready" 2>/dev/null)" || got=""
+        code="${got##*$'\n'}"
+        body="${got%$'\n'*}"
+        case "$code" in
+            200) echo "$body"; return 0 ;;
+            404) if curl -fsS --max-time 2 "$base" 2>/dev/null; then echo; return 0; fi ;;
+            503) last="$body" ;;
+        esac
         sleep 1
     done
-    warn "$url 이 응답하지 않습니다 — journalctl -u $SERVICE_NAME -n 50"
+    if [[ -n "$last" ]]; then
+        warn "앱은 응답하지만 준비되지 않았습니다(503): $last"
+    else
+        warn "$base/ready 가 응답하지 않습니다 — journalctl -u $SERVICE_NAME -n 50"
+    fi
     return 1
 }
 
@@ -1823,7 +1838,7 @@ cmd_status() {
     echo
     systemctl --no-pager --lines=10 status "$SERVICE_NAME" || true
     echo
-    echo "== /api/health =="
+    echo "== /api/health/ready (준비됨 — DB · 마이그레이션까지) =="
     health_check || true
     echo
     echo "== 작업 워커 ($WORKER_SERVICE_NAME) =="

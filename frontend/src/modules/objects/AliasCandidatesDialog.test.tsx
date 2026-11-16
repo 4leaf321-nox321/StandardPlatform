@@ -38,6 +38,7 @@ const candidate = {
       matched: 'label',
       matched_text: '',
       score: 0.7,
+      scored_by: '',
     },
   ],
   suggest_note: '',
@@ -92,6 +93,39 @@ describe('별칭 후보', () => {
     render(<AliasCandidatesDialog onClose={() => {}} onDone={() => {}} />)
     await waitFor(() => expect(screen.getByText('Ansys Fluet')).toBeInTheDocument())
     expect(screen.getByText(/\(.*2026.*계산\)/)).toBeInTheDocument()
+  })
+
+  it('뜻으로 찾은 「이것 아닐까」 는 그렇다고 적는다(ADR 0076)', async () => {
+    aliasCandidateApi.list.mockResolvedValue({
+      items: [
+        {
+          ...candidate,
+          text: '액정 깨짐',
+          suggestions: [
+            {
+              id: 'o3',
+              type_slug: 'defect',
+              type_label: '불량 유형',
+              label: '화면 파손',
+              key: null,
+              matched: 'meaning',
+              matched_text: '',
+              score: 0.91,
+              scored_by: 'rerank',
+            },
+          ],
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    const { AliasCandidatesDialog } = await import('@/modules/objects/AliasCandidatesDialog')
+    render(<AliasCandidatesDialog onClose={() => {}} onDone={() => {}} />)
+    await waitFor(() => expect(screen.getByText('액정 깨짐')).toBeInTheDocument())
+    const hit = screen.getByRole('button', { name: /화면 파손/ })
+    expect(hit).toHaveTextContent('불량 유형 · 뜻으로 찾음')
+    expect(hit).toHaveAttribute('title', expect.stringContaining('뜻이 가까운'))
   })
 
   it('다른 객체가 쓰는 별칭이면 막는 까닭을 보이고 추가 단추를 끈다', async () => {

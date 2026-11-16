@@ -196,9 +196,9 @@ def test_무엇을_언제_셈하나(client: TestClient, admin: Signed, db: Sessi
     order: list[str] = []
     real = misses.suggestions
 
-    def spy(db: Session, user: Any, row: SearchMiss, axes: Any = None) -> Any:
+    def spy(db: Session, user: Any, row: SearchMiss, axes: Any = None, **kw: Any) -> Any:
         order.append(row.text)
-        return real(db, user, row, axes)
+        return real(db, user, row, axes, **kw)
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(misses, "suggestions", spy)

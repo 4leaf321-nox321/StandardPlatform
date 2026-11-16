@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -54,7 +56,7 @@ _RECORDED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 #:
 #: **도메인이 폴링 경로를 더하면 여기에도 더한다.** 안 더하면 그 한 줄이 표를
 #: 가득 채우고, 그때 접근 로그는 조회할 수 없는 크기가 된다.
-_SKIP = ("/api/health", "/api/notifications/unread-count")
+_SKIP = ("/api/health", "/api/health/ready", "/api/notifications/unread-count")
 
 #: 경로에 id 가 든 폴링 경로 — **맞은 라우트의 틀**로 견준다
 #: (`/api/ext/x/meetings/{meeting_id}/pulse`). `_SKIP` 의 글자 그대로는 회의마다 다른 주소를
@@ -74,6 +76,49 @@ def _skipped(scope: Scope, path: str) -> bool:
         return True
     # 틀은 라우터가 맞춘 뒤에야 안다 — 요청을 처리한 다음에 묻는다.
     return bool(_SKIP_ROUTES) and route_template(scope, path) in _SKIP_ROUTES
+
+
+#: MCP 가 부른 요청의 도구 이름 · 부름 id(ADR 0078) — 모양이 아니면 버린다(아무나 적는 머리다).
+TOOL_HEADER = b"x-sp-tool"
+TOOL_CALL_HEADER = b"x-sp-tool-call"
+_TOOL_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_TOOL_CALL = re.compile(r"[0-9a-f]{1,24}")
+#: 0건인지 · 오류 코드를 보려고 **응답을 읽는 상한**(바이트). 넘으면 읽지 않는다 — 그만큼 큰
+#: 성공 응답은 0건이 아니고, 오류 봉투는 몇 백 바이트다. 읽는 일은 루프 위에서 하므로 작게
+#: 둔다.
+READ_BODY_MAX = 256 * 1024
+
+
+def _header(scope: Scope, name: bytes, pattern: re.Pattern[str]) -> str | None:
+    for key, value in scope.get("headers") or ():
+        if bytes(key).lower() == name:
+            text = bytes(value).decode("latin-1").strip()
+            return text if pattern.fullmatch(text) else None
+    return None
+
+
+def _is_empty(found: Any) -> bool:
+    """성공 응답이 **0건**인가 — MCP 의 자취 신호(`_signal`)와 같은 판정에 줄만 주는 모양을
+    더했다: `total` 이 0 · 이름 풀이가 `none` · `total` 없이 `rows` · `items` 가 빔(SPARQL
+    질의) · 빈 목록."""
+    if isinstance(found, list):
+        return not found
+    if not isinstance(found, dict):
+        return False
+    if isinstance(found.get("total"), int) and not isinstance(found.get("total"), bool):
+        return int(found["total"]) == 0
+    if found.get("match") == "none":
+        return True
+    for key in ("rows", "items"):
+        if isinstance(found.get(key), list):
+            return not found[key]
+    return False
+
+
+def _error_code(found: Any) -> str | None:
+    error = found.get("error") if isinstance(found, dict) else None
+    got = error.get("code") if isinstance(error, dict) else None
+    return str(got)[:40] if got else None
 
 
 #: 맞는 라우트가 없던 요청의 경로 틀. **원 경로를 그대로 묶음 열쇠로 쓰지 않는다** — 아무
@@ -126,7 +171,7 @@ def route_template(scope: Scope, path: str) -> str:
 class _Response:
     """보내는 응답을 지켜본 것 — 상태 · 종류 · 보낸 바이트 · 끝난 때."""
 
-    __slots__ = ("bytes", "content_type", "ended", "length", "status")
+    __slots__ = ("body", "bytes", "content_type", "ended", "length", "read", "status")
 
     def __init__(self) -> None:
         self.status = 0
@@ -135,6 +180,27 @@ class _Response:
         """머리가 말한 길이 — 본문을 이 미들웨어가 안 보는 길(`pathsend`)에서만 쓴다."""
         self.bytes = 0
         self.ended = 0.0
+        self.read = False
+        """본문을 읽어 두나 — MCP 가 부른 JSON 응답 · 실패한 JSON 응답(ADR 0078)."""
+        self.body = bytearray()
+
+    def keep(self, chunk: bytes) -> None:
+        if not self.read:
+            return
+        if len(self.body) + len(chunk) > READ_BODY_MAX:
+            self.read = False  # 너무 크다 — 읽지 않는다
+            self.body = bytearray()
+            return
+        self.body.extend(chunk)
+
+    def parsed(self) -> Any:
+        """읽어 둔 본문(JSON) — 못 읽었으면 `...`(Ellipsis)."""
+        if not self.read:
+            return ...
+        try:
+            return json.loads(bytes(self.body))
+        except ValueError:
+            return ...
 
 
 def _content_type(headers: Any) -> str | None:
@@ -176,6 +242,7 @@ class AccessLogMiddleware:
         received_at = datetime.now(UTC)
         started = time.perf_counter()
         seen = _Response()
+        tool = _header(scope, TOOL_HEADER, _TOOL_NAME) if timed else None
 
         async def send_wrapper(message: Message) -> None:
             kind = message["type"]
@@ -183,8 +250,12 @@ class AccessLogMiddleware:
                 seen.status = int(message["status"])
                 seen.content_type = _content_type(message.get("headers"))
                 seen.length = _content_length(message.get("headers"))
+                kind_json = seen.content_type == "application/json"
+                seen.read = timed and kind_json and (tool is not None or seen.status >= 400)
             elif kind == "http.response.body":
-                seen.bytes += len(message.get("body", b""))
+                chunk = message.get("body", b"")
+                seen.bytes += len(chunk)
+                seen.keep(chunk)
             elif kind == "http.response.pathsend":
                 # 파일을 서버가 직접 보내는 길(지원하는 서버에서만) — 크기는 머리의 길이다.
                 seen.bytes = seen.length
@@ -202,11 +273,11 @@ class AccessLogMiddleware:
             # 처리 못 한 예외의 500 은 바깥(ServerErrorMiddleware)이 만든다 — 느려서 터진
             # 요청이 가장 보고 싶은 줄이라 여기서도 남긴다.
             if timed and not _skipped(scope, path):
-                self._time(scope, path, method, received_at, started, seen, failed=True)
+                self._time(scope, path, method, received_at, started, seen, tool, failed=True)
             raise
         quiet = _skipped(scope, path)
         if timed and not quiet:
-            self._time(scope, path, method, received_at, started, seen, failed=False)
+            self._time(scope, path, method, received_at, started, seen, tool, failed=False)
 
         if not path.startswith("/api/") or quiet:
             return
@@ -248,13 +319,27 @@ class AccessLogMiddleware:
         received_at: datetime,
         started: float,
         seen: _Response,
+        tool: str | None,
         *,
         failed: bool,
     ) -> None:
-        """잰 것을 맡긴다 — **DB 는 여기서 안 만진다**(`shared/request_timing.py`)."""
+        """잰 것을 맡긴다 — **DB 는 여기서 안 만진다**(`shared/request_timing.py`).
+
+        MCP 가 부른 요청이면 도구 이름 · 부름 id 와 0건이었나를, 실패한 응답이면 오류 코드를
+        함께(ADR 0078) — 둘 다 본문을 읽은 것만(`READ_BODY_MAX`)."""
         try:
             ended = seen.ended or time.perf_counter()
             status = seen.status or (500 if failed else 0)
+            found = seen.parsed()
+            empty: bool | None = None
+            error_code: str | None = None
+            if found is not ...:
+                if status >= 400:
+                    error_code = _error_code(found)
+                elif tool is not None:
+                    empty = _is_empty(found)
+            elif tool is not None and 0 < status < 400 and seen.bytes > READ_BODY_MAX:
+                empty = False  # 그만큼 큰 성공 응답은 0건이 아니다
             factory = getattr(scope["app"].state, "session_factory", SessionLocal)
             timing_writer.add(
                 factory,
@@ -269,6 +354,14 @@ class AccessLogMiddleware:
                     "content_type": seen.content_type,
                     "user_id": scope.get(USER_ID_SCOPE_KEY),
                     "request_id": get_request_id(),
+                    "tool": tool,
+                    "tool_call": (
+                        _header(scope, TOOL_CALL_HEADER, _TOOL_CALL)
+                        if tool is not None
+                        else None
+                    ),
+                    "empty": empty,
+                    "error_code": error_code,
                 },
             )
         except Exception:

@@ -34,6 +34,7 @@ import inspect
 import json
 import os
 import re
+import secrets
 import shlex
 import time
 from pathlib import PureWindowsPath
@@ -185,6 +186,34 @@ def _write_trace(fn: Any, started: float, signal: dict[str, Any]) -> None:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+#: 지금 도는 도구의 이름과 **이번 부름의 id** — 백엔드로 가는 요청마다 머리에 싣는다
+#: (`X-SP-Tool` · `X-SP-Tool-Call`, `_forward_headers`). 백엔드가 요청 시간 기록에 남겨 「어떤
+#: 도구가 쓰이고 어디서 0건 · 거절이 나나」 를 센다(ADR 0078 — 관리 › 서버 › 성능의 「AI
+#: 도구마다」). 이름만 싣는다 — 인자 · 값 · 물음은 싣지 않는다. 한 부름이 백엔드를 여러 번
+#: 부르기도 해서(관리자 확인 · 작업 기다리기) id 로 묶는다.
+_TOOL_CALL: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "tool_call", default=None
+)
+
+#: 백엔드의 접근 로그(`user_agent`)에서 MCP 가 부른 것을 가른다.
+USER_AGENT = "sp-mcp"
+
+
+def _named(fn: Any) -> Any:
+    """부르는 동안 도구 이름 · 부름 id 를 둔다(`_TOOL_CALL`) — 맨 바깥에서 감싼다(관리자 확인 ·
+    화면 주소의 요청도 그 부름에 든다)."""
+
+    @functools.wraps(fn)
+    async def inner(ctx: Any, *args: Any, **kwargs: Any) -> Any:
+        token = _TOOL_CALL.set((fn.__name__, secrets.token_hex(6)))
+        try:
+            return await fn(ctx, *args, **kwargs)
+        finally:
+            _TOOL_CALL.reset(token)
+
+    return inner
+
+
 def tool() -> Any:
     """`@tool()` 과 같되 자취를 남긴다 — 등록과 측정을 한 자리에서 정한다.
 
@@ -192,11 +221,11 @@ def tool() -> Any:
     측정에서 빠진다** — 빠진 줄은 「안 쓴 도구」 처럼 보인다. **위험 도구의 관리자 확인**
     (`_admin_only`)도 같은 이유로 여기서 건다 — 새 위험 도구를 목록에 넣는 것만으로 걸린다.
     **화면 주소**(`_with_screen_urls`)도 — 새 도구의 답에 `link` 가 있으면 저절로 `url` 이
-    붙는다.
-    """
+    붙는다. **도구 이름**(`_named`)도 — 새 도구가 백엔드를 부르면 저절로 그 이름이 실린다(ADR
+    0078)."""
 
     def wrap(fn: Any) -> Any:
-        return mcp.tool()(_traced(_with_screen_urls(_admin_only(fn))))
+        return mcp.tool()(_named(_traced(_with_screen_urls(_admin_only(fn)))))
 
     return wrap
 
@@ -355,13 +384,17 @@ def _forward_headers(ctx: Context) -> dict[str, str]:
     (`X-Heax-User-Affiliation` · 증명 `X-Heax-Aff-Proof`)은 버린다 — 이 플랫폼은 무엇을 볼 수
     있나를 부서와 권한으로 정하고 「같은 소속이면 읽기」 같은 공유를 두지 않는다. 받아 넘기면
     언젠가 누가 그 머리를 믿는 코드를 쓰고, 그 머리는 게이트웨이 밖에서 아무나 적을 수 있다."""
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"User-Agent": USER_AGENT}
     req = getattr(getattr(ctx, "request_context", None), "request", None)
     if req is not None:
         v = req.headers.get("authorization")
         if v:
             # 백엔드가 기대하는 표기로.
             headers["Authorization"] = v
+    # 어느 도구가 부르나(ADR 0078) — 이름 · 부름 id 만.
+    current = _TOOL_CALL.get()
+    if current is not None:
+        headers["X-SP-Tool"], headers["X-SP-Tool-Call"] = current
     return headers
 
 

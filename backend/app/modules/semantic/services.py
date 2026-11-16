@@ -47,6 +47,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    true,
     tuple_,
 )
 from sqlalchemy.dialects.postgresql import insert
@@ -1024,7 +1025,7 @@ CANDIDATE_FLOOR = 0.35
 
 def nearest(
     db: Session,
-    user: User,
+    user: User | None,
     q: str,
     *,
     among: set[uuid.UUID] | None = None,
@@ -1039,8 +1040,9 @@ def nearest(
     목록에서 다시 고르므로 DB 를 다시 묻지 않는다.
 
     **볼 수 있는 것만**(`visible_owner_clause`), 지운 것 · 이미 글자로 찾은 것(`exclude`)은
-    뺀다. 뜻으로 못 바꾸면(Ollama 가 꺼졌다 …) 빈 줄과 `unavailable` — 찾기 전체는 멈추지
-    않는다.
+    뺀다. `user` 가 없으면(워커의 미리 계산 — 별칭 후보의 「이것 아닐까」, ADR 0076) 부서를
+    가리지 않는다 — 읽는 쪽이 그 사람에게 보이는 것만 남긴다. 뜻으로 못 바꾸면(Ollama 가 꺼졌다
+    …) 빈 줄과 `unavailable` — 찾기 전체는 멈추지 않는다.
 
     고른 범위(대상 타입 ∩ `among`)의 조각이 `EXACT_MAX` 이하면 정확히 잰다. 넘으면 HNSW
     색인으로 받는데, pgvector 0.6 은 가까운 조각 `EF_SEARCH` 개를 먼저 받고 그 뒤에 타입 ·
@@ -1063,10 +1065,15 @@ def nearest(
         f"OPERATOR({vectors.SCHEMA}.<=>)", return_type=Float()
     )(bindparam("at", at, type_=vectors.Vector()))
     skip = list(set(exclude))
+    seen = (
+        visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+        if user is not None
+        else true()
+    )
     scope: list[Any] = [
         ObjectEmbedding.type_id.in_(list(chosen)),
         ObjectInstance.deleted_at.is_(None),
-        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        seen,
     ]
     if skip:
         scope.append(ObjectInstance.id.not_in(skip))
@@ -1169,7 +1176,7 @@ def nearest(
                 ObjectEmbedding.text_hash.in_([one.digest for one in best.values()]),
                 ObjectEmbedding.type_id.in_(list(chosen)),
                 ObjectInstance.deleted_at.is_(None),
-                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                seen,
             )
             .group_by(ObjectEmbedding.text_hash)
         ).tuples()

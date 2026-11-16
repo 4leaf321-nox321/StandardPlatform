@@ -156,7 +156,7 @@ sudo ./deploy.sh install
 3. `app.sif` 배치
 4. pgvector 확장(postgres 계정으로 — 5d-3) → 마이그레이션 → 설치 시드
 5. systemd 유닛 렌더 → `enable` → `start`
-6. `/api/health` 확인
+6. `/api/health/ready` 확인(준비됨 — DB · 마이그레이션까지. 503 이면 그 까닭을 보인다, ADR 0077)
 7. MCP 서버 설치(별도 venv + `<slug>-mcp` 유닛) — 아래 「MCP 서버」. 실패해도
    백엔드 배포는 그대로다
 8. 임베딩 모델(Ollama · bge-m3) — 없으면 받아 띄운다(5d-3). 실패해도 그대로다
@@ -173,7 +173,7 @@ sudo ./deploy.sh install
 확인:
 
 ```bash
-curl http://127.0.0.1:<포트>/api/health
+curl http://127.0.0.1:<포트>/api/health/ready   # 준비됨 — 200 이어야 한다(503 이면 checks 의 detail 이 까닭)
 sudo journalctl -u <slug> -f
 ```
 

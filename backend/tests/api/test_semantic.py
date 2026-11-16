@@ -28,7 +28,7 @@ from app.modules.accounts.models import User
 from app.modules.jobs.models import Job
 from app.modules.ontology.models import ObjectType
 from app.modules.semantic import services
-from app.modules.semantic.models import ObjectEmbedding, SemanticTarget
+from app.modules.semantic.models import ObjectEmbedding, SemanticMark, SemanticTarget
 from app.modules.workspaces.models import Workspace
 from app.shared import embedding, rerank, vectors
 from app.shared.errors import code
@@ -80,6 +80,9 @@ def _clean(db: Session) -> Iterator[None]:
 
     def wipe() -> None:
         db.execute(delete(ObjectEmbedding))
+        # 맞춰 본 때도 — 남기면 대상이 없는 타입의 줄(「지울 자리」)이 되어 뒤 시험의 타이머가
+        # 할 일이 있다고 본다(같은 작업자에서 다른 시험 뒤에 돌 때 떨어졌다, 2026-11-17).
+        db.execute(delete(SemanticMark))
         db.execute(delete(SemanticTarget))
         db.execute(delete(Job).where(Job.kind == services.SYNC_KIND))
         db.commit()

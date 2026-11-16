@@ -16,13 +16,13 @@ from html import escape as html_escape
 
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from app import api_docs, version
+from app import api_docs, readiness, version
 from app import extensions as ext_loader
 from app.config import Settings, get_settings
 from app.database import SessionLocal, engine, get_db
@@ -107,6 +107,29 @@ def _api_router(settings: Settings) -> APIRouter:
             "base_path": settings.base_path,
             "public_url": public_url.screen_base(settings),
         }
+
+    @router.get(
+        "/health/ready",
+        tags=["system"],
+        responses={
+            200: {"description": "준비됨 — DB 에 닿고 마이그레이션이 코드와 맞다"},
+            503: {"description": "준비 안 됨 — `checks` 의 `ok: false` 가 까닭"},
+        },
+    )
+    def health_ready() -> JSONResponse:
+        # **준비됨**(ADR 0077) — 위의 살아 있음은 DB 가 끊겨도 200 이다. 배포 스크립트 · 감시는
+        # 이것을 본다. 아니면 503 과 같은 모양의 본문(무엇이 아닌지) — 감시는 상태 코드를,
+        # 사람은 `checks` 를 읽는다. 오류 봉투가 아닌 까닭: 준비됐을 때와 같은 모양이어야 둘을
+        # 견준다.
+        ready, checks = readiness.check(engine)
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={
+                "status": "ready" if ready else "not_ready",
+                "version": version.current(),
+                "checks": [vars(one) for one in checks],
+            },
+        )
 
     # 모듈 라우터는 **여기서만** 모은다.
     router.include_router(auth_routes.router)

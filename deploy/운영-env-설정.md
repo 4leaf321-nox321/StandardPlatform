@@ -523,6 +523,18 @@ curl -s https://<포털 호스트>/<id>/api/health; echo       # 포털 경유
 | `version` | 깐 번들의 판(`BUILD_INFO`). 이중화면 두 서버가 같나 |
 | `slug` · `app` | 그 포트에 그 설치가 떠 있나 — 포트가 엇갈리면 여기서 드러난다 |
 | `base_path` | 단독 `""`, 이중화 · 포털 `"/<slug>"` |
+
+**`/api/health/ready`(준비됨)** — 위는 **살아 있음**이라 DB 가 끊겼거나 마이그레이션이 덜 올라가도 200 이다. 준비됨은
+DB 에 한 번 닿아 보고(3초 안) DB 의 마이그레이션 판을 코드와 견준다 — 아니면 **503** 과 까닭(ADR 0077). `deploy.sh`
+의 확인(install · update · restart · status)과 `ha.sh` 의 경유 확인이 이것을 본다. 감시 도구를 붙이면 이 주소를 묻는다.
+
+```bash
+curl -s http://127.0.0.1:<포트>/api/health/ready; echo
+# {"status":"ready","version":"<판>","checks":[{"name":"db","ok":true,"detail":"응답 2ms"},{"name":"schema","ok":true,"detail":"마이그레이션 0101_…"}]}
+# 503 이면 ok:false 인 줄의 detail 이 까닭 — 「마이그레이션이 덜 올라갔습니다 — DB 0100_… · 코드 0101_…」 이면 sudo ./deploy.sh update
+```
+
+DB 오류의 원문(호스트 · 계정이 든다)은 싣지 않는다 — 「DB 에 닿지 않습니다」 면 `app.log` 에 까닭이 있다.
 | `public_url` | 적은 `PUBLIC_URL`(또는 2 · 3번의 짐작). **`null`** 이면 백엔드가 모른다 — MCP 가 들어온 주소로 짐작한다(2.4.1 의 4번). **칸이 없으면** `PUBLIC_URL` 이전 판이다 |
 
 **서버 화면**(관리 › 서버, 시스템 관리자):

@@ -1370,9 +1370,14 @@ class AliasSuggestionOut(BaseModel):
     label: str
     key: str | None
     matched: str
-    """label · key · alias — 어디가 비슷했나."""
+    """label · key · alias — 어디가 비슷했나. `meaning` 이면 글자가 아니라 뜻이 가까웠다
+    (ADR 0076)."""
     matched_text: str
     score: float
+    """글자로 찾았으면 비슷함(0 ~ 1). 뜻으로 찾았으면 `scored_by` 의 값 — 눈금이 다르다."""
+    scored_by: str = ""
+    """뜻으로 찾은 것의 점수 — `rerank`(리랭커의 관련도) · `distance`(뜻의 거리). 글자로
+    찾았으면 빈 글자."""
 
 
 class AliasCandidateOut(BaseModel):

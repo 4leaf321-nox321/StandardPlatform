@@ -165,8 +165,57 @@ const CUT: CutQuestions = {
   ],
 }
 
-function answer(requests: RequestStats = stats(), jobs: JobStats = JOBS, cut = NO_CUT) {
+const NO_AI = { period: '24h', since: '2026-10-08T00:00:00Z', first_recorded_at: null, items: [] }
+
+const AI = {
+  period: '24h',
+  since: '2026-10-08T00:00:00Z',
+  first_recorded_at: '2026-10-01T00:00:00Z',
+  items: [
+    {
+      tool: 'objects_list',
+      calls: 120,
+      requests: 130,
+      people: 3,
+      empty: 41,
+      rejected: 7,
+      failed: 1,
+      p50_ms: 80,
+      p95_ms: 900,
+      last_at: '2026-10-09T03:00:00Z',
+      codes: [{ code: 'APP-OBJECTS-0152', count: 5 }],
+    },
+  ],
+}
+
+const AI_TOOL = {
+  tool: 'objects_list',
+  period: '24h',
+  since: '2026-10-08T00:00:00Z',
+  routes: [
+    {
+      method: 'GET',
+      route: '/api/objects/{type_slug}',
+      requests: 130,
+      empty: 41,
+      rejected: 7,
+      failed: 1,
+      p95_ms: 900,
+      paths: [{ path: '/api/objects/svc_case', requests: 90 }],
+    },
+  ],
+  codes: [{ code: 'APP-OBJECTS-0152', count: 5 }],
+}
+
+function answer(
+  requests: RequestStats = stats(),
+  jobs: JobStats = JOBS,
+  cut = NO_CUT,
+  ai: unknown = NO_AI,
+) {
   client.get.mockImplementation((url: string) => {
+    if (url.startsWith('/server/performance/ai/')) return Promise.resolve(AI_TOOL)
+    if (url.startsWith('/server/performance/ai')) return Promise.resolve(ai)
     if (url.startsWith('/server/performance/cut')) return Promise.resolve(cut)
     if (url.startsWith('/server/performance/requests/cases')) return Promise.resolve(CASES)
     if (url.startsWith('/server/performance/requests')) return Promise.resolve(requests)
@@ -215,6 +264,38 @@ describe('느린 요청 · 큰 응답', () => {
     expect(await screen.findByText('객체 일괄 입력')).toBeInTheDocument()
     expect(screen.getByText('1분 15초')).toBeInTheDocument()
     expect(screen.getByText('가장 오래 대기 10분')).toBeInTheDocument()
+  })
+
+  it('AI 도구마다 부른 수 · 0건 · 거절을 보이고, 클릭하면 부른 경로를 연다(ADR 0078)', async () => {
+    answer(stats(), JOBS, NO_CUT, AI)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
+    const button = await screen.findByRole('button', { name: 'objects_list' })
+    const row = within(button.closest('tr') as HTMLElement)
+    expect(row.getByText('120')).toBeInTheDocument()
+    expect(row.getByText('41')).toBeInTheDocument()
+    expect(row.getByText('APP-OBJECTS-0152 5')).toBeInTheDocument()
+    expect(calls('/server/performance/ai')[0]).toBe('/server/performance/ai?period=24h')
+
+    await userEvent.click(button)
+    expect(await screen.findByText('/api/objects/svc_case · 90')).toBeInTheDocument()
+    expect(screen.getByText(/오류 코드: APP-OBJECTS-0152 5번/)).toBeInTheDocument()
+    expect(calls('/server/performance/ai/')).toEqual([
+      '/server/performance/ai/objects_list?period=24h',
+    ])
+  })
+
+  it('AI 도구의 기록이 없으면 어느 판부터 남기는지 말한다', async () => {
+    answer()
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('아직 AI 도구의 기록이 없습니다')).toBeInTheDocument()
   })
 
   it('줄을 클릭하면 그 경로의 최악 사례(누가 · 요청 ID)를 연다', async () => {
@@ -350,7 +431,7 @@ describe('느린 요청 · 큰 응답', () => {
     expect(shownBytes(12 * 1024)).toBe('12KB')
     expect(shownBytes(5 * 1024 ** 2)).toBe('5.0MB')
     expect(periodOf('7d')).toBe('7d')
-    expect(periodOf('30d')).toBe('24h')
+    expect(periodOf('90d')).toBe('24h')
     expect(sortOf('max_bytes')).toBe('max_bytes')
     expect(sortOf(null)).toBe('p95')
   })

@@ -37,6 +37,28 @@
         }
       }
     },
+    "/api/health/ready": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Health Ready",
+        "operationId": "health_ready_api_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "준비됨 — DB 에 닿고 마이그레이션이 코드와 맞다",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "준비 안 됨 — `checks` 의 `ok: false` 가 까닭"
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [
@@ -19665,7 +19687,8 @@
               "enum": [
                 "1h",
                 "24h",
-                "7d"
+                "7d",
+                "30d"
               ],
               "type": "string",
               "default": "24h",
@@ -19774,7 +19797,8 @@
               "enum": [
                 "1h",
                 "24h",
-                "7d"
+                "7d",
+                "30d"
               ],
               "type": "string",
               "default": "24h",
@@ -19853,7 +19877,8 @@
               "enum": [
                 "1h",
                 "24h",
-                "7d"
+                "7d",
+                "30d"
               ],
               "type": "string",
               "default": "24h",
@@ -19909,6 +19934,115 @@
         }
       }
     },
+    "/api/server/performance/ai": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Performance Ai",
+        "description": "**AI 도구마다**(ADR 0078) — MCP 가 부른 도구마다 부른 수 · 사람 수 · 0건 · 거절(4xx) ·\n실패(5xx) · 시간과 많이 난 오류 코드. 많이 부른 것부터. 인자 · 값 · 물음은 남기지\n않는다(도구 이름과 경로만).",
+        "operationId": "performance_ai_api_server_performance_ai_get",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1h",
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "type": "string",
+              "default": "24h",
+              "title": "Period"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiUsageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/performance/ai/{tool}": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Performance Ai Tool",
+        "description": "도구 하나 — 부른 경로 틀마다(원 경로는 많이 부른 것 몇 개 — 지표 slug · 타입이 든다)와\n오류 코드마다.",
+        "operationId": "performance_ai_tool_api_server_performance_ai__tool__get",
+        "parameters": [
+          {
+            "name": "tool",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1h",
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "type": "string",
+              "default": "24h",
+              "title": "Period"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiToolOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/server/performance/jobs": {
       "get": {
         "tags": [
@@ -19926,7 +20060,8 @@
               "enum": [
                 "1h",
                 "24h",
-                "7d"
+                "7d",
+                "30d"
               ],
               "type": "string",
               "default": "24h",
@@ -23210,6 +23345,86 @@
         "title": "AccountWorkspaceOut",
         "description": "소속 한 줄 — **이름과 경로를 함께 준다.**\n\nslug 만 주면 화면은 「hq」 라고 쓰게 된다. 그것은 주소지 부서 이름이 아니고,\n사람은 자기 부서를 「본사」 로 안다."
       },
+      "AiToolOut": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/ToolRouteOut"
+            },
+            "type": "array",
+            "title": "Routes"
+          },
+          "codes": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCodeOut"
+            },
+            "type": "array",
+            "title": "Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool",
+          "period",
+          "since",
+          "routes",
+          "codes"
+        ],
+        "title": "AiToolOut"
+      },
+      "AiUsageOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "first_recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Recorded At"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ToolStatOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "since",
+          "first_recorded_at",
+          "items"
+        ],
+        "title": "AiUsageOut"
+      },
       "AlertCheckOut": {
         "properties": {
           "run_id": {
@@ -24184,6 +24399,11 @@
           "score": {
             "type": "number",
             "title": "Score"
+          },
+          "scored_by": {
+            "type": "string",
+            "title": "Scored By",
+            "default": ""
           }
         },
         "type": "object",
@@ -57367,6 +57587,161 @@
         },
         "type": "object",
         "title": "TombstonesIn"
+      },
+      "ToolCodeOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "count"
+        ],
+        "title": "ToolCodeOut"
+      },
+      "ToolPathOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "requests"
+        ],
+        "title": "ToolPathOut"
+      },
+      "ToolRouteOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          },
+          "empty": {
+            "type": "integer",
+            "title": "Empty"
+          },
+          "rejected": {
+            "type": "integer",
+            "title": "Rejected"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "p95_ms": {
+            "type": "integer",
+            "title": "P95 Ms"
+          },
+          "paths": {
+            "items": {
+              "$ref": "#/components/schemas/ToolPathOut"
+            },
+            "type": "array",
+            "title": "Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "route",
+          "requests",
+          "empty",
+          "rejected",
+          "failed",
+          "p95_ms",
+          "paths"
+        ],
+        "title": "ToolRouteOut"
+      },
+      "ToolStatOut": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          },
+          "people": {
+            "type": "integer",
+            "title": "People"
+          },
+          "empty": {
+            "type": "integer",
+            "title": "Empty"
+          },
+          "rejected": {
+            "type": "integer",
+            "title": "Rejected"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "p50_ms": {
+            "type": "integer",
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "type": "integer",
+            "title": "P95 Ms"
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last At"
+          },
+          "codes": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCodeOut"
+            },
+            "type": "array",
+            "title": "Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool",
+          "calls",
+          "requests",
+          "people",
+          "empty",
+          "rejected",
+          "failed",
+          "p50_ms",
+          "p95_ms",
+          "last_at",
+          "codes"
+        ],
+        "title": "ToolStatOut",
+        "description": "MCP 도구 하나(ADR 0078)."
       },
       "TreeNodeOut": {
         "properties": {

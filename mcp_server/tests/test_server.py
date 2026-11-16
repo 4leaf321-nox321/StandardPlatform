@@ -212,6 +212,37 @@ def test_토큰을_그대로_건넨다() -> None:
     assert "authorization" not in seen[0].headers
 
 
+def test_백엔드에_도구_이름과_부름_id_만_싣는다() -> None:
+    """백엔드가 요청 시간 기록에 남겨 「어떤 도구가 쓰이고 어디서 0건 · 거절이 나나」 를 센다
+    (ADR 0078). 이름과 이번 부름의 id 만 — 인자 · 값은 싣지 않는다. 한 부름이 백엔드를 여러 번
+    부르면(위험 도구의 관리자 확인) 같은 id 다."""
+    seen: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/auth/me":
+            return httpx.Response(200, json={"is_system_admin": True})
+        return httpx.Response(200, json={"items": [], "total": 0})
+
+    server._TRANSPORT = httpx.MockTransport(respond)
+    asyncio.run(server.ontology_schema(_ctx("Bearer t")))
+    (first,) = seen
+    assert first.headers["x-sp-tool"] == "ontology_schema"
+    assert re.fullmatch(r"[0-9a-f]{12}", first.headers["x-sp-tool-call"])
+    assert first.headers["user-agent"] == server.USER_AGENT
+    asyncio.run(server.ontology_schema(_ctx("Bearer t")))
+    assert seen[-1].headers["x-sp-tool-call"] != first.headers["x-sp-tool-call"]
+
+    seen.clear()
+    asyncio.run(server.review_undo(_ctx("Bearer t")))
+    assert [one.url.path for one in seen] == ["/api/auth/me", "/api/review/batches"]
+    assert {one.headers["x-sp-tool"] for one in seen} == {"review_undo"}
+    assert len({one.headers["x-sp-tool-call"] for one in seen}) == 1
+
+    # 도구 밖(접속 때의 자기소개)에서는 이름이 없다.
+    assert "X-SP-Tool" not in server._forward_headers(_ctx("Bearer t"))
+
+
 def test_서버의_말을_그대로_전한다() -> None:
     """오류 문구에 무엇을 고쳐야 하는지가 적혀 있다 — 여기서 고쳐 쓰면 그것을 잃는다."""
     _serve(

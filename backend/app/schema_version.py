@@ -22,17 +22,31 @@ logger = logging.getLogger(__name__)
 _ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 
 
+def _script() -> ScriptDirectory:
+    config = Config(str(_ALEMBIC_INI))
+    # alembic.ini 의 상대 경로는 backend/ 기준이다. 다른 디렉터리에서 켜져도
+    # 같은 답이 나와야 한다.
+    script_location = config.get_main_option("script_location") or "migrations"
+    config.set_main_option("script_location", str(_ALEMBIC_INI.parent / script_location))
+    return ScriptDirectory.from_config(config)
+
+
 def code_head() -> str | None:
     try:
-        config = Config(str(_ALEMBIC_INI))
-        # alembic.ini 의 상대 경로는 backend/ 기준이다. 다른 디렉터리에서 켜져도
-        # 같은 답이 나와야 한다.
-        script_location = config.get_main_option("script_location") or "migrations"
-        config.set_main_option("script_location", str(_ALEMBIC_INI.parent / script_location))
-        return ScriptDirectory.from_config(config).get_current_head()
+        return _script().get_current_head()
     except Exception:  # pragma: no cover - 마이그레이션 폴더가 없는 설치
         logger.debug("마이그레이션 head 를 읽지 못했습니다.", exc_info=True)
         return None
+
+
+def known_revisions() -> frozenset[str]:
+    """코드가 아는 마이그레이션 판 전부 — DB 의 판이 여기 없으면 코드보다 새 판이다
+    (준비됨, `readiness.py`)."""
+    try:
+        return frozenset(one.revision for one in _script().walk_revisions())
+    except Exception:  # pragma: no cover - 마이그레이션 폴더가 없는 설치
+        logger.debug("마이그레이션 판 목록을 읽지 못했습니다.", exc_info=True)
+        return frozenset()
 
 
 def db_revision(engine: Engine) -> str | None:

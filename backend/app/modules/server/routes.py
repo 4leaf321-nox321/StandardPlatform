@@ -25,6 +25,8 @@ from app.modules.accounts.models import User
 from app.modules.review import services as review_services
 from app.modules.server import performance, services
 from app.modules.server.schemas import (
+    AiToolOut,
+    AiUsageOut,
     BackupOut,
     CutQuestionOut,
     CutQuestionsOut,
@@ -48,6 +50,10 @@ from app.modules.server.schemas import (
     RerankOut,
     ServerStatusOut,
     TableCountOut,
+    ToolCodeOut,
+    ToolPathOut,
+    ToolRouteOut,
+    ToolStatOut,
 )
 from app.shared import cut_questions, embedding, extensions, ops, rerank
 from app.shared.auth import current_user, require_system_admin
@@ -422,6 +428,57 @@ def performance_cut(
             for one in items
         ],
         total=total,
+    )
+
+
+@router.get("/performance/ai", response_model=AiUsageOut)
+def performance_ai(
+    period: performance.Period = "24h",
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> AiUsageOut:
+    """**AI 도구마다**(ADR 0078) — MCP 가 부른 도구마다 부른 수 · 사람 수 · 0건 · 거절(4xx) ·
+    실패(5xx) · 시간과 많이 난 오류 코드. 많이 부른 것부터. 인자 · 값 · 물음은 남기지
+    않는다(도구 이름과 경로만)."""
+    since = datetime.now(UTC) - performance.PERIODS[period]
+    return AiUsageOut(
+        period=period,
+        since=since,
+        first_recorded_at=performance.first_tool_at(db),
+        items=[
+            ToolStatOut(
+                **{**vars(one), "codes": [ToolCodeOut(code=c, count=n) for c, n in one.codes]}
+            )
+            for one in performance.tool_stats(db, since)
+        ],
+    )
+
+
+@router.get("/performance/ai/{tool}", response_model=AiToolOut)
+def performance_ai_tool(
+    tool: str,
+    period: performance.Period = "24h",
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> AiToolOut:
+    """도구 하나 — 부른 경로 틀마다(원 경로는 많이 부른 것 몇 개 — 지표 slug · 타입이 든다)와
+    오류 코드마다."""
+    since = datetime.now(UTC) - performance.PERIODS[period]
+    routes, codes = performance.tool_detail(db, tool, since)
+    return AiToolOut(
+        tool=tool,
+        period=period,
+        since=since,
+        routes=[
+            ToolRouteOut(
+                **{
+                    **vars(one),
+                    "paths": [ToolPathOut(path=p, requests=n) for p, n in one.paths],
+                }
+            )
+            for one in routes
+        ],
+        codes=[ToolCodeOut(code=c, count=n) for c, n in codes],
     )
 
 

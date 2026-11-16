@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Identity,
@@ -91,6 +92,13 @@ class RequestTiming(Base):
     __table_args__ = (
         # 「이 경로 틀의 최악 사례」 — 경로 틀 · 메서드로 좁히고 기간으로 자른다.
         Index("ix_request_timings_route", "route", "method", "created_at"),
+        # 「AI 도구마다」(ADR 0078) — MCP 가 부른 줄만(대부분의 줄은 사람의 화면이다).
+        Index(
+            "ix_request_timings_tool",
+            "tool",
+            "created_at",
+            postgresql_where=text("tool IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
@@ -124,6 +132,19 @@ class RequestTiming(Base):
     """누가 불렀나 — 로그인 전 요청은 비어 있다. 외래키가 없다(위)."""
     request_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     """파일 로그와 잇는 끈 — 이 값으로 app.log 에서 그 요청의 모든 줄을 찾는다."""
+    tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """**MCP 도구 이름** — MCP 가 부른 요청이면(`X-SP-Tool`, ADR 0078). 사람의 화면 ·
+    스크립트는 비어 있다. 이름만 남긴다 — 인자 · 값 · 물음은 MCP 가 싣지도 않는다."""
+    tool_call: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    """그 도구의 **이번 부름** id(`X-SP-Tool-Call`) — 한 부름이 백엔드를 여러 번 부르기도 해서
+    (관리자 확인 · 작업 기다리기) 「몇 번 불렀나」 는 이것으로 센다."""
+    empty: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    """MCP 가 부른 성공 응답이 **0건**이었나 — `total` 이 0 · 이름 풀이가 `none` · 줄(`rows` ·
+    `items`)이 빔. 읽어 보지 못한 응답(JSON 이 아니거나 너무 큼)은 비어 있다. 사람의 요청은 안
+    본다(응답을 읽는 값이 든다)."""
+    error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    """실패한 응답(4xx · 5xx)의 오류 코드(`APP-OBJECTS-0152` …) — 오류 봉투의 `error.code`.
+    「어디서 거절이 나나」 를 상태 코드보다 한 칸 더 본다."""
 
 
 class CutQuestion(Base):

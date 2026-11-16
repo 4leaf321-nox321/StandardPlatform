@@ -130,6 +130,9 @@ SUGGEST_KIND = "alias_suggest"
 #: 사람에게 안 보이는 것 · 셈한 뒤에 지워진 것을 빼고도 셋이 남게. 그 자리에서 셀 때도 같은
 #: 수를 셈해 앞의 셋을 보인다 — 미리 셈한 것과 같은 셋이 나오게.
 SUGGEST_KEEP = 6
+#: **뜻으로 찾은** 「이것 아닐까」 몇 개를 적어 두나(ADR 0076) — 글자로 찾은 것과 따로. 보여 줄
+#: 때 적어도 한 자리를 준다(`pick`).
+MEANING_KEEP = 3
 #: 작업 하나가 셈하는 시간의 상한(초). **다른 작업이 기다리면 그 전에도 멈춘다**(하던 묶음까지)
 #: — 워커는 작업을 하나씩 돌리므로, 오래 쥐면 사람이 넣은 일괄 입력이 그 뒤에 선다.
 SUGGEST_RUN_SECONDS = 600.0
@@ -433,9 +436,15 @@ class Suggestion:
     label: str
     key: str | None
     matched: str
-    """label · key · alias — 어디가 비슷했나."""
+    """label · key · alias — 어디가 비슷했나. `meaning` 이면 글자가 아니라 **뜻이** 가까웠다
+    (ADR 0076 — 「액정 깨짐」 → 「화면 파손」)."""
     matched_text: str
     score: float
+    """글자로 찾았으면 비슷함(pg_trgm, 0 ~ 1). 뜻으로 찾았으면 `scored_by` 의 값 — 눈금이 달라
+    둘을 한 줄로 견주지 않는다."""
+    scored_by: str = ""
+    """뜻으로 찾은 것의 점수가 무엇인가 — `rerank`(리랭커가 말과 함께 읽은 관련도) ·
+    `distance`(뜻의 거리로 잰 코사인 유사도). 글자로 찾았으면 빈 글자."""
 
 
 @dataclass
@@ -587,7 +596,12 @@ def describe(
 
 
 def suggestions(
-    db: Session, user: User | None, row: SearchMiss, axes: Axes | None = None
+    db: Session,
+    user: User | None,
+    row: SearchMiss,
+    axes: Axes | None = None,
+    *,
+    meaning: Meaning | None = None,
 ) -> tuple[list[Suggestion], str]:
     """「이것 아닐까」 를 **지금 셈한다** — 그 범위의 **축** 타입에서 이름 · 식별자 · 별칭이
     비슷한 것(pg_trgm). 화면은 대개 미리 셈한 것을 읽는다(`stored`).
@@ -595,15 +609,96 @@ def suggestions(
     기록 타입(시장 서비스 건 · 시험 결과)에는 제안하지 않는다 — 별칭은 사람이 이름으로 부르는
     것(모델 · 부품 · 공급사)에 붙는다. **짐작이다** — 사람이 고른 것만 붙는다. 여러 줄을
     잇달아 보면 `axes` 를 함께 넘긴다(범위마다 한 번만 묻는다). `user` 가 없으면(워커의 미리
-    셈) 부서를 가리지 않고 `SUGGEST_KEEP` 개를 낸다."""
+    셈) 부서를 가리지 않고 `SUGGEST_KEEP` 개를 낸다.
+
+    `meaning` 을 주면(워커가 검토함에 서는 줄을 셀 때) **뜻이 가까운 것**도 더한다(ADR 0076 —
+    글자로 찾은 것 뒤에, `MEANING_KEEP` 개까지). 그 자리에서 셀 때(화면)는 주지 않는다 — 줄마다
+    모델을 두 번(뜻 · 리랭커) 부르면 한 쪽이 수십 초가 된다."""
     found, size = _axes_of(db, row.scope, axes)
     if not found:
         return [], RECORD_NOTE
     hits, note = similar(db, user, found, row.norm, size=size, keep=SUGGEST_KEEP)
-    return (hits if user is None else hits[:SUGGEST]), note
+    if meaning is not None:
+        extra, why = meaning.find(db, found, row.text, exclude=[one.id for one in hits])
+        if extra and note:
+            # 글자로는 축이 커서 건너뛰었다(`SUGGEST_MAX_ROWS`) — 뜻은 색인으로 찾는다.
+            note = f"찾을 객체가 {size:,}건이라 글자로는 건너뛰고 뜻으로만 찾았습니다."
+        elif not hits and not extra and why:
+            note = f"{note} {why}".strip()
+        hits = hits + extra
+    return (hits if user is None else pick(hits, SUGGEST)), note
 
 
 RECORD_NOTE = "기록 타입이라 제안하지 않습니다 — 별칭은 이름으로 부르는 축에 붙습니다."
+
+#: 이 범위의 축이 뜻으로 찾기 대상이 아니다(설치는 뜻으로 찾기를 쓴다).
+MEANING_OFF_NOTE = (
+    "이 범위의 축 타입은 뜻으로 찾기 대상이 아니라 글자로만 찾았습니다(서버 › 뜻으로 찾기에서 "
+    "대상을 추가하면 뜻이 가까운 것도 제안합니다)."
+)
+#: 뜻으로 찾기를 못 불렀다(Ollama 가 꺼졌다 …).
+MEANING_DOWN_NOTE = "뜻으로 찾기를 부르지 못해 글자로만 찾았습니다 — 밤에 다시 계산합니다."
+
+
+@dataclass
+class Meaning:
+    """**한 차례(작업 하나)의 뜻으로 찾기**(ADR 0076) — 대상 타입은 한 번만 읽고, 한 번 못
+    부르면 그 차례의 나머지 줄은 다시 부르지 않는다(줄마다 시간 상한 — 몇 초 — 을 기다리게
+    된다). 수는 작업의 요약에 싣는다."""
+
+    targets: set[uuid.UUID] | None = None
+    """뜻으로 찾기 대상 타입 — 비면 설치가 뜻으로 찾기를 안 쓴다(그때는 아무 말도 안 한다)."""
+    unavailable: bool = False
+    asked: int = 0
+    found: int = 0
+
+    def find(
+        self, db: Session, axes: list[ObjectType], text: str, *, exclude: list[uuid.UUID]
+    ) -> tuple[list[Suggestion], str]:
+        """`axes` 에서 `text` 와 뜻이 가까운 것 — 글자로 이미 찾은 것(`exclude`)은 빼고. 부서를
+        가리지 않는다(읽을 때 거른다, `stored`). 리랭커가 있으면 관련도, 없으면 뜻의 거리."""
+        from app.modules.semantic import services as semantic
+        from app.shared import embedding
+
+        if self.unavailable:
+            return [], MEANING_DOWN_NOTE
+        if self.targets is None:
+            self.targets = semantic.target_ids(db) if embedding.enabled() else set()
+        if not self.targets:
+            return [], ""
+        ids = {one.id for one in axes} & self.targets
+        if not ids:
+            return [], MEANING_OFF_NOTE
+        self.asked += 1
+        got = semantic.nearest(db, None, text, among=ids, exclude=exclude, limit=MEANING_KEEP)
+        if got.state == "unavailable":
+            self.unavailable = True
+            return [], MEANING_DOWN_NOTE
+        if got.state != "ready":
+            return [], ""
+        out = [
+            Suggestion(
+                id=one.row.id,
+                type_slug=one.object_type.slug,
+                type_label=one.object_type.label,
+                label=one.row.label,
+                key=one.row.key,
+                matched="meaning",
+                matched_text=one.heading,
+                score=one.relevance if one.relevance is not None else one.similarity,
+                scored_by="rerank" if one.relevance is not None else "distance",
+            )
+            for one in got.rows
+        ]
+        if out:
+            self.found += 1
+        return out, ""
+
+    def state(self) -> str:
+        """`off`(안 씀 · 대상 아님) · `unavailable`(못 부름) · `ready`(찾았다)."""
+        if self.unavailable:
+            return "unavailable"
+        return "ready" if self.asked else "off"
 
 
 def _axes_of(db: Session, scope: str, axes: Axes | None) -> tuple[list[ObjectType], int]:
@@ -668,15 +763,27 @@ def stored(
                     matched=str(got.get("matched") or "label"),
                     matched_text=str(got.get("matched_text") or ""),
                     score=float(got.get("score") or 0.0),
+                    scored_by=str(got.get("scored_by") or ""),
                 )
             )
-            if len(kept) >= SUGGEST:
-                break
         note = one.suggest_note or ""
         if not kept and one.suggested:
             note = GONE_NOTE
-        out[one.id] = (kept, note)
+        out[one.id] = (pick(kept, SUGGEST), note)
     return out
+
+
+def pick(hits: list[Suggestion], size: int) -> list[Suggestion]:
+    """보여 줄 「이것 아닐까」 — **글자로 찾은 것 먼저, 뜻으로 찾은 것은 적어도 한 자리**
+    (ADR 0076). 둘은 점수의 눈금이 달라(비슷함 · 관련도) 한 줄로 섞어 세우지 않는다. 글자로
+    찾은 것이 자리를 다 채워도 뜻으로 찾은 것 하나는 보인다 — 글자가 다른 짝(「뒷면 커버」 ·
+    「후면 커버」)은 글자로는 늘 뒤로 밀린다."""
+    glyph = [one for one in hits if one.matched != "meaning"]
+    meaning = [one for one in hits if one.matched == "meaning"]
+    if not meaning:
+        return glyph[:size]
+    head = glyph[: size - 1]
+    return head + meaning[: size - len(head)]
 
 
 def _size(db: Session, axes: list[ObjectType]) -> int:
@@ -866,18 +973,26 @@ def refresh(
     )
     total = int(db.scalar(select(func.count()).where(due)) or 0)
     axes: Axes = {}
+    meaning = Meaning()
     done = suggested = 0
     stopped = ""
     progress("「이것 아닐까」 셈", 0, total)
     while True:
         rows = list(
-            db.scalars(select(SearchMiss).where(due).order_by(*order).limit(SUGGEST_BATCH))
+            db.execute(
+                select(SearchMiss, shown_clause())
+                .where(due)
+                .order_by(*order)
+                .limit(SUGGEST_BATCH)
+            ).tuples()
         )
         if not rows:
             break
         results: list[tuple[uuid.UUID, list[dict[str, Any]], str]] = []
-        for row in rows:
-            hits, note = suggestions(db, None, row, axes)
+        for row, shown in rows:
+            # 뜻으로도 찾는 것은 **검토함에 서는 줄만**(ADR 0076) — 사람이 처리하는 줄이다. 몇
+            # 번 안 찾은 줄(대기의 대부분)까지 모델을 부르면 밤 차례가 몇 배로 길어진다.
+            hits, note = suggestions(db, None, row, axes, meaning=meaning if shown else None)
             results.append(
                 (
                     row.id,
@@ -887,6 +1002,7 @@ def refresh(
                             "matched": one.matched,
                             "matched_text": one.matched_text[:200],
                             "score": one.score,
+                            **({"scored_by": one.scored_by} if one.scored_by else {}),
                         }
                         for one in hits
                     ],
@@ -925,15 +1041,21 @@ def refresh(
     why = {"time": " · 시간이 다 돼 멈춤", "yield": " · 다른 작업에 비켜 멈춤"}.get(
         stopped, ""
     )
+    by_meaning = {
+        "ready": f" · 뜻으로 찾은 것 있음 {meaning.found:,}",
+        "unavailable": " · 뜻으로 찾기를 못 불러 글자로만",
+    }.get(meaning.state(), "")
+    counted = f"「이것 아닐까」 {done:,}줄 계산(제안 있음 {suggested:,}{by_meaning})"
     return {
         "summary": (
-            f"「이것 아닐까」 {done:,}줄 계산(제안 있음 {suggested:,}) · 남은 {left:,}{why} — "
-            "남은 것은 다음 차례에"
+            f"{counted} · 남은 {left:,}{why} — 남은 것은 다음 차례에"
             if left
-            else f"「이것 아닐까」 {done:,}줄 계산(제안 있음 {suggested:,}) · 남은 것 없음"
+            else f"{counted} · 남은 것 없음"
         ),
         "done": done,
         "suggested": suggested,
+        "meaning": meaning.found,
+        "meaning_state": meaning.state(),
         "left": left,
         "seconds": round(took, 1),
         "stopped": stopped,

@@ -14,6 +14,9 @@
  *
  * **끊긴 질문**(ADR 0031)도 여기 — 시간 상한에 걸리거나 SPARQL 이 너무 커서 답을 못 받은 물음을 같은
  * 모양끼리 묶는다. 무엇을 지표로 미리 세어 둘지를 짐작이 아니라 실제 물음으로 가른다.
+ *
+ * **AI 도구마다**(ADR 0078)도 — MCP 가 부른 도구마다 부른 수 · 0건 · 거절. 어떤 도구가 쓰이고 어디서
+ * 0건 · 거절이 몰리나를 사람의 말이 아니라 쓰임으로 본다.
  */
 
 import { Fragment, useState } from 'react'
@@ -39,7 +42,7 @@ import {
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
-export type PerformancePeriod = '1h' | '24h' | '7d'
+export type PerformancePeriod = '1h' | '24h' | '7d' | '30d'
 export type RequestSort = 'p95' | 'max_bytes' | 'calls'
 
 export interface RequestStat {
@@ -123,6 +126,59 @@ export interface CutQuestions {
   total: number
 }
 
+export interface ToolCode {
+  code: string
+  count: number
+}
+
+/** MCP 도구 하나(ADR 0078) — 서버의 `ToolStatOut`. */
+export interface ToolStat {
+  tool: string
+  /** 부른 수 — 한 부름이 백엔드를 여러 번 부르기도 해서 부름 id 로 센다. */
+  calls: number
+  /** 그 부름들이 백엔드를 부른 수. */
+  requests: number
+  people: number
+  /** 0건이었던 요청(성공 응답 가운데). */
+  empty: number
+  /** 4xx — 권한 · 모양 · 없는 이름. */
+  rejected: number
+  /** 5xx — 서버 오류 · 시간 상한. */
+  failed: number
+  p50_ms: number
+  p95_ms: number
+  last_at: string
+  codes: ToolCode[]
+}
+
+export interface AiUsage {
+  period: PerformancePeriod
+  since: string
+  /** 도구 이름이 남은 가장 오래된 기록 — 없으면 MCP 가 아직 이름을 싣지 않았다. */
+  first_recorded_at: string | null
+  items: ToolStat[]
+}
+
+export interface ToolRoute {
+  method: string
+  route: string
+  requests: number
+  empty: number
+  rejected: number
+  failed: number
+  p95_ms: number
+  /** 많이 부른 원 경로(지표 slug · 타입이 든다) — 틀과 같으면 빈다. */
+  paths: { path: string; requests: number }[]
+}
+
+export interface AiTool {
+  tool: string
+  period: PerformancePeriod
+  since: string
+  routes: ToolRoute[]
+  codes: ToolCode[]
+}
+
 export interface JobStats {
   period: PerformancePeriod
   since: string
@@ -133,6 +189,7 @@ const PERIODS: { value: PerformancePeriod; label: string }[] = [
   { value: '1h', label: '최근 1시간' },
   { value: '24h', label: '24시간' },
   { value: '7d', label: '7일' },
+  { value: '30d', label: '30일' },
 ]
 
 const SORTS: { value: RequestSort; label: string }[] = [
@@ -542,6 +599,169 @@ function CutQuestionsSection({ period }: { period: PerformancePeriod }) {
   )
 }
 
+/** 도구 하나가 부른 경로 틀마다 · 오류 코드마다. */
+function ToolDetail({ tool, period }: { tool: string; period: PerformancePeriod }) {
+  const detail = useResource(
+    () => api.get<AiTool>(`/server/performance/ai/${encodeURIComponent(tool)}?period=${period}`),
+    [tool, period],
+  )
+  if (detail.error) return <ErrorNotice error={detail.error} />
+  if (!detail.data) return <p className="text-muted-foreground text-sm">불러오는 중…</p>
+  return (
+    <div className="space-y-2">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>메서드</TableHead>
+            <TableHead>경로 틀 · 많이 부른 경로</TableHead>
+            <TableHead className="text-right">요청</TableHead>
+            <TableHead className="text-right">0건</TableHead>
+            <TableHead className="text-right">거절</TableHead>
+            <TableHead className="text-right">실패</TableHead>
+            <TableHead className="text-right">p95</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {detail.data.routes.map((one) => (
+            <TableRow key={`${one.method} ${one.route}`}>
+              <TableCell className="font-mono text-xs">{one.method}</TableCell>
+              <TableCell className="font-mono text-xs break-all">
+                {one.route}
+                {one.paths.map((path) => (
+                  <p key={path.path} className="text-muted-foreground">
+                    {path.path} · {path.requests.toLocaleString('ko-KR')}
+                  </p>
+                ))}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {one.requests.toLocaleString('ko-KR')}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">{one.empty}</TableCell>
+              <TableCell className="text-right tabular-nums">{one.rejected}</TableCell>
+              <TableCell className="text-right tabular-nums">{one.failed}</TableCell>
+              <TableCell className="text-right tabular-nums">{shownMs(one.p95_ms)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {detail.data.codes.length > 0 && (
+        <p className="text-muted-foreground text-xs">
+          오류 코드: {detail.data.codes.map((one) => `${one.code} ${one.count}번`).join(' · ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * AI 도구마다(ADR 0078) — MCP 가 부른 도구마다 부른 수 · 0건 · 거절. 「무엇을 고칠까」 를 사람의
+ * 말이 아니라 쓰임으로 가른다. 서버는 도구 이름과 경로만 남긴다(인자 · 값 · 물음은 안 남긴다).
+ */
+function AiTools({ period }: { period: PerformancePeriod }) {
+  const [open, setOpen] = useState<string | null>(null)
+  const usage = useResource(
+    () => api.get<AiUsage>(`/server/performance/ai?period=${period}`),
+    [period],
+  )
+  const data = usage.data
+  return (
+    <section className="space-y-3">
+      <h2 className="text-base font-semibold">AI 도구마다</h2>
+      <p className="text-muted-foreground text-sm">
+        AI 가 MCP 로 부른 도구입니다. 호출은 도구를 부른 횟수이고, 요청은 그 호출이 서버를 부른
+        수입니다(한 호출이 여러 번 부르기도 합니다). 0건은 성공했지만 결과가 없었던 요청입니다 — AI
+        는 이것을 「없다」 로 읽고 새로 만들 수 있으므로, 몰리는 곳이 별칭 · 지표를 추가할
+        자리입니다. 거절은 권한 · 모양 · 없는 이름(4xx), 실패는 서버 오류 · 시간 상한(5xx)입니다.
+        서버는 도구 이름과 경로만 남깁니다(인자 · 값 · 물음은 남기지 않습니다). 줄을 클릭하면 그
+        도구가 부른 경로가 표시됩니다.
+      </p>
+      <ErrorNotice error={usage.error} />
+      {data && data.items.length === 0 ? (
+        data.first_recorded_at === null ? (
+          <EmptyState
+            title="아직 AI 도구의 기록이 없습니다"
+            hint="MCP 서버가 도구 이름을 보내는 판(v0.4.88)부터 남깁니다. AI 가 MCP 로 도구를 부르면 몇 초 뒤부터 쌓입니다."
+          />
+        ) : (
+          <EmptyState
+            title="이 기간에 AI 가 부른 도구가 없습니다"
+            hint={`가장 오래된 기록은 ${shownDateTime(data.first_recorded_at)} 입니다. 기간을 넓혀 보세요.`}
+          />
+        )
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>도구</TableHead>
+              <TableHead className="text-right">호출</TableHead>
+              <TableHead className="text-right">요청</TableHead>
+              <TableHead className="text-right">사용자</TableHead>
+              <TableHead className="text-right">0건</TableHead>
+              <TableHead className="text-right">거절</TableHead>
+              <TableHead className="text-right">실패</TableHead>
+              <TableHead className="text-right">p95</TableHead>
+              <TableHead>많은 오류 코드</TableHead>
+              <TableHead>마지막</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(data?.items ?? []).map((one) => {
+              const opened = open === one.tool
+              return (
+                <Fragment key={one.tool}>
+                  <TableRow
+                    className="cursor-pointer"
+                    data-state={opened ? 'selected' : undefined}
+                    onClick={() => setOpen(opened ? null : one.tool)}
+                  >
+                    <TableCell>
+                      <button
+                        type="button"
+                        className="text-left font-mono text-xs hover:underline"
+                        aria-expanded={opened}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setOpen(opened ? null : one.tool)
+                        }}
+                      >
+                        {one.tool}
+                      </button>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {one.calls.toLocaleString('ko-KR')}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {one.requests.toLocaleString('ko-KR')}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{one.people}</TableCell>
+                    <TableCell className="text-right tabular-nums">{one.empty}</TableCell>
+                    <TableCell className="text-right tabular-nums">{one.rejected}</TableCell>
+                    <TableCell className="text-right tabular-nums">{one.failed}</TableCell>
+                    <TableCell className="text-right tabular-nums">{shownMs(one.p95_ms)}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {one.codes.map((code) => `${code.code} ${code.count}`).join(' · ') || '—'}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {shownDateTime(one.last_at)}
+                    </TableCell>
+                  </TableRow>
+                  {opened && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={10} className="bg-muted/30 p-3">
+                        <ToolDetail tool={one.tool} period={period} />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
+              )
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </section>
+  )
+}
+
 function Jobs({ period }: { period: PerformancePeriod }) {
   const jobs = useResource(
     () => api.get<JobStats>(`/server/performance/jobs?period=${period}`),
@@ -636,6 +856,7 @@ export function Performance({
       </div>
       {/* 기간 · 정렬이 바뀌면 첫 쪽 · 닫힌 줄부터 — 새로 세운다(`key`). */}
       <Requests key={`${period}/${sort}`} period={period} sort={sort} onSort={setSort} />
+      <AiTools key={period} period={period} />
       <CutQuestionsSection period={period} />
       <Jobs period={period} />
     </div>

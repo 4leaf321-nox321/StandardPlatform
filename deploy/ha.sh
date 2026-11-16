@@ -486,6 +486,17 @@ setup_lb() {
     [[ -n "$DB_VIP" ]] || warn "DB VIP 가 없어 자동 승격은 꺼져 있습니다 — 받으면 sudo DB_VIP=<주소> ./deploy.sh lb (양쪽)"
 }
 
+# 준비됨(ADR 0077)의 상태 코드 — 준비됨이 없는 옛 판(404)이면 살아 있음의 코드. $1 = /api/health 까지의
+# 주소, 나머지는 curl 에 그대로(-k · --max-time).
+ready_code() {
+    local base="$1" code; shift
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "$@" "$base/ready" 2>/dev/null || true)"
+    if [[ "$code" == "404" ]]; then
+        code="$(curl -sS -o /dev/null -w '%{http_code}' "$@" "$base" 2>/dev/null || true)"
+    fi
+    echo "$code"
+}
+
 ha_status() {
     [[ -n "$HA_ROLE" ]] || { echo "  이중화   : (단독 서버)"; return 0; }
     echo "== 이중화 ($HA_ROLE · 이 서버 $SELF_IP · 상대 $PEER_IP · LB $LB_MODE) =="
@@ -494,13 +505,15 @@ ha_status() {
     if [[ "$LB_MODE" == "local" ]]; then
         echo "  웹 VIP   : $WEB_VIP$( ip -o addr show 2>/dev/null | grep -q " inet $WEB_VIP/" && echo ' — 이 서버가 쥠' || echo ' — 다른 곳')"
         echo "  nginx    : $(systemctl is-active nginx 2>/dev/null)"
-        code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 3 "https://127.0.0.1/$APP_SLUG/api/health" 2>/dev/null || true)"
-        echo "  LB 경유  : https://127.0.0.1/$APP_SLUG/api/health → ${code:-실패}"
+        code="$(ready_code "https://127.0.0.1/$APP_SLUG/api/health" -k --max-time 3)"
+        echo "  LB 경유  : https://127.0.0.1/$APP_SLUG/api/health/ready → ${code:-실패}"
     else
-        code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 "https://$PUBLIC_HOST/$APP_SLUG/api/health" 2>/dev/null || true)"
-        echo "  메인 서버 경유 : https://$PUBLIC_HOST/$APP_SLUG/api/health → ${code:-실패 (메인 서버에 조각이 들어갔는지)}"
-        echo "  상대 앱  : $(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://$PEER_IP:$APP_PORT/api/health" 2>/dev/null || echo 실패)"
+        code="$(ready_code "https://$PUBLIC_HOST/$APP_SLUG/api/health" -k --max-time 5)"
+        echo "  메인 서버 경유 : https://$PUBLIC_HOST/$APP_SLUG/api/health/ready → ${code:-실패 (메인 서버에 조각이 들어갔는지)}"
+        code="$(ready_code "http://$PEER_IP:$APP_PORT/api/health" --max-time 3)"
+        echo "  상대 앱  : ${code:-실패}"
     fi
+    echo "  (200 준비됨 · 503 앱은 떴지만 DB · 마이그레이션이 아님 — 그 서버에서 sudo ./deploy.sh status)"
     keepalived_needed && echo "  keepalived: $(systemctl is-active keepalived 2>/dev/null)"
     if [[ -x /usr/local/sbin/pg-ha ]]; then echo; /usr/local/sbin/pg-ha status; fi
 }

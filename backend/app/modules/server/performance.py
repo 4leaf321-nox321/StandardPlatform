@@ -29,11 +29,14 @@ from app.modules.jobs import kinds
 from app.modules.jobs.models import Job
 from app.shared import cut_questions, extensions
 
-Period = Literal["1h", "24h", "7d"]
+Period = Literal["1h", "24h", "7d", "30d"]
 PERIODS: dict[str, timedelta] = {
     "1h": timedelta(hours=1),
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
+    # 기록의 기본 보관 기간(`LOG_RETENTION_DAYS=30`)만큼 — 「한 달 동안 어떤 도구가
+    # 쓰였나」(ADR 0078). 경로마다의 집계는 많으면 최근 쪽만 센다(`MAX_ROWS`).
+    "30d": timedelta(days=30),
 }
 
 RequestSort = Literal["p95", "max_ms", "max_bytes", "avg_bytes", "calls"]
@@ -395,6 +398,179 @@ def cut_stats(db: Session, since: datetime, limit: int = 100) -> tuple[list[CutS
         )
         for row in rows
     ], total
+
+
+# --- AI 도구마다(ADR 0078) ------------------------------------------------------------------
+#
+# MCP 가 백엔드를 부를 때 도구 이름 · 부름 id 를 싣고(`X-SP-Tool` · `X-SP-Tool-Call`),
+# 미들웨어가 요청 시간 기록에 0건이었나 · 실패한 응답의 오류 코드와 함께 남긴다. 「무엇을
+# 고칠까」 를 사람의 말이 아니라 쓰임으로 가른다 — 어떤 도구가 쓰이고, 어디서 0건 · 거절이
+# 몰리나.
+
+#: 도구마다 싣는 오류 코드 수 — 많이 난 것부터.
+TOOL_CODES = 3
+#: 도구 하나의 경로 틀 · 오류 코드 상한.
+TOOL_ROUTES = 30
+TOOL_DETAIL_CODES = 10
+#: 경로 틀마다 싣는 원 경로(지표 slug · 타입이 든다) 수.
+TOOL_PATHS = 3
+
+
+def _tool_calls() -> ColumnElement[Any]:
+    """부른 수 — 부름 id 로 센다(한 부름이 백엔드를 여러 번 부른다). id 가 없는 줄(옛 MCP)은
+    줄마다."""
+    t = RequestTiming
+    return func.count(func.distinct(func.coalesce(t.tool_call, cast(t.id, String))))
+
+
+@dataclass(frozen=True)
+class ToolStat:
+    """도구 하나 — 부른 수 · 백엔드 요청 수 · 사람 수 · 0건 · 거절(4xx) · 실패(5xx) · 시간."""
+
+    tool: str
+    calls: int
+    requests: int
+    people: int
+    empty: int
+    """0건이었던 요청(성공 응답 가운데) — 「없다」 로 읽혀 AI 가 새로 만들 수 있는 자리다."""
+    rejected: int
+    """4xx — 권한 · 모양 · 없는 이름. `codes` 가 무엇이었나."""
+    failed: int
+    """5xx — 서버 오류 · 시간 상한(504)."""
+    p50_ms: int
+    p95_ms: int
+    last_at: datetime
+    codes: list[tuple[str, int]]
+
+
+def tool_stats(db: Session, since: datetime) -> list[ToolStat]:
+    """MCP 도구마다 — 많이 부른 것부터."""
+    t = RequestTiming
+    rows = db.execute(
+        select(
+            t.tool,
+            _tool_calls().label("calls"),
+            func.count().label("requests"),
+            func.count(func.distinct(t.user_id)).label("people"),
+            func.count().filter(t.empty.is_(True)).label("empty"),
+            func.count().filter(t.status_code.between(400, 499)).label("rejected"),
+            func.count().filter(t.status_code >= 500).label("failed"),
+            func.percentile_cont(0.5).within_group(t.duration_ms).label("p50"),
+            func.percentile_cont(0.95).within_group(t.duration_ms).label("p95"),
+            func.max(t.created_at).label("last_at"),
+        )
+        .where(t.tool.is_not(None), t.created_at >= since)
+        .group_by(t.tool)
+        .order_by(_tool_calls().desc(), t.tool)
+    ).all()
+    codes: dict[str, list[tuple[str, int]]] = {}
+    for tool, error_code, count in db.execute(
+        select(t.tool, t.error_code, func.count())
+        .where(t.tool.is_not(None), t.error_code.is_not(None), t.created_at >= since)
+        .group_by(t.tool, t.error_code)
+        .order_by(func.count().desc(), t.error_code)
+    ).tuples():
+        held = codes.setdefault(str(tool), [])
+        if len(held) < TOOL_CODES:
+            held.append((str(error_code), int(count)))
+    return [
+        ToolStat(
+            tool=str(row.tool),
+            calls=int(row.calls),
+            requests=int(row.requests),
+            people=int(row.people),
+            empty=int(row.empty),
+            rejected=int(row.rejected),
+            failed=int(row.failed),
+            p50_ms=round(row.p50),
+            p95_ms=round(row.p95),
+            last_at=row.last_at,
+            codes=codes.get(str(row.tool), []),
+        )
+        for row in rows
+    ]
+
+
+def first_tool_at(db: Session) -> datetime | None:
+    """도구 이름이 남은 가장 오래된 기록 — 빈 화면이 「MCP 를 안 썼다」 인지 「그때는 이름을 안
+    남겼다」(옛 판) 인지 말한다."""
+    return db.scalar(
+        select(func.min(RequestTiming.created_at)).where(RequestTiming.tool.is_not(None))
+    )
+
+
+@dataclass(frozen=True)
+class ToolRoute:
+    """도구 하나가 부른 경로 틀 하나 — 원 경로는 많이 부른 것 몇 개(지표 slug · 타입이
+    든다)."""
+
+    method: str
+    route: str
+    requests: int
+    empty: int
+    rejected: int
+    failed: int
+    p95_ms: int
+    paths: list[tuple[str, int]]
+
+
+def tool_detail(
+    db: Session, tool: str, since: datetime
+) -> tuple[list[ToolRoute], list[tuple[str, int]]]:
+    """도구 하나 — 경로 틀마다(많이 부른 것부터)와 오류 코드마다."""
+    t = RequestTiming
+    mine = (t.tool == tool, t.created_at >= since)
+    rows = db.execute(
+        select(
+            t.method,
+            t.route,
+            func.count().label("requests"),
+            func.count().filter(t.empty.is_(True)).label("empty"),
+            func.count().filter(t.status_code.between(400, 499)).label("rejected"),
+            func.count().filter(t.status_code >= 500).label("failed"),
+            func.percentile_cont(0.95).within_group(t.duration_ms).label("p95"),
+        )
+        .where(*mine)
+        .group_by(t.method, t.route)
+        .order_by(func.count().desc(), t.route, t.method)
+        .limit(TOOL_ROUTES)
+    ).all()
+    paths: dict[tuple[str, str], list[tuple[str, int]]] = {}
+    for method, route, path, count in db.execute(
+        select(t.method, t.route, t.path, func.count())
+        .where(*mine)
+        .group_by(t.method, t.route, t.path)
+        .order_by(func.count().desc(), t.path)
+    ).tuples():
+        held = paths.setdefault((str(method), str(route)), [])
+        if len(held) < TOOL_PATHS:
+            held.append((str(path), int(count)))
+    codes = [
+        (str(error_code), int(count))
+        for error_code, count in db.execute(
+            select(t.error_code, func.count())
+            .where(*mine, t.error_code.is_not(None))
+            .group_by(t.error_code)
+            .order_by(func.count().desc(), t.error_code)
+            .limit(TOOL_DETAIL_CODES)
+        ).tuples()
+    ]
+    return [
+        ToolRoute(
+            method=row.method,
+            route=row.route,
+            requests=int(row.requests),
+            empty=int(row.empty),
+            rejected=int(row.rejected),
+            failed=int(row.failed),
+            p95_ms=round(row.p95),
+            # 틀과 같은 원 경로(id 가 없는 경로)는 다시 싣지 않는다.
+            paths=[
+                one for one in paths.get((row.method, row.route), []) if one[0] != row.route
+            ],
+        )
+        for row in rows
+    ], codes
 
 
 def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:

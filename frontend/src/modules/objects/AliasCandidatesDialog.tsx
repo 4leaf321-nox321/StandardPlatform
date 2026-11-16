@@ -157,9 +157,17 @@ export function AliasCandidatesDialog({ onClose, onDone }: AliasCandidatesDialog
                       variant="secondary"
                       disabled={busy}
                       onClick={() => void preview(one, hit.id)}
+                      title={
+                        hit.matched === 'meaning'
+                          ? '글자는 다르지만 뜻이 가까운 것입니다 — 맞는지 확인하고 선택하세요.'
+                          : undefined
+                      }
                     >
                       {hit.label}
-                      <span className="text-muted-foreground ml-1">{hit.type_label}</span>
+                      <span className="text-muted-foreground ml-1">
+                        {hit.type_label}
+                        {hit.matched === 'meaning' && ' · 뜻으로 찾음'}
+                      </span>
                     </Button>
                   ))}
                   {one.suggest_note && (

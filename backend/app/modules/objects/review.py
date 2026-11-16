@@ -108,6 +108,12 @@ SIMILAR_FACTOR = 0.8
 #: 첫째와 둘째 후보의 점수 차가 이보다 작으면 「가리기 어렵다」 — 확신도를 깎는다.
 CLOSE_GAP = 0.1
 CLOSE_FACTOR = 0.8
+#: **뜻으로만 찾은 추천의 확신도 상한**(ADR 0076) — 점수가 무엇이냐에 따라. 리랭커의 관련도는
+#: 말과 함께 읽어 매긴 것이라 조금 더 믿고, 뜻의 거리(코사인)는 짧은 말끼리 높게 나오기 쉬워 더
+#: 낮게 묶는다. 둘 다 **자동 확인의 문턱(0.9)보다 낮다** — 자동 확인의 근거(사람이 하나씩 정한
+#: 결정)는 글자로 찾은 추천에서 쌓였고, 뜻으로 찾은 추천이 얼마나 맞는지는 아직 모른다. 사람이
+#: 「추천대로 모두」 의 문턱을 내려 고르는 것은 그 사람의 판단이다.
+MEANING_CONFIDENCE_MAX = {"rerank": 0.85, "distance": 0.6}
 
 _NOT_WORD = re.compile(r"[\W_]+")
 
@@ -149,17 +155,30 @@ _MATCHED = {"label": "이름이", "key": "식별자가", "alias": "별칭이"}
 
 
 def _candidate_confidence(found: misses.Candidate) -> tuple[float | None, str]:
+    """맨 위 추천의 확신도와 그 까닭. **뜻으로 찾은 것은 글자로 찾은 것과 견주지 않는다** —
+    점수의 눈금이 다르다(ADR 0076). 맨 위가 뜻으로 찾은 것이면(글자로는 없었다) 상한
+    (`MEANING_CONFIDENCE_MAX`)으로 묶는다."""
     if not found.suggestions:
         return None, found.suggest_note
     top = found.suggestions[0]
-    reason = f"{_MATCHED.get(top.matched, '이름이')} 비슷함 {top.score:.2f}"
-    if top.matched == "alias" and top.matched_text:
-        reason = f"별칭 「{top.matched_text}」 이 비슷함 {top.score:.2f}"
-    confidence = float(top.score)
-    if _close([one.score for one in found.suggestions]):
+    by_meaning = top.matched == "meaning"
+    if by_meaning:
+        measure = "관련도" if top.scored_by == "rerank" else "뜻의 거리 유사도"
+        reason = f"글자가 비슷한 것은 없고 뜻이 가까움({measure} {top.score:.2f})"
+        cap = MEANING_CONFIDENCE_MAX.get(top.scored_by, MEANING_CONFIDENCE_MAX["distance"])
+        confidence = min(float(top.score), cap)
+        if confidence < float(top.score):
+            reason += f" · 뜻으로만 찾은 추천은 확신도를 {cap}까지로 둠"
+    else:
+        reason = f"{_MATCHED.get(top.matched, '이름이')} 비슷함 {top.score:.2f}"
+        if top.matched == "alias" and top.matched_text:
+            reason = f"별칭 「{top.matched_text}」 이 비슷함 {top.score:.2f}"
+        confidence = float(top.score)
+    same = [one for one in found.suggestions if (one.matched == "meaning") == by_meaning]
+    if _close([one.score for one in same]):
         confidence = round(confidence * CLOSE_FACTOR, 2)
-        reason += f" · 다음 후보 「{found.suggestions[1].label}」 와 차이가 작음"
-    return confidence, reason
+        reason += f" · 다음 후보 「{same[1].label}」 와 차이가 작음"
+    return round(confidence, 2), reason
 
 
 def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
@@ -296,7 +315,9 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
                     Choice(
                         value=str(hit.id),
                         label=hit.label,
-                        detail=hit.type_label + (f" · {hit.key}" if hit.key else ""),
+                        detail=hit.type_label
+                        + (f" · {hit.key}" if hit.key else "")
+                        + (" · 뜻으로 찾음" if hit.matched == "meaning" else ""),
                         score=hit.score,
                     )
                     for hit in one.suggestions

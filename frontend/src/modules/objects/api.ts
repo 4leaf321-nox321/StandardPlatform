@@ -958,9 +958,12 @@ export interface AliasSuggestion {
   type_label: string
   label: string
   key: string | null
+  /** label · key · alias — 어디가 비슷했나. `meaning` 이면 글자가 아니라 뜻이 가까웠다(ADR 0076). */
   matched: string
   matched_text: string
   score: number
+  /** 뜻으로 찾은 것의 점수 — `rerank`(관련도) · `distance`(뜻의 거리). 글자로 찾았으면 빈 글자. */
+  scored_by: string
 }
 
 export interface AliasCandidate {
