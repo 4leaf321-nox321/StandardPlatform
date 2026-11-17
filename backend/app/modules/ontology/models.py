@@ -142,6 +142,9 @@ PROPERTY_OWNER_KINDS = ("type", "relation", "interface")
 
 #: slug 는 **바뀌면 안 되는 식별자**다. 관계·URL·MCP 도구 이름이 여기 물린다.
 SLUG_MAX = 32
+#: 자료 범위 표지(`ObjectType.scope`, ADR 0083)의 길이 — 「국내」 · 「해외」 · 「plm」 같은
+#: 짧은 말.
+SCOPE_MAX = 40
 
 
 class NavGroup(Base):
@@ -288,6 +291,13 @@ class ObjectType(Base):
     파생물이 「낡음」 이다 — 이름 · 설명 · 다른 칸을 고친 것으로는 안 낡는다. **없으면 객체의
     바뀐 때(`updated_at`)로 대신 판정한다** — 무엇을 고쳐도(별칭 하나를 더해도) 낡음이 되는
     잡음이 있다. 검사는 `ontology/revision.py` 한 곳이다."""
+
+    scope: Mapped[str] = mapped_column(String(SCOPE_MAX), default="", server_default="")
+    """**자료 범위 표지**(ADR 0083) — 이 타입의 기록이 어느 범위의 자료인가(설치가 정하는 말 —
+    예: 「국내」 · 「해외」 · 「plm」). 비우면 미지정. 목록 · 통계 · 지표 · 분석의 응답이 관련
+    타입들의 이 값을 모아 `scope` 로 싣고, 여럿이 섞이면 `mixed` 다(`ontology/datascope.py`) —
+    국내 판매로 해외 인입을 나눈 비율을 AI 가 국내 자료로 옮기지 않게. 값을 채우는 일은 데이터
+    작업이다(정해진 목록이 없다)."""
 
     list_view: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """목록 화면의 모양 — 열·정렬·검색·필터.

@@ -298,7 +298,8 @@ def bigram_plan(db: Session, term: str | None) -> dict[str, list[str]]:
     찾으므로(`search_words`) 두 글자 낱말이 여럿일 수 있고, 그 조각을 **한 배열**로 건다(`@>` —
     모두 든 것). 다만 **흔한 조각**은 뺀다 — 그 비율은 Postgres 가 그 인덱스에 모아 둔
     통계(`pg_stats` 의 자주 나오는 원소)로 안다. 통계에 없으면 드문 것이다."""
-    # 소문자로 바꾼 뒤에 잰다 — 「İS」 는 바꾸면 세 글자(i̇s)라 조각이 아니다(예전 규칙과 같다).
+    # 소문자로 바꾼 뒤에 잰다 — 「İS」 는 바꾸면 세 글자(i̇s)라 조각이 아니다(예전 규칙과
+    # 같다).
     pairs = sorted({low for one in search_words(term) if len(low := one.lower()) == 2})
     if not pairs:
         return {}
@@ -602,6 +603,30 @@ def page_rows(
         hit = stmt.with_only_columns(ObjectInstance.id).cte("hit").prefix_with("MATERIALIZED")
         stmt = select(ObjectInstance).join(hit, hit.c.id == ObjectInstance.id)
     return list(db.scalars(apply_sort(stmt, view).limit(limit).offset(offset)))
+
+
+def cursor_rows(
+    db: Session,
+    stmt: Select[Any],
+    *,
+    total: int,
+    after: uuid.UUID | None,
+    limit: int,
+) -> list[ObjectInstance]:
+    """커서 쪽(ADR 0079) — `after` 다음 id 부터 id 차례로 `limit + 1` 줄(하나 더 읽어 다음 쪽이
+    있는지 안다).
+
+    길은 `page_rows` 와 같은 생각이다: 맞는 줄이 적으면(`GATHER_BELOW` 이하) 그 id 를 먼저 다
+    모으고 그 안에서 고른다 — 기본 키 색인을 따라 걸으며 조건을 대 보면 드문 조건에서 표 끝까지
+    걷는다. 많으면 기본 키 색인을 `after` 자리부터 걷는다(쪽마다 비용이 같다)."""
+    if total <= 0:
+        return []
+    if total <= GATHER_BELOW:
+        hit = stmt.with_only_columns(ObjectInstance.id).cte("hit").prefix_with("MATERIALIZED")
+        stmt = select(ObjectInstance).join(hit, hit.c.id == ObjectInstance.id)
+    if after is not None:
+        stmt = stmt.where(ObjectInstance.id > after)
+    return list(db.scalars(stmt.order_by(ObjectInstance.id.asc()).limit(limit + 1)))
 
 
 def count_of(db: Session, stmt: Select[Any]) -> int:

@@ -47,6 +47,7 @@ TOOLS = {
     "aliases_pending",
     "aliases_review",
     "objects_summary",
+    "objects_census",
     "object_fields",
     "object_get",
     "objects_similar",
@@ -2398,3 +2399,176 @@ def test_제안은_줄마다_출처를_싣고_보기는_객체와_전체로_결�
     assert "사실로 말한" in relations["content"]
     find = asyncio.run(server.get_guide(_ctx(None), topic="find"))
     assert "proposed_relation" in find["content"]
+
+
+# --- AI 가 전부 읽는 길(ADR 0079 · 0080 · 0081) ---------------------------------------------
+
+
+def test_목록의_커서와_진단_인자를_그대로_건넨다() -> None:
+    """커서를 주면 offset 은 안 보낸다. 0건이면 방금 센 0 과 진단의 길을 넘기고, `off` 면
+    진단을 묻지 않는다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(server.objects_list(_ctx("Bearer t"), "tool", cursor="start", limit=2000))
+    listed, diagnosed = seen[0].url.params, seen[1].url.params
+    assert listed["cursor"] == "start" and "offset" not in listed and listed["limit"] == "2000"
+    assert seen[1].url.path == "/api/objects/tool/diagnose"
+    assert diagnosed["mode"] == "auto" and diagnosed["total"] == "0"
+
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    got = asyncio.run(server.objects_list(_ctx("Bearer t"), "tool", diagnose="off"))
+    assert len(seen) == 1 and "diagnosis" not in got
+    assert seen[0].url.params["offset"] == "0"
+
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(server.objects_list(_ctx("Bearer t"), "tool", diagnose="full"))
+    assert seen[1].url.params["mode"] == "full"
+
+
+def test_몰려서_거절된_읽기는_Retry_After_만큼_기다려_다시_부른다(
+    monkeypatch: Any,
+) -> None:
+    waited: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waited.append(seconds)
+
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    answers = iter(
+        [
+            httpx.Response(
+                429,
+                headers={"Retry-After": "3"},
+                json={"error": {"code": "APP-COMMON-0429", "message": "자리가 없습니다"}},
+            ),
+            httpx.Response(503, headers={"Retry-After": "5"}, json={"error": {"code": "x"}}),
+            httpx.Response(200, json={"items": [], "total": 1}),
+        ]
+    )
+    seen = _serve(lambda _r: next(answers))
+    got = asyncio.run(server.objects_list(_ctx("Bearer t"), "tool"))
+    assert got["total"] == 1 and len(seen) == 3
+    assert 3 <= waited[0] < 4 and 5 <= waited[1] < 6
+
+    # 다시 불러도 안 되면 서버의 말과 함께 몇 초 뒤인지를 전한다 — 너무 길면 기다리지 않는다.
+    busy = httpx.Response(
+        429,
+        headers={"Retry-After": "60"},
+        json={"error": {"code": "APP-COMMON-0429", "message": "자리가 없습니다"}},
+    )
+    seen = _serve(lambda _r: busy)
+    refused = asyncio.run(server.objects_summary(_ctx("Bearer t"), "tool"))
+    assert len(seen) == 1 and refused["retry_after"] == "60"
+    assert "자리가 없습니다" in refused["error"]
+
+    # 쓰기는 다시 보내지 않는다.
+    seen = _serve(lambda _r: busy)
+    asyncio.run(server._post(_ctx("Bearer t"), "/api/objects/tool", {"label": "x"}))
+    assert len(seen) == 1
+
+
+def test_통계는_세부_기준의_쪽을_건넨다() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json={"buckets": [], "total": 0}))
+    asyncio.run(
+        server.objects_summary(
+            _ctx("Bearer t"), "tool", split_by="market", split_limit=999, split_offset=12
+        )
+    )
+    params = seen[0].url.params
+    assert params["split_limit"] == "200" and params["split_offset"] == "12"
+
+
+def test_전수_집계는_작으면_그대로_크면_작업을_기다려_첫_쪽을_붙인다(monkeypatch: Any) -> None:
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    small = {"complete": True, "rows": [{"key": "KR", "count": 3}], "next_cursor": None}
+    seen = _serve(lambda _r: httpx.Response(200, json=small))
+    got = asyncio.run(
+        server.objects_census(_ctx("Bearer t"), "svc", group_by="properties.market")
+    )
+    assert got == small and seen[0].url.path == "/api/objects/svc/census"
+    assert seen[0].url.params["group_by"] == "properties.market"
+
+    statuses = iter(["running", "done"])
+
+    def big(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/census"):
+            return httpx.Response(
+                200, json={"complete": False, "rows": [], "next_cursor": "C0", "job": {}}
+            )
+        state = next(statuses)
+        rows = [{"key": "KR"}] if state == "done" else []
+        return httpx.Response(200, json={"status": state, "rows": rows, "next_cursor": None})
+
+    seen = _serve(big)
+    got = asyncio.run(
+        server.objects_census(_ctx("Bearer t"), "svc", group_by="properties.market", limit=10)
+    )
+    assert got["first_page"]["status"] == "done" and got["first_page"]["rows"] == [
+        {"key": "KR"}
+    ]
+    rows_asked = [one for one in seen if one.url.path.endswith("/census/rows")]
+    assert (
+        rows_asked[0].url.params["cursor"] == "C0"
+        and rows_asked[0].url.params["limit"] == "10"
+    )
+
+    # 다음 쪽은 커서만으로.
+    seen = _serve(
+        lambda _r: httpx.Response(
+            200, json={"status": "done", "rows": [], "next_cursor": None}
+        )
+    )
+    asyncio.run(server.objects_census(_ctx("Bearer t"), "svc", cursor="C9"))
+    assert seen[0].url.path == "/api/objects/svc/census/rows"
+    assert seen[0].url.params["cursor"] == "C9"
+
+
+def test_전수_집계가_시간_상한에_걸리면_처음부터_작업으로(monkeypatch: Any) -> None:
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(server.asyncio, "sleep", fake_sleep)
+    job_id = "8a0c3f4e-0000-4000-8000-000000000001"
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/census") and request.method == "GET":
+            return httpx.Response(
+                504, json={"error": {"code": "APP-COMMON-0504", "message": "60초"}}
+            )
+        if request.url.path.endswith("/census/job"):
+            return httpx.Response(202, json={"id": job_id, "status": "queued"})
+        return httpx.Response(200, json={"status": "done", "rows": [], "next_cursor": None})
+
+    seen = _serve(answer)
+    got = asyncio.run(
+        server.objects_census(_ctx("Bearer t"), "svc", group_by="properties.market")
+    )
+    assert got["status"] == "done"
+    posted = next(one for one in seen if one.method == "POST")
+    assert posted.url.params["group_by"] == "properties.market"
+    cursor = seen[-1].url.params["cursor"]
+    assert json.loads(server.base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))) == {
+        "j": job_id,
+        "n": 0,
+    }
+
+
+def test_분석의_배율은_순차_검정과_같은_인자를_받는다() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json={"recipe": "ratio"}))
+    asyncio.run(
+        server.metric_analyze(
+            _ctx("Bearer t"),
+            "claims",
+            "ratio",
+            options={"target": "S", "reference_via": "predecessor", "by": "market"},
+        )
+    )
+    request = seen[0]
+    assert request.url.path == "/api/metrics/claims/analysis/ratio"
+    assert request.url.params["by"] == "market"
+    refused = asyncio.run(
+        server.metric_analyze(_ctx("Bearer t"), "claims", "ratio", options={"rho": 2})
+    )
+    assert "rho" in refused["error"]

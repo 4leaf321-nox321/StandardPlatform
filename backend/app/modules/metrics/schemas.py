@@ -340,6 +340,12 @@ class ReadHeader(BaseModel):
     그 뒤 닫힌 기간의 0건은 「정말 0건」 이 아니라 「아직 안 들어옴」 일 수 있다. 지표 단위의
     사실이라 읽은 기간 범위와 상관없다(분석의 주의는 범위가 원천 기록 끝 안에서 끝나면 빠진다).
     수는 바꾸지 않는다 — 끝쪽 0건이 진짜일 때도 있다."""
+    scope: str | None = None
+    """자료 범위 표지(ADR 0083) — 이 지표의 원천 타입과 분모 지표의 원천 타입에 적힌 `scope`.
+    모두 같으면 그 값, 섞였으면 `mixed`(예: 해외 인입을 국내 판매로 나눈 비율 — 무엇이
+    섞였는지는 `scope_mix`), 모두 미지정이면 null."""
+    scope_mix: list[str] = Field(default_factory=list)
+    """`scope` 가 `mixed` 일 때 섞인 값들(미지정은 「(미지정)」). 아니면 빈 목록."""
     freshness: list[FreshnessOut] = Field(default_factory=list)
     """원천 타입에 넣는 데이터 소스마다의 신선도 — 목록 · 통계의 `freshness` 와 같은 모양(꺼 둔
     것도, 이름 순). 원천 하나만 멎으면 다른 원천이 들어와 원천 기록 끝(최댓값)이 새것이라 빈

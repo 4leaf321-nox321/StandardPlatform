@@ -151,3 +151,30 @@ describe('타입의 개정 칸', () => {
     expect(screen.queryByRole('combobox', { name: '개정 칸' })).toBeNull()
   })
 })
+
+describe('타입의 자료 범위(ADR 0083)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ontologyApi.updateType.mockResolvedValue({})
+  })
+
+  it('적으면 앞뒤 공백을 떼고 보내고, 안 바꾸면 안 보낸다', async () => {
+    await open({ scope: '' })
+    await userEvent.type(screen.getByLabelText('자료 범위'), ' 국내 ')
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() =>
+      expect(ontologyApi.updateType).toHaveBeenCalledWith(
+        'drawing',
+        expect.objectContaining({ scope: '국내' }),
+      ),
+    )
+  })
+
+  it('그대로면 scope 를 보내지 않는다', async () => {
+    await open({ scope: '해외' })
+    expect(screen.getByLabelText('자료 범위')).toHaveValue('해외')
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() => expect(ontologyApi.updateType).toHaveBeenCalled())
+    expect(ontologyApi.updateType.mock.calls[0][1]).not.toHaveProperty('scope')
+  })
+})

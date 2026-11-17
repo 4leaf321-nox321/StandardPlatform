@@ -78,8 +78,14 @@ AXISLESS_KINDS = ("count", "list")
 ORDERS = ("desc", "asc", "key")
 
 #: 세부 기준에서 돌려줄 값의 수. 이보다 많으면 색이 겹쳐 못 읽는다 —
-#: 여덟 색을 돌려 쓰므로 열둘이면 이미 같은 색이 두 번 나온다.
+#: 여덟 색을 돌려 쓰므로 열둘이면 이미 같은 색이 두 번 나온다. **화면의 상한**이기도 하다.
 MAX_SPLITS = 12
+#: 세부 기준을 쪽으로 넘겨 받을 때(`split_limit` · `split_offset`) 한 쪽의 상한 — **API
+#: 토큰만** (ADR 0079). 그림이 아니라 표(「모델 x 시장」)를 받는 AI 의 것이다. 화면은
+#: `MAX_SPLITS` 그대로.
+MAX_SPLIT_PAGE = 200
+#: 이 쪽에 없는 세부 기준 값을 막대마다 묶은 조각의 이름(`Bucket.other_part`).
+OTHER_SPLITS_LABEL = "그 밖에"
 
 #: 한 번에 돌려줄 그룹 수. 넘는 것은 「그 밖에」 한 줄로 접는다 — 막대 200개는
 #: 읽을 수 없고, 그림이 아니라 벽이 된다.
@@ -111,7 +117,10 @@ class Bucket:
     value: float | None = None
     """`metric` 이 count 가 아닐 때의 값. count 면 None."""
     parts: list[Part] = field(default_factory=list)
-    """세부 기준을 줬을 때만 채워진다. 합은 이 칸의 `count` 와 맞는다."""
+    """세부 기준을 줬을 때만 채워진다. 이 쪽의 값(`splits`)만 — 나머지는 `other_part`."""
+    other_part: Part | None = None
+    """이 쪽에 없는 세부 기준 값들(앞 쪽 · 뒤 쪽)을 묶은 조각 — 그런 값이 이 막대에 있을 때만.
+    `parts` 와 이것의 건수 합이 `count` 다(여러 값 칸이면 더 클 수 있다 — `split_multi`)."""
     range: tuple[str, str] | None = None
     """날짜 축이면 이 칸의 (gte, lt) — 막대를 누르면 **범위 조건** 둘이 된다. 키 하나를 `eq` 로
     걸면 0건이다(저장값은 날짜 하나하나다)."""
@@ -139,7 +148,12 @@ class Summary:
     """세부 기준 값들의 **차례.** 화면이 계열 순서를 여기서 가져가야 그림마다 같은 값이
     같은 자리에 선다."""
     other_splits: int = 0
-    """상한을 넘어 빠진 세부 기준 값의 수."""
+    """이 쪽(`split_offset` · `split_limit`)에 없는 세부 기준 값의 수 — 막대마다
+    `other_part`."""
+    split_total: int = 0
+    """세부 기준 값의 **전체** 수(보여 준 막대 안에서) — `split_offset + len(splits) <
+    split_total` 면 다음 쪽이 있다."""
+    split_offset: int = 0
     offset: int = 0
     """이 쪽이 몇 번째 막대부터인가(0 부터)."""
     groups: int = 0
@@ -289,6 +303,8 @@ def summarize(
     max_value: float | None = None,
     limit: int = MAX_BUCKETS,
     offset: int = 0,
+    split_limit: int = MAX_SPLITS,
+    split_offset: int = 0,
 ) -> Summary:
     """목록과 **같은 거르기** 위에서 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
@@ -422,9 +438,10 @@ def summarize(
     split_label = ""
     splits: list[str] = []
     other_splits = 0
+    split_total = 0
     split_multi = False
     if split_by:
-        split_label, splits, other_splits, split_multi = _split(
+        split_label, splits, other_splits, split_multi, split_total = _split(
             db,
             filtered,
             buckets=buckets,
@@ -434,6 +451,8 @@ def summarize(
             grain=grain,
             metric=metric,
             value_expr=value_expr,
+            limit=max(1, min(split_limit, MAX_SPLIT_PAGE)),
+            offset=max(0, split_offset),
         )
     return Summary(
         order=order,
@@ -442,6 +461,8 @@ def summarize(
         split_label=split_label,
         splits=splits,
         other_splits=other_splits,
+        split_total=split_total,
+        split_offset=max(0, split_offset) if split_by else 0,
         group_field=group_by,
         group_label=group.label,
         metric=metric,
@@ -507,13 +528,20 @@ def _split(
     grain: str | None,
     metric: str,
     value_expr: Any,
-) -> tuple[str, list[str], int, bool]:
+    limit: int = MAX_SPLITS,
+    offset: int = 0,
+) -> tuple[str, list[str], int, bool, int]:
     """세부 기준으로 나눈다 — 이미 고른 칸들 **안에서만.**
 
     나눈 조각을 칸마다 채우고, 계열의 차례를 돌려준다. 차례를 서버가 정하는 이유:
     화면이 칸마다 나오는 순서대로 계열을 만들면 첫 칸에 없던 값이 뒤에서 튀어나와
     **색이 밀린다** — 같은 값이 그림 안에서 두 색을 갖는다.
-    """
+
+    **쪽**(`limit` · `offset`, ADR 0079) — 차례(큰 값부터)의 `offset` 번째부터 `limit` 개만
+    조각으로 싣고, 나머지(앞 쪽 · 뒤 쪽)는 막대마다 「그 밖에」 한 조각(`other_part`)으로
+    묶는다. 예전에는 열둘 밖의 값이 말없이 빠져 조각의 합이 막대보다 작았다 — 받은 쪽은 그
+    차이를 「값 없음」 으로 읽었다. 돌려주는 것 — (이름, 이 쪽의 값들, 이 쪽 밖의 값 수, 여러
+    값 칸인가, 값의 전체 수)."""
     # 기간 단위는 날짜 기준의 것 — 세부 기준은 그것도 날짜일 때만 받는다.
     split = plan.axis(split_by, grain=grain if plan.dated(split_by) else None)
     key_expr = group.expr
@@ -533,17 +561,19 @@ def _split(
         key = None if row.s is None or str(row.s) == "" else str(row.s)
         weight[key] = weight.get(key, 0) + int(row.n)
     ordered = sorted(weight, key=lambda one: (-weight[one], one or ""))
-    kept = ordered[:MAX_SPLITS]
+    kept = ordered[offset : offset + limit]
     names = axes.labels(db, split, [one for one in kept if one is not None])
     label_of = {one: (EMPTY_LABEL if one is None else names.get(one, one)) for one in kept}
 
     by_key = {one.key: one for one in buckets}
+    others: dict[str | None, list[Any]] = {}
     for row in rows:
         bucket = by_key.get(None if row.k is None else str(row.k))
         if bucket is None:
             continue
         key = None if row.s is None or str(row.s) == "" else str(row.s)
         if key not in label_of:
+            others.setdefault(bucket.key, []).append(row)
             continue
         bucket.parts.append(
             Part(
@@ -555,12 +585,40 @@ def _split(
         )
     for bucket in buckets:
         bucket.parts.sort(key=lambda one: kept.index(one.key))
+        rest = others.get(bucket.key)
+        if rest:
+            bucket.other_part = Part(
+                key=None,
+                label=f"{OTHER_SPLITS_LABEL} {len(rest)}종류",
+                count=sum(int(one.n) for one in rest),
+                value=_other_value(metric, rest, multi=split.multi or group.multi),
+            )
     return (
         split.label,
         [label_of[one] for one in kept],
         max(0, len(ordered) - len(kept)),
         split.multi,
+        len(ordered),
     )
+
+
+def _other_value(metric: str, rows: list[Any], *, multi: bool) -> float | None:
+    """「그 밖에」 조각의 값 — 합은 합, 최솟값 · 최댓값은 그대로. 평균은 조각마다의 평균에서
+    다시 낼 수 없어(값이 빈 기록의 수를 모른다) 비운다. 여러 값 칸이면 한 객체가 여러 조각에
+    들어 합도 비운다."""
+    if metric not in ("sum", "min", "max"):
+        return None  # 건수는 값 칸이 없고(`count` 가 곧 값), 평균은 다시 낼 수 없다
+    values = [_float(one.v) for one in rows]
+    present = [one for one in values if one is not None]
+    if not present:
+        return None
+    if metric == "sum" and not multi:
+        return sum(present)
+    if metric == "min":
+        return min(present)
+    if metric == "max":
+        return max(present)
+    return None
 
 
 def _float(raw: Any) -> float | None:

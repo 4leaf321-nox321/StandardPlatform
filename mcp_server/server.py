@@ -26,6 +26,7 @@ Claude Code 등록(사용자별 토큰):
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import contextvars
 import functools
@@ -33,6 +34,7 @@ import hashlib
 import inspect
 import json
 import os
+import random
 import re
 import secrets
 import shlex
@@ -463,6 +465,10 @@ def _unwrap(r: httpx.Response) -> Any:
         }
         if error.get("details"):
             out["details"] = error["details"]
+        if r.status_code in (429, 503) and r.headers.get("Retry-After"):
+            # 몰림 — 몇 초 뒤에 다시 부르면 되는지(ADR 0080). 읽기는 이미 기다려 다시 불러 본
+            # 뒤다.
+            out["retry_after"] = r.headers["Retry-After"]
         return out
     return body
 
@@ -650,16 +656,45 @@ async def _get(
     # 안내 대신 맨 시간 초과를 받는다.
     async with _client(_READ_WAIT_SECONDS) as client:
         query = str(httpx.QueryParams(params or []))
-        if len(query) > _LONG_QUERY:
-            # 긴 읽기 — 주소는 프록시가 끊는다(nginx 머리 8KB). 같은 쿼리를 몸통에 실어 같은
-            # GET 경로로(서버의 `X-HTTP-Method-Override: GET`).
-            headers = {
-                **_forward_headers(ctx),
-                "X-HTTP-Method-Override": "GET",
-                "Content-Type": "application/x-www-form-urlencoded",
-            }
-            return _unwrap(await client.post(path, content=query, headers=headers))
-        return _unwrap(await client.get(path, params=params, headers=_forward_headers(ctx)))
+        for tries in range(_BUSY_RETRIES + 1):
+            if len(query) > _LONG_QUERY:
+                # 긴 읽기 — 주소는 프록시가 끊는다(nginx 머리 8KB). 같은 쿼리를 몸통에 실어
+                # 같은 GET 경로로(서버의 `X-HTTP-Method-Override: GET`).
+                headers = {
+                    **_forward_headers(ctx),
+                    "X-HTTP-Method-Override": "GET",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+                got = await client.post(path, content=query, headers=headers)
+            else:
+                got = await client.get(path, params=params, headers=_forward_headers(ctx))
+            wait = _busy_wait(got)
+            if wait is None or tries >= _BUSY_RETRIES:
+                return _unwrap(got)
+            # 몰려서 거절된 읽기(429 · 503) — 서버가 말한 만큼 기다려 다시(ADR 0080). 흩뜨려
+            # 함께 거절된 부름들이 같은 순간 다시 몰리지 않게.
+            await asyncio.sleep(wait + random.random())
+        return _unwrap(got)  # pragma: no cover - 위에서 돌려준다
+
+
+#: 몰림(429 · 503 과 `Retry-After`)을 몇 번까지 기다려 다시 부르나 — 읽기(GET)만(ADR 0080).
+#: 쓰기는 다시 보내지 않는다(한 번 들어갔을 수 있다).
+_BUSY_RETRIES = 2
+#: `Retry-After` 를 이만큼까지만 기다린다(초) — 더 길면 기다리지 않고 AI 에게 그대로 말한다.
+_BUSY_WAIT_MAX = 15.0
+
+
+def _busy_wait(r: httpx.Response) -> float | None:
+    """몰려서 거절된 응답이면 기다릴 초, 아니면 None."""
+    if r.status_code not in (429, 503):
+        return None
+    try:
+        seconds = float(r.headers.get("Retry-After", ""))
+    except ValueError:
+        return None
+    if seconds <= 0 or seconds > _BUSY_WAIT_MAX:
+        return None
+    return seconds
 
 
 async def _post(
@@ -1442,6 +1477,8 @@ async def objects_list(
     columns: list[str] | None = None,
     year: int | None = None,
     types: list[str] | None = None,
+    cursor: str | None = None,
+    diagnose: str = "auto",
 ) -> Any:
     """그 타입의 객체 목록 — 화면의 목록과 **같은 거르기**다.
 
@@ -1502,14 +1539,26 @@ async def objects_list(
       하나(같은 값이 여러 번일 수 있다) · `more: true` 면 더 있다(몇 개인지는 세지 않았다 —
       수는 `objects_summary`). 볼 수 없는 객체는 걷지 않는다.
 
-    응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다.
-    **몇 건인지 세려면 전부 받지 말고 `objects_summary`.**
+    응답의 `total` 이 전체 수다. 쪽은 `limit`(기본 50 · **2,000 까지**)으로, 넘기기는 둘이다:
+    - `offset` — 앞 몇 쪽을 볼 때(목록 화면의 정렬 차례).
+    - **`cursor`** — **전부 읽을 때**(ADR 0079). 처음은 `cursor="start"`, 다음은 응답의
+      `next_cursor` 를 그대로 — `null` 이면 끝이다. id 차례로 넘겨 뒤쪽으로 가도 느려지지 않고
+      (`offset` 은 2,000만 건 표에서 뒤로 갈수록 느려진다), 전체 수는 첫 쪽에서만 센다(다음
+      쪽의 `total` 은 그 수 · `offset` 은 앞 쪽들에서 받은 줄 수). 조건을 바꾸면 처음부터.
+    **몇 건인지 세려면 전부 받지 말고 `objects_summary` · 묶음 전부는 `objects_census`.**
 
-    **0건이면 `diagnosis` 가 붙는다** — 「타입에 객체가 없음(empty_type)」 · 「부서 밖이라
-    안 보임(not_visible)」 · 「조건이 좁음(filters)」 중 무엇인지, 조건 때문이면 어느 조건을
-    빼면 몇 건인지, 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 있다(인터페이스는
-    「구현한 타입이 없음(no_implementers)」 도 있다). 읽지 않고
-    「없습니다」 라고 답하지 마라 — 있는 것을 없다고 하면 사람은 그것을 새로 만든다.
+    **0건이면 `diagnosis` 가 붙는다** — 「타입에 객체가 없음(empty_type)」 · 「부서 밖이라 안
+    보임(not_visible)」 · 「조건이 좁음(filters)」 중 무엇인지, 조건 때문이면 어느 조건을 빼면
+    몇 건인지, 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 있다(인터페이스는 「구현한
+    타입이 없음(no_implementers)」 도 있다). 읽지 않고 「없습니다」 라고 답하지 마라 — 있는
+    것을 없다고 하면 사람은 그것을 새로 만든다. `diagnose`(ADR 0081): `auto`(기본 — 큰 타입은
+    가벼운 진단) · `full`(조건마다 빼고 다시 센다 — 큰 타입에서 오래 걸린다) · `light`(다시
+    세지 않는다 — 빈 타입 · 부서 밖 · 고를 값 밖의 값까지만, `filters` 없음) · `off`(붙이지
+    않는다 — 0건이 답인 줄 알 때). 가벼운 진단(`mode: "light"`)은 어느 조건 때문인지 세지
+    않았다고 말한다 — 필요하면 `full` 로 다시.
+
+    **`scope`**(ADR 0083) — 이 타입의 자료 범위(「국내」 · 「해외」 · 「plm」 같은 설치의 말).
+    `mixed` 면 섞였다(`scope_mix`) — 답에 범위를 함께 말한다.
 
     **긴 글 칸(보고서 본문 같은 것)은 앞 300자만** 온다 — 줄의 `clipped` 가 그 칸의 전체
     길이를 말한다. 내용으로 답하려면 그 객체를 `object_get` 으로 읽는다.
@@ -1519,7 +1568,11 @@ async def objects_list(
     `freshness`(수집 현황)는 그 타입에 들어오는 원천의 최종 수집 시각 · 수집 실패 · 수집 지연 ·
     적재 진행 중 — 이상이 있으면 「○○ 원천의 △△ 까지 자료」 라고 붙인다."""
     filters = _filter_params(q, status, properties, conditions, as_of, year, types)
-    params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
+    params: list[tuple[str, Any]] = [("limit", limit), *filters]
+    if cursor is not None:
+        params.append(("cursor", cursor))
+    else:
+        params.append(("offset", offset))
     params += [("columns", one) for one in columns or []]
     found = await _get(ctx, f"/api/objects/{type_slug}", params=params)
     if isinstance(found, dict):
@@ -1530,14 +1583,18 @@ async def objects_list(
             _clip(row, start=0, size=LIST_TEXT)
             if base:
                 _object_url(base, row)
-    if isinstance(found, dict) and found.get("total") == 0:
+    if isinstance(found, dict) and found.get("total") == 0 and diagnose != "off":
         # **0건은 「없다」 가 아니다.** 안 채운 타입일 수도, 부서 밖이라 안 보일 수도,
         # 조건이 좁을 뿐일 수도 있다. 셋을 안 가르면 모델은 「없다」 로 읽고 없는 것을
         # 새로 만든다 — 그래서 0건일 때만 한 번 더 물어 이유를 붙인다.
-        # 진단이 실패해도 목록은 돌려준다 — 덤이 본래 답을 막으면 안 된다.
+        # 진단이 실패해도 목록은 돌려준다 — 덤이 본래 답을 막으면 안 된다. 방금 센 0 을
+        # 넘겨 다시 세지 않게 하고, 큰 타입은 가벼운 진단이 기본이다(ADR 0081).
+        mode = diagnose if diagnose in ("full", "light") else "auto"
         with contextlib.suppress(Exception):
             found["diagnosis"] = await _get(
-                ctx, f"/api/objects/{type_slug}/diagnose", params=list(filters)
+                ctx,
+                f"/api/objects/{type_slug}/diagnose",
+                params=[*filters, ("mode", mode), ("total", 0)],
             )
     return found
 
@@ -1929,6 +1986,8 @@ async def objects_summary(
     max_value: float | None = None,
     limit: int | None = None,
     offset: int = 0,
+    split_limit: int | None = None,
+    split_offset: int = 0,
 ) -> Any:
     """**통계** — 「부서별 몇 건」 「개발사 국가별 툴 수」. 화면의 「통계」 와 같다.
 
@@ -1946,7 +2005,10 @@ async def objects_summary(
       면 계층 축(`properties.part@0` 뿌리별) — 막대의 조건은 `buckets[].drill` 이다.
       `type_slug` 가 인터페이스면 `type`(어느 구현 타입인가)도 된다.
       쓸 수 있는 기준 전부가 응답의 `group_options` 다.
-    - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다.
+    - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다. 세부 기준 값은 기본
+      12개(큰 것부터) — 더 보려면 `split_limit`(200 까지)·`split_offset` 으로 넘긴다
+      (`split_offset + len(splits) < split_total` 면 다음 쪽). 이 쪽에 없는 값은 칸마다
+      `other_part`(「그 밖에 N종류」)로 묶여 `parts` 와 합이 칸의 `count` 다(ADR 0079).
     - `metric`: `count`(기본)·`sum`·`avg`·`min`·`max`. `count` 가 아니면
       `metric_field`(숫자 속성 `properties.<키>`)가 필요하다.
     - `order`: `desc`(큰 값부터)·`asc`(작은 값부터 — 「가장 낮은 것」)·`key`(키 순 —
@@ -1963,7 +2025,8 @@ async def objects_summary(
       30개에서 접힌다 — 전부가 필요하면 `limit`(500 까지)·`offset` 으로 넘긴다:
       `offset + len(buckets) < groups` 면 다음 쪽이 있다. 문턱에 못 미친 막대는
       `below_groups` · `below_count` 다(「그 밖에」 가 아니다). **원본 기록을 받아 직접 세지
-      않는다.**
+      않는다.** 막대가 수백 개를 넘거나 표가 답이면(「시장 165곳 전부」) **`objects_census`**
+      — 접지도 자르지도 않고 전부, 합의 검증값과 함께.
 
     사용자에게 옮길 때 **빼먹지 않는다**:
     - `freshness`(수집 현황) — 원천의 최종 수집 시각 · 수집 실패 · 수집 지연 · 적재 진행 중.
@@ -1996,8 +2059,107 @@ async def objects_summary(
         params.append(("limit", max(1, min(limit, 500))))
     if offset:
         params.append(("offset", offset))
+    if split_limit is not None:
+        params.append(("split_limit", max(1, min(split_limit, 200))))
+    if split_offset:
+        params.append(("split_offset", split_offset))
     params += _filter_params(q, status, properties, conditions, as_of, year, types)
     return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
+
+
+@tool()
+async def objects_census(
+    ctx: Context,
+    type_slug: str,
+    group_by: str | None = None,
+    metric: str = "count",
+    metric_field: str | None = None,
+    order: str = "desc",
+    grain: str | None = None,
+    q: str | None = None,
+    properties: dict[str, str] | None = None,
+    conditions: list[dict[str, str]] | None = None,
+    status: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    types: list[str] | None = None,
+    cursor: str | None = None,
+    limit: int = 1000,
+    wait_seconds: float = 20.0,
+) -> Any:
+    """**전수 집계** — 묶음을 **전부**(30개에서 접거나 500개로 자르지 않는다), 묶음 합이 전체와
+    같은지의 **검증값**과 함께(ADR 0079). 「시장 165곳 각각의 건수」 · 「모델 3천 개마다 몇
+    건」 처럼 **표가 답인 물음**에 쓴다. 그림 · 상위 몇 개면 `objects_summary`.
+
+    거르기 · 기준(`group_by` · `metric` · `metric_field` · `order` · `grain`)은
+    `objects_summary` 와 같다(세부 기준은 없다).
+
+    - 묶음이 5,000개 이하면 `rows` 가 전부다(`complete: true`).
+    - 넘으면 서버가 작업으로 돌린다 — 이 도구가 `wait_seconds` 까지 기다려 첫 쪽(`limit` 줄,
+      5,000 까지)을 붙여 준다. 다음 쪽은 같은 도구에 `type_slug` 와 **`cursor=<next_cursor>`**
+      만 준다. 작업이 아직이면 `status` 가 `running` 이다 — 잠시 뒤 같은 커서로 다시.
+    - 이 집계 자체가 시간 상한(`[APP-COMMON-0504]`)에 걸리면 처음부터 작업으로 다시 돌린다 (이
+      도구가 알아서 한다).
+
+    **옮길 때.**
+    - `check.message` 를 그대로 — `check.matches` 가 false 면 그 까닭(여러 값 기준이라 겹침 ·
+      어느 묶음에도 안 든 기록)을 먼저 말한다. 기록 수는 `total` 이다.
+    - 「(비어 있음)」 묶음(`key: null`)도 숨기지 않는다.
+    - `scope`(자료 범위)가 `mixed` 면 섞였다고 말한다. `freshness` 는 목록과 같다."""
+    if cursor:
+        return await _census_rows(ctx, type_slug, cursor, limit, wait_seconds)
+    if not group_by:
+        return {"error": "group_by 가 필요합니다(objects_summary 와 같은 기준)."}
+    params: list[tuple[str, Any]] = [
+        ("group_by", group_by),
+        ("metric", metric),
+        ("order", order),
+    ]
+    if metric_field and metric != "count":
+        params.append(("metric_field", metric_field))
+    if grain:
+        params.append(("grain", grain))
+    params += _filter_params(q, status, properties, conditions, as_of, year, types)
+    found = await _get(ctx, f"/api/objects/{type_slug}/census", params=params)
+    if isinstance(found, dict) and "COMMON-0504" in str(found.get("error") or ""):
+        # 그 자리의 집계가 시간 상한에 걸렸다 — 처음부터 작업으로(같은 거르기).
+        job = await _post(ctx, f"/api/objects/{type_slug}/census/job", {}, params=params)
+        if not isinstance(job, dict) or "id" not in job:
+            return job
+        return await _census_rows(
+            ctx, type_slug, _census_cursor(str(job["id"])), limit, wait_seconds
+        )
+    if isinstance(found, dict) and found.get("next_cursor") and not found.get("complete"):
+        found["first_page"] = await _census_rows(
+            ctx, type_slug, str(found["next_cursor"]), limit, wait_seconds
+        )
+    return found
+
+
+def _census_cursor(job_id: str) -> str:
+    """작업 id 로 첫 커서 — 서버의 `census.encode_cursor(job, 0)` 과 같은 글."""
+    raw = json.dumps({"j": job_id, "n": 0}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+async def _census_rows(
+    ctx: Context, type_slug: str, cursor: str, limit: int, wait_seconds: float
+) -> Any:
+    """작업이 만든 전수 집계의 한 쪽 — 작업이 아직이면 `wait_seconds` 까지 기다린다."""
+    params = [("cursor", cursor), ("limit", max(1, min(limit, 5000)))]
+    deadline = time.monotonic() + max(0.0, min(wait_seconds, JOB_WAIT_MAX))
+    while True:
+        got = await _get(ctx, f"/api/objects/{type_slug}/census/rows", params=params)
+        status = got.get("status") if isinstance(got, dict) else None
+        if status in ("done", "failed", "cancelled", None) or time.monotonic() >= deadline:
+            if isinstance(got, dict) and status not in ("done", None):
+                got["note"] = (
+                    "작업이 아직 끝나지 않았습니다 — 잠시 뒤 같은 cursor 로 다시 부릅니다."
+                    if status in ("queued", "running")
+                    else "작업이 끝나지 못했습니다 — 거르기를 좁혀 다시 셉니다."
+                )
+            return got
+        await asyncio.sleep(1.0)
 
 
 @tool()
@@ -4016,6 +4178,8 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
         "by",
         "top",
     },
+    # 전작 대비 배율(ADR 0082) — 인자는 순차 검정과 같다. `by` 는 값 전부(상한 없음).
+    "ratio": {"target", "reference", "reference_via", "dim", "by"},
     "groups": {"dim", "axis", "window"} | _RANGES,
     "cutin": {"at", "axis", "window", "skip_first", "effect"} | _RANGES,
     "coverage": {"levels", "via"} | _RANGES,
@@ -4065,6 +4229,13 @@ async def metric_analyze(
       `reference` 또는 `reference_via`(새 모델 객체의 전작 칸) · `dim` · `rho` · `alpha` ·
       `beta` · **`by`**(값마다 훑기 — 「전작보다 빨리 늘고 있는 증상은?」: 증상마다 그 증상으로
       거른 검정, 유의수준 α/K, 「나쁨」 이 선 값부터. `new` 는 전작에 없던 값) · `top`
+    - `ratio` — **전작 대비 배율**(ADR 0082) — 새 모델의 판매 대수당 건수가 전작의 몇 배인가,
+      **점추정과 95% 구간**. 인자는 `sprt` 와 같다: `target`(필수) · `reference` 또는
+      `reference_via` · `dim` · **`by`**(값마다 — 상한 없이 값 **전부**: `by=<시장 기준>` 이면
+      시장 전수표). `overall`(전체)과 `items[]`(값마다): `ratio`(경과를 맞춘 배율 = 관측 /
+      전작의 경과별 비율로 낸 기대) · `low` · `high`(95%) · `verdict`(`higher` 구간이 1 위 ·
+      `lower` 1 아래 · `unclear` 1 을 품음) · `crude`(경과를 안 맞춘 단순 배율) · 양쪽의 건수 ·
+      대수 · 대수당 건수(`target_rate` · `reference_rate`)
     - `groups` — **집단 비교**(SKU · 공장 · 기본 모델마다 비율이 다른가). `dim`(분모 짝에 있는
       기준) · `axis` · `window`. 이질성 χ², 집단 대 나머지 정확 검정(BH q), 작은 집단의 과장을
       줄인 비율(`shrunk` · 구간 · `shrinkage`)
@@ -4108,6 +4279,10 @@ async def metric_analyze(
       `extrapolated` 는 「관측 밖으로 늘려 읽은 값」 이다.
     - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
       「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
+    - 배율: 점추정만 말하지 않고 **구간과 함께**(「1.8배, 95% 구간 1.3 ~ 2.5」). `unclear` 는
+      「같다」 가 아니다. 값마다 본 구간이라 165개 중 몇 개는 우연히 1 을 벗어난다 — 표는 표로
+      옮기고, 하나를 결론으로 삼을 때는 그 주의를 함께. `crude` 와 `ratio` 가 많이 다르면
+      경과(판매 시기) 차이 때문이다 — 결론은 `ratio`.
     - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
     - 재발: 다시 나온 서명은 「전작에서도 이 조합의 기록이 있었다」 이다 — 날짜 순서는 안
       본다(`order_ignored`). 재발률은 전작 서명 중의 몫이다.

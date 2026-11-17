@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.jobs.schemas import JobOut
 from app.modules.ontology.schemas import PropertyDefOut
 from app.shared.pagination import Page
 
@@ -189,6 +190,16 @@ class ObjectPageOut(Page[ObjectOut]):
     """그 타입에 들어오는 원천의 마지막 성공 · 실패 중 · 멎음 — 이름 순. 비면 들어오는 원천이
     없다(손으로 · MCP 로 넣는 타입). 인터페이스면 구현 타입 전부의 원천, 다른 표를 비추는
     타입(system)은 늘 빈 목록."""
+    scope: str | None = None
+    """자료 범위 표지(ADR 0083) — 이 목록의 타입(인터페이스면 고른 구현 타입들)에 적힌 `scope`.
+    모두 같으면 그 값, 섞였으면 `mixed`(무엇이 섞였는지는 `scope_mix`), 모두 미지정이면
+    null."""
+    scope_mix: list[str] = Field(default_factory=list)
+    """`scope` 가 `mixed` 일 때 섞인 값들(미지정은 「(미지정)」). 아니면 빈 목록."""
+    next_cursor: str | None = None
+    """커서로 넘길 때(ADR 0079) **다음 쪽의 커서** — 그대로 `cursor` 로 넘긴다. 마지막 쪽이면
+    null. `offset` 으로 넘긴 응답에는 늘 null. 커서 쪽의 `total` 은 첫 쪽에서 센 수 · `offset`
+    은 앞 쪽들에서 받은 줄 수다."""
 
 
 class RelatedObjectOut(BaseModel):
@@ -982,6 +993,11 @@ class BucketOut(BaseModel):
     """계층 축이면 누를 때 거는 조건(그 단계의 조상이면 「하위 전체」, 얕은 것이면
     「같음」)."""
     parts: list[PartOut] = Field(default_factory=list)
+    """세부 기준을 줬을 때 이 쪽의 값(`splits`)마다의 조각."""
+    other_part: PartOut | None = None
+    """이 쪽에 없는 세부 기준 값들(앞 쪽 · 뒤 쪽)을 묶은 「그 밖에 N종류」 조각 — 그런 값이 이
+    막대에 있을 때만(ADR 0079). `parts` 와 이것의 건수 합이 `count` 다(여러 값 칸이면 더 클 수
+    있다). 값(`value`)은 합 · 최솟값 · 최댓값만(평균은 비운다)."""
 
 
 class SummaryOut(BaseModel):
@@ -999,6 +1015,11 @@ class SummaryOut(BaseModel):
     """세부 기준 값들의 차례. 화면이 계열 순서를 여기서 가져간다 — 칸마다 나오는 대로
     만들면 첫 칸에 없던 값이 뒤에서 튀어나와 색이 밀린다."""
     other_splits: int
+    """이 쪽에 없는 세부 기준 값의 수 — 막대마다 `other_part` 로 묶인다."""
+    split_total: int = 0
+    """세부 기준 값의 전체 수(보여 준 막대 안에서) — `split_offset + len(splits) < split_total`
+    면 다음 쪽이 있다(`split_offset` 을 늘려 다시 부른다)."""
+    split_offset: int = 0
     metric: str
     metric_field: str | None
     metric_label: str
@@ -1033,6 +1054,95 @@ class SummaryOut(BaseModel):
     """그 타입에 들어오는 원천의 마지막 성공 · 실패 중 · 멎음 — 이름 순. 비면 들어오는 원천이
     없다(손으로 · MCP 로 넣는 타입). 인터페이스면 구현 타입 전부의 원천, 다른 표를 비추는
     타입(system)은 통계가 없다."""
+    scope: str | None = None
+    """자료 범위 표지(ADR 0083) — 센 타입(인터페이스면 고른 구현 타입들)에 적힌 `scope`. 모두
+    같으면 그 값, 섞였으면 `mixed`(무엇이 섞였는지는 `scope_mix`), 모두 미지정이면 null."""
+    scope_mix: list[str] = Field(default_factory=list)
+    """`scope` 가 `mixed` 일 때 섞인 값들(미지정은 「(미지정)」). 아니면 빈 목록."""
+
+
+class CensusRowOut(BaseModel):
+    """전수 집계의 묶음 하나(ADR 0079) — 통계의 막대와 같은 모양(조각 없이)."""
+
+    key: str | None
+    """거르기에 그대로 넣을 수 있는 값. 빈 칸이면 null. 날짜 축이면 기간의 시작일."""
+    label: str
+    count: int
+    value: float | None = None
+    """`metric` 이 count 가 아닐 때의 값."""
+    range: RangeOut | None = None
+    drill: DrillOut | None = None
+
+
+class CensusCheckOut(BaseModel):
+    """**묶음의 합이 전체와 맞는가** — 받은 쪽이 다시 더해 보지 않아도 되게."""
+
+    total: int
+    """거르기를 통과한 기록 수."""
+    group_sum: int
+    """묶음 건수의 합."""
+    difference: int
+    """`group_sum - total`. 0 이면 빠지거나 겹친 것이 없다."""
+    matches: bool
+    multi: bool
+    """여러 값 기준 — 한 기록이 여러 묶음에 들어 합이 더 클 수 있다(틀린 것이 아니다)."""
+    message: str
+    """사람이 읽는 판정 — 그대로 옮긴다."""
+
+
+class CensusOut(BaseModel):
+    """전수 집계(ADR 0079) — 묶음을 **접지도 자르지도 않고 전부**, 합의 검증값과 함께.
+
+    묶음이 `INLINE_MAX`(5,000) 개 이하면 `rows` 가 전부다(`complete` 참). 넘으면 수 · 검증값만
+    오고 작업(`job`)이 전부를 만든다 — 끝나면 `GET .../census/rows?cursor=<next_cursor>` 로
+    나눠 받는다."""
+
+    group_field: str
+    group_label: str
+    metric: str
+    metric_field: str | None
+    metric_label: str
+    order: str
+    grain: str | None = None
+    total: int
+    groups: int
+    """묶음의 전체 수."""
+    check: CensusCheckOut
+    rows: list[CensusRowOut] = Field(default_factory=list)
+    complete: bool
+    """`rows` 가 묶음 전부인가."""
+    job: JobOut | None = None
+    """묶음이 많아 작업으로 돌렸으면 그 작업 — 끝나면 `next_cursor` 로 줄을 받는다."""
+    next_cursor: str | None = None
+    """다음에 받을 줄의 커서(작업의 결과에서) — `GET .../census/rows?cursor=`."""
+    link: str | None = None
+    """같은 거르기 · 같은 기준으로 통계를 펼쳐 연 목록 화면 주소(통계와 같은 규칙)."""
+    link_missing: list[str] = Field(default_factory=list)
+    freshness: list[FreshnessOut] = Field(default_factory=list)
+    scope: str | None = None
+    """자료 범위 표지(ADR 0083) — 목록 · 통계와 같다."""
+    scope_mix: list[str] = Field(default_factory=list)
+
+
+class CensusRowsOut(BaseModel):
+    """작업이 만든 전수 집계의 한 쪽 — 커서로 넘긴다."""
+
+    job_id: uuid.UUID
+    status: str
+    """작업 상태 — `done` 이 아니면 줄이 없다(끝나면 다시 부른다)."""
+    group_field: str = ""
+    group_label: str = ""
+    metric: str = "count"
+    metric_label: str = ""
+    total: int = 0
+    groups: int = 0
+    check: CensusCheckOut | None = None
+    """작업이 센 검증값 — 작업이 센 때의 것이다."""
+    offset: int = 0
+    """이 쪽이 몇 번째 묶음부터인가."""
+    rows: list[CensusRowOut] = Field(default_factory=list)
+    next_cursor: str | None = None
+    """다음 쪽의 커서 — 마지막 쪽이면 null."""
 
 
 class WatchRequest(BaseModel):
@@ -1227,13 +1337,22 @@ class DiagnosisOut(BaseModel):
     """`has_rows` · `empty_type` · `not_visible` · `filters` · `no_implementers`(인터페이스를
     구현한 타입이 없다)."""
     message: str
-    type_total: int
-    hidden: int
+    type_total: int | None
+    """조건을 다 뺐을 때 내게 보이는 수. 가벼운 진단에서 부서로 좁힌 사람이면 null(세지 않았다
+    — 0 이 아니라 모른다)."""
+    hidden: int | None
+    """있지만 내 부서 밖이라 안 보이는 수. 가벼운 진단에서 보이는 것이 있으면 null(세지
+    않았다)."""
     filters: list[FilterEffectOut] = Field(default_factory=list)
+    """조건마다 「그것만 빼면 몇 건」 — **가벼운 진단(`mode=light`)에는 없다**(다시 세지
+    않았다)."""
     next_steps: list[str] = Field(default_factory=list)
     values: list[ValueMissOut] = Field(default_factory=list)
     """**고를 값 밖의 값**으로 건 조건 — 「상태 = 양산중」 처럼 철자 · 띄어쓰기 · 다른 말로
     0건이 된 것. 조건 때문에 0건일 때만 싣고, `message` 가 먼저 말한다."""
+    mode: str = "full"
+    """`full`(조건마다 빼고 다시 센다) · `light`(다시 세지 않는다 — 계수표와 「보이는 것이
+    있나」 만, 큰 타입의 기본, ADR 0081)."""
 
 
 # --- 비슷한 기록(ADR 0022) -------------------------------------------------------------

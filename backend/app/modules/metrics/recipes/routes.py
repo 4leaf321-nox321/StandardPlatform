@@ -27,6 +27,7 @@ from app.modules.metrics.recipes import (
     logit,
     pareto,
     profile,
+    ratio,
     recurrence,
     sprt,
     ways,
@@ -44,6 +45,7 @@ from app.modules.metrics.recipes.schemas import (
     LogitOut,
     ParetoOut,
     ProfileOut,
+    RatioOut,
     RecurrenceOut,
     SprtOut,
     SprtScanOut,
@@ -642,6 +644,48 @@ def sprt_analysis(
         compact=compact,
     )
     return links.attach(out, request, "analysis", recipe="sprt", same=_model_dim(built))
+
+
+@router.get("/ratio", response_model=RatioOut)
+def ratio_analysis(
+    slug: str,
+    request: Request,
+    target: str = Query(description="새 모델 — 그 기준의 값(관계 기준이면 객체 id)"),
+    reference: str | None = Query(default=None, description="전작 — 그 기준의 값"),
+    reference_via: str | None = Query(
+        default=None,
+        description="전작을 새 모델 객체의 이 칸(참조)에서 찾는다 — reference 대신",
+    ),
+    dim: str | None = Query(
+        default=None, description="모델 기준 — 비우면 분모 짝(on)의 첫 기준"
+    ),
+    by: str | None = Query(
+        default=None,
+        description="값마다 볼 기준(시장 · 증상) — 상한 없이 값 전부(전수표)",
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RatioOut:
+    """④-2 전작 대비 배율(ADR 0082) — 새 모델의 판매 대수당 건수가 전작의 몇 배인가. 경과를
+    맞춘 배율(전작의 경과별 비율로 낸 기대 건수 대비)과 95% 구간, 단순 배율. `by` 를 주면 그
+    기준의 값마다 전부. 다른 거르기는 `d.<기준>=<값>`(두 모델에 함께)."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(request)
+    out = ratio.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        target=target,
+        reference=reference,
+        reference_via=reference_via,
+        dim=dim,
+        by=by,
+    )
+    return links.attach(out, request, "analysis", recipe="ratio", same=_model_dim(built))
 
 
 @router.get("/logit", response_model=LogitOut)

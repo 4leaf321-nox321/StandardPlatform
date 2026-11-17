@@ -70,7 +70,7 @@ class Screen:
 #: 레시피(분석 경로의 이름 — 값마다 훑기는 `<레시피>/scan`)마다. **보기를 고치면 여기도**
 #: (`ParetoView` · `LifeView` · `ControlView` · `ChangesView` · `SprtView` · `GroupsView` ·
 #: `CutinView` · `ForecastView` · `CoverageView` · `RecurrenceView` · `ProfileView` ·
-#: `LogitView` · `AssocView`).
+#: `LogitView` · `AssocView` · `RatioView`).
 ANALYSES: dict[str, Screen] = {
     "pareto": Screen(
         reads=frozenset({"dim", "by_period", "compare_from", "compare_to"}),
@@ -104,6 +104,13 @@ ANALYSES: dict[str, Screen] = {
     "sprt/scan": Screen(
         reads=frozenset({"by", "target", "reference", "reference_via", "rho"}),
         unread={"dim": None, "alpha": sprt.ALPHA, "beta": sprt.BETA, "top": sprt.SCAN_TOP},
+        ranged=False,
+    ),
+    # 전작 대비 배율(ADR 0082) — 모델 기준은 순차 검정처럼 보기가 정한다. 값마다(`by`)도 같은
+    # 보기.
+    "ratio": Screen(
+        reads=frozenset({"target", "reference", "reference_via", "by"}),
+        unread={"dim": None},
         ranged=False,
     ),
     "groups": Screen(

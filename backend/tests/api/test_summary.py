@@ -674,6 +674,7 @@ def test_기간_단위마다_키와_이름이_다르다(client: TestClient, admi
         "value": None,
         "range": {"gte": "2026-01-01", "lt": "2026-04-01"},
         "parts": [],
+        "other_part": None,
         "drill": None,
     }
     week = _summary(client, admin, kind, group_by="properties.made", grain="week", order="key")

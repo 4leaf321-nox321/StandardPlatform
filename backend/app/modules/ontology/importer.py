@@ -97,6 +97,8 @@ TYPE_FIELDS = {
     "usage",
     # 개정 칸(ADR 0041) — 그 타입의 글자 · 고르기 · 숫자 속성 하나의 키. 계획이 모양을 본다.
     "revision_key",
+    # 자료 범위 표지(ADR 0083) — 설치의 말. 가져오는 쪽 설치의 값이 덮인다(정의와 함께 옮긴다).
+    "scope",
     "list_view",
     "form_view",
     "detail_view",

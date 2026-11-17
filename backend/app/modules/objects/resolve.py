@@ -54,7 +54,7 @@ from app.modules.objects.services import (
     word_patterns,
 )
 from app.modules.ontology.models import ObjectType, PropertyDef
-from app.shared.permissions import visible_owner_clause
+from app.shared.permissions import sees_every_department, visible_owner_clause
 from app.shared.text import clean, compare_key
 
 CANDIDATE_CAP = 20
@@ -426,14 +426,112 @@ class Diagnosis:
     reason: str
     """`has_rows` · `empty_type` · `not_visible` · `filters`."""
     message: str
-    type_total: int
-    """조건을 다 뺐을 때, 내게 보이는 이 타입의 객체 수."""
-    hidden: int
-    """있지만 내 부서 밖이라 안 보이는 수."""
+    type_total: int | None
+    """조건을 다 뺐을 때, 내게 보이는 이 타입의 객체 수. 가벼운 진단에서 부서로 좁힌 사람이면
+    세지 않았다(None — 0 이 아니라 모른다)."""
+    hidden: int | None
+    """있지만 내 부서 밖이라 안 보이는 수. 가벼운 진단에서 보이는 것이 있으면 None(세지
+    않았다)."""
     filters: list[FilterEffect] = field(default_factory=list)
     next_steps: list[str] = field(default_factory=list)
     values: list[ValueMiss] = field(default_factory=list)
     """고를 값 밖의 값으로 건 조건(`value_misses`) — 0건의 가장 흔한 까닭이라 먼저 말한다."""
+    mode: str = "full"
+    """`full`(조건마다 빼고 다시 센다) · `light`(다시 세지 않는다 — 계수표 · 「있나」 만,
+    ADR 0081)."""
+
+
+def _diagnose_light(
+    db: Session,
+    user: User,
+    target: ObjectType | Scope,
+    *,
+    total: int,
+    type_rows: int,
+    values: list[ValueMiss],
+) -> Diagnosis:
+    """가벼운 진단 — 계수표의 수와 「보이는 것이 있나」(색인 한 번)만. 다시 세지 않는다."""
+    scope = as_scope(db, target)
+    label = scope.label
+    sees_all = sees_every_department(user)
+    if sees_all:
+        visible_total: int | None = type_rows
+        hidden: int | None = 0
+    elif type_rows and db.scalar(select(_visible(user, scope).exists())):
+        visible_total, hidden = None, None
+    else:
+        visible_total, hidden = 0, type_rows
+    if total > 0:
+        return Diagnosis(
+            total=total,
+            reason="has_rows",
+            message=f"{total}건입니다.",
+            type_total=visible_total,
+            hidden=hidden,
+            mode="light",
+        )
+    if scope.is_interface and not scope.types:
+        return Diagnosis(
+            total=0,
+            reason="no_implementers",
+            message=f"인터페이스 {label}을(를) 구현한 타입이 **없습니다** — 객체가 없는 것이 "
+            "아니라 이 목록에 담을 타입이 아직 없습니다.",
+            type_total=0,
+            hidden=0,
+            next_steps=["관리 › 온톨로지에서 타입의 「구현 인터페이스」 에 이것을 고른다."],
+            mode="light",
+        )
+    if type_rows == 0:
+        return Diagnosis(
+            total=0,
+            reason="empty_type",
+            message=f"{label}에 객체가 **하나도 없습니다** — 조건 때문이 아닙니다. 아직 안 "
+            "채운 타입입니다.",
+            type_total=0,
+            hidden=0,
+            next_steps=[
+                "사람에게 이 타입을 채울 자료가 있는지 묻는다.",
+                "자료가 있으면 objects_import 로 넣는다(apply=false 로 먼저 계획을 본다).",
+            ],
+            mode="light",
+        )
+    if visible_total == 0:
+        return Diagnosis(
+            total=0,
+            reason="not_visible",
+            message=f"{label}에 {type_rows:,}건이 있지만 **내 부서 밖이라 안 보입니다** — "
+            "없는 것이 아니라 권한이 없는 것입니다.",
+            type_total=0,
+            hidden=hidden,
+            next_steps=["그 부서의 관리자에게 열람 권한을 요청한다."],
+            mode="light",
+        )
+    seen = f"{visible_total:,}건" if visible_total is not None else "객체"
+    return Diagnosis(
+        total=0,
+        reason="filters",
+        message=(_value_said(values) if values else "")
+        + f"{label}에 보이는 {seen}이(가) 있는데 조건으로 0건이 됐습니다. 이 타입은 커서 "
+        "어느 조건 때문인지 다시 세지 않았습니다(가벼운 진단) — 조건마다 빼고 센 수가 "
+        "필요하면 diagnose=full 로 다시 부릅니다(조건마다 다시 세므로 오래 걸릴 수 있습니다).",
+        type_total=visible_total,
+        hidden=hidden,
+        values=values,
+        next_steps=[
+            *(
+                [
+                    "고를 값에 없는 값을 고쳐 다시 묻는다 — `values[].near` 는 짐작이니 "
+                    "사람에게 확인하고, 그 칸의 고를 값은 object_fields 로 본다."
+                ]
+                if values
+                else []
+            ),
+            "조건을 하나씩 빼며 objects_summary 로 세어 본다 — 날짜 범위라면 범위를 넓혀 "
+            "그 칸으로 묶어(grain) 어느 기간에 있는지 본다.",
+            "칸 이름이 맞는지 object_fields 로 확인한다 — 값이 비어 있는 칸일 수 있다.",
+        ],
+        mode="light",
+    )
 
 
 def _value_said(misses: list[ValueMiss]) -> str:
@@ -459,11 +557,23 @@ def diagnose(
     unknown: Any,
     count: Any,
     values: list[ValueMiss] | None = None,
+    light: bool = False,
+    type_rows: int | None = None,
 ) -> Diagnosis:
     """0건이 **왜** 0건인지. `without(name)` 은 그 조건만 뺀 질의, `unknown(name)` 은
     그 칸이 비어 있어 빠진 수, `count(stmt)` 는 세기다 — 목록과 **같은 거르기**를
     쓰려고 부르는 쪽이 넘긴다(따로 적으면 진단이 목록과 어긋난다). `values` 는 고를 값 밖의
-    값으로 건 조건 — 조건 때문에 0건이면 그것부터 말한다."""
+    값으로 건 조건 — 조건 때문에 0건이면 그것부터 말한다.
+
+    `light`(가벼운 진단, ADR 0081) — **다시 세지 않는다.** 2,000만 건 타입에서 「보이는 전체」
+    · 「모든 것」 · 조건마다 「그것만 빼면」 · 「값이 비어서」 를 세면 0건 한 번에 세기가 열 번
+    남짓이다. 가벼운 진단은 계수표(`type_rows`, ADR 0038)와 「보이는 것이 하나라도 있나」 만
+    보고 빈 타입 · 부서 밖 · 고를 값 밖의 값 · 「조건 때문」 까지를 가른다 — 어느 조건
+    때문인지는 세지 않았다고 말한다."""
+    if light:
+        return _diagnose_light(
+            db, user, target, total=total, type_rows=type_rows or 0, values=values or []
+        )
     scope = as_scope(db, target)
     label = scope.label
     if scope.object_type is not None and system.is_system(scope.object_type):

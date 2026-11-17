@@ -13,6 +13,7 @@ export type Recipe =
   | 'control'
   | 'changes'
   | 'sprt'
+  | 'ratio'
   | 'groups'
   | 'cutin'
   | 'coverage'
@@ -805,4 +806,45 @@ export interface ProfileResult extends AnalysisHeader {
     closed: boolean
   }[]
   related: { dim: string; label: string; values: ProfileValue[]; others: number }[]
+}
+
+/** ④-2 전작 대비 배율 한 줄(ADR 0082) — 전체 또는 값 하나. */
+export interface RatioRow {
+  key: string | null
+  label: string
+  /** 새 모델의 건수(전작과 겹치는 경과까지). */
+  observed: number
+  /** 전작의 경과별 비율로 낸 「전작 같았다면」 의 건수. */
+  expected: number
+  /** 경과를 맞춘 배율 = 관측 / 기대. 기대가 0 이면 null(`new`). */
+  ratio: number | null
+  low: number | null
+  high: number | null
+  /** 구간이 1 위(higher) · 아래(lower) · 1 을 품음(unclear — 「같다」 가 아니다). */
+  verdict: 'higher' | 'lower' | 'unclear'
+  /** 경과를 안 맞춘 단순 배율. */
+  crude: number | null
+  target_units: number
+  target_records: number
+  target_rate: number | null
+  reference_units: number
+  reference_records: number
+  reference_rate: number | null
+  new: boolean
+}
+
+export interface RatioResult extends AnalysisHeader {
+  dim: string
+  dim_label: string
+  target: string
+  target_label: string
+  reference: string
+  reference_label: string
+  level: number
+  dispersion: number
+  overall: RatioRow
+  by: string | null
+  by_label: string | null
+  /** 값마다 — 자르지 않는다(시장 전수표). */
+  items: RatioRow[]
 }

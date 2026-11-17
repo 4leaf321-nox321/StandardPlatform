@@ -56,6 +56,7 @@ from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects import axes, conditions, paths
 from app.modules.objects.schemas import FreshnessOut
 from app.modules.objects.summary import METRIC_LABELS
+from app.modules.ontology import datascope
 from app.modules.ontology.models import ObjectType
 from app.shared.errors import AppError, code
 from app.shared.permissions import visible_owner_clause
@@ -1092,6 +1093,7 @@ def header_of(
     if denominator is not None and not isinstance(denominator, OwnTotal):
         den_type = db.get(ObjectType, denominator.metric.source_type_id)
     fresh = freshness_of(db, [built.source.id, *([den_type.id] if den_type else [])])
+    scope, scope_mix = datascope.tag([built.source, den_type])
     return {
         "slug": metric.slug,
         "label": metric.label,
@@ -1119,6 +1121,8 @@ def header_of(
         "own_gap": own_gap,
         "data_gap": own_gap or (denominator.gap() if denominator is not None else False),
         "freshness": fresh.get(built.source.slug, []),
+        "scope": scope,
+        "scope_mix": scope_mix,
     }
 
 

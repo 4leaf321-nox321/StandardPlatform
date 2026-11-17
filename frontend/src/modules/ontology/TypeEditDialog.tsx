@@ -105,6 +105,7 @@ export function TypeEditDialog({
   const [isActive, setIsActive] = useState(type.is_active)
   const [core, setCore] = useState(type.core ?? false)
   const [revisionKey, setRevisionKey] = useState(type.revision_key ?? '')
+  const [scope, setScope] = useState(type.scope ?? '')
   const [listView, setListView] = useState<ListView>(type.list_view ?? {})
   const [formView, setFormView] = useState<SectionView>(type.form_view ?? {})
   const [detailView, setDetailView] = useState<SectionView>(type.detail_view ?? {})
@@ -138,6 +139,8 @@ export function TypeEditDialog({
         // **바꾼 때만 보낸다** — 안 보낸 것(그대로)과 빈 글자(개정 칸 비움)는 다른 말이다. 안 맞는
         // 속성이면 서버가 거절한다(ONTOLOGY-0098) — 그 말이 위에 뜬다.
         ...(revisionKey !== (type.revision_key ?? '') ? { revision_key: revisionKey } : {}),
+        // 자료 범위 표지(ADR 0083) — 바꾼 때만. 빈 글자는 미지정으로 되돌린다.
+        ...(scope.trim() !== (type.scope ?? '') ? { scope: scope.trim() } : {}),
         list_view: listView,
         form_view: formView,
         detail_view: detailView,
@@ -368,6 +371,21 @@ export function TypeEditDialog({
                         value={sortOrder}
                         onChange={(event) => setSortOrder(event.target.value)}
                       />
+                    </div>
+                    {/* 자료 범위 표지(ADR 0083) — 목록 · 통계 · 지표 · 분석의 응답에 `scope` 로 실린다. */}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="type-edit-scope">자료 범위</Label>
+                      <Input
+                        id="type-edit-scope"
+                        value={scope}
+                        maxLength={40}
+                        placeholder="예: 국내 · 해외 · plm"
+                        onChange={(event) => setScope(event.target.value)}
+                      />
+                      <p className="text-muted-foreground text-xs">
+                        이 타입의 기록이 어느 범위의 자료인지. 비우면 미지정 — 응답에서 다른 범위와
+                        섞이면 「mixed」 로 표시됩니다.
+                      </p>
                     </div>
                   </div>
 

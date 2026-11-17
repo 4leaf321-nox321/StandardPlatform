@@ -31,6 +31,7 @@ from app.modules.objects import proposals as objects_proposals
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology import (
     codebook,
+    datascope,
     importer,
     inference,
     interfaces,
@@ -226,6 +227,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         temporal_kind=row.temporal_kind,
         usage=row.usage,
         revision_key=row.revision_key or "",
+        scope=row.scope or "",
         list_view=row.list_view or {},
         form_view=row.form_view or {},
         detail_view=row.detail_view or {},
@@ -505,6 +507,7 @@ def create_type(
         key_scope=payload.key_scope,
         temporal_kind=payload.temporal_kind,
         usage=payload.usage,
+        scope=datascope.clean(payload.scope),
         title_template=payload.title_template,
         is_active=payload.is_active,
         core=payload.core,
@@ -596,6 +599,8 @@ def update_type(
         row.description = payload.description
     if "sort_order" in sent and payload.sort_order is not None:
         row.sort_order = payload.sort_order
+    if "scope" in sent and payload.scope is not None:
+        row.scope = datascope.clean(payload.scope)
     # **구현 인터페이스** — 없는 공통 속성은 만들고, 같은 모양이면 채택하고, 다르면 거절한다.
     # 뷰 검증보다 먼저다: 뷰가 구현으로 생기는 속성을 가리킬 수 있다.
     implemented: dict[str, list[str]] | None = None

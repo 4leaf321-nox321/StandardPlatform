@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-17b
+GUIDE_VERSION: 2026-11-17c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -26,12 +26,14 @@ GUIDE_VERSION: 2026-11-17b
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
 | 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
+| **목록을 끝까지 다 받기** — 수천 · 수만 줄 | `objects_list(cursor="start", limit=2000)` → 응답의 `next_cursor` 를 그대로 다음 `cursor` 로 | `offset` 으로 넘기면 뒤로 갈수록 느려진다(2,000만 건 표). 커서는 id 차례 · 전체 수는 첫 쪽에서만(ADR 0079). **세려면 받지 말고 통계 · 전수 집계** |
 | **긴 글(백서 · 위키 페이지) 읽기 · 쓰기** | `document_read` → `document_write(body, base_revision)` · 판 목록 `document_revisions` | 문서 속성(`data_type: document`)만. **읽은 판을 `base_revision` 으로** — 그사이 바뀌었으면 거절된다(덮어쓰지 않는다). 객체는 `[이름](/o/<타입>/<id>)` 링크로 가리킨다 |
 | 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
 | **성격으로 분류한 구성비 추이** — 「제품결함 · NTF · 고객과실 · SW 의 몫이 어떻게 바뀌나」 | `metric_list` 의 `dims[].kind="rule"` → `metric_query(slug, shape="series", split=<규칙 기준>, composition=true)` | 성격은 사람이 정한 **규칙**이 붙인다 — 네가 기록을 받아 가르지 않는다. 규칙 기준이 없으면 `metric_define(apply=false)` 로 제안(`get_guide(topic="metrics")` 의 「규칙 기준」) |
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
+| **전작의 몇 배인가** — 「새 모델 인입률이 전작의 몇 배 · 시장마다 전부」 | `metric_analyze(slug, "ratio", options={"target", "reference_via", "by"})` | 배율은 **95% 구간과 함께**. `by` 는 값 **전부**(시장 전수표). `unclear` 는 「같다」 가 아니다(ADR 0082) |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` · 경보 하나는 `alert_id`(`check=True` 면 지금 확인) | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로 |
 | **「나빠지면 알려 줘」** — 경보 걸기 · 이름 · 끄기 | `metric_alert_save(apply=false)` → 사람 확인 → `apply=true` | 미리 보기가 지금 분석을 한 번 돌려 보인다. 인자는 못 고친다 — 새로 걸고 옛 것은 `config_delete(kind="metric_alert")` |
 | **요즘 뭐가 이상한가 · 무엇부터 볼까** | `insights()` → 근거는 `metric_analyze` 로 같은 인자 | 플랫폼이 스스로 훑은 **후보**다 — 「몇 배 · 몇 건」 · q · 잠정을 그대로 옮기고 원인을 단정하지 않는다. 비었다고 「이상 없음」 이 아니다(그 지표의 셀이 든 부서를 다 봐야 보인다). 결론마다 `url`(그 분석 화면)을 함께 |
@@ -44,6 +46,7 @@ GUIDE_VERSION: 2026-11-17b
 | **앞 목록의 결과로 다시 거르기** — 「EU 판매 모델에 든 부품 전부」 「한국 업체 부품이 든 제품」 | 조건의 값 대신 `"from": {"type", "conditions"}`(부분 목록 — `in` · `under` · `above`) | **앞 목록의 id 를 받아 다시 넣지 않는다** — 서버가 한 번에 세운다(10만 개까지) |
 | **이것을 담은 것 전부** — 「부품 X 를 담은 모델」 「이 어셈블리가 들어간 상위 전부」 | `objects_list(<위 타입>, conditions=[{"field": "id", "op": "above", "value": <X id>}])` | 트리는 X 의 타입의 것(구성) — 위 타입에 트리가 없어도 된다. 수량 · 경로까지면 `object_explode(mode="where_used")` |
 | **N건 이상인 것 전부** — 「기록이 8건 넘는 모델 전부」 | `objects_summary(group_by=<그 칸>, min_value=8, limit=500, offset=)` 또는 위 「몇 개 이어졌나」 | 막대는 기본 30개에서 접힌다 — `groups` 까지 쪽으로. 문턱 아래는 `below_*` |
+| **표가 답인 수 — 묶음 전부** — 「시장 165곳 각각의 건수」 「모델 3천 개마다 몇 건」 | `objects_census(type_slug, group_by=)` | 접지도 자르지도 않는다 · **`check`(묶음 합 = 전체?)를 함께 말한다**. 5,000 묶음이 넘으면 작업 — `cursor=<next_cursor>` 로 이어 받는다(ADR 0079) |
 | **선의 값으로 거르기** — 「부품 X 가 4개 이상 들어간 제품」 「옵션 B 에서만 들어가는 부품」 | `object_fields` 의 `edge: true` 주소(`out.<관계>~<관계 속성>`) → `conditions`(같은 선이면 `"edge": <번호>` 로 묶기) | 안 묶으면 조건마다 「이어진 것 중 하나라도」 — **다른 선끼리 맞아도 걸린다** |
 | **목록에 상대의 값도** — 「제품마다 기본 모델 이름」 「모델마다 기록 몇 건(20건까지)」 | `objects_list(columns=[<주소>…])` | **줄마다 `object_get` 하지 않는다.** 칸마다 20개까지 · `more` 면 더 있다(수는 `objects_summary`) |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | 긴 글 칸은 6,000자씩 — `clipped` 면 `text_from` 으로 이어 읽는다 |
@@ -127,7 +130,16 @@ GUIDE_VERSION: 2026-11-17b
   집힌다** — 그렇게 들어간 값은 사람 눈에 맞는 값처럼 보여서 아무도 안 고친다.
 - **0건은 「없다」 가 아니다.** 목록이 0건이면 응답에 `diagnosis` 가 붙는다. 안 채운
   타입인지(`empty_type`), 부서 밖이라 안 보이는지(`not_visible`), 조건이 좁은지
-  (`filters`) 거기 적혀 있다. 읽기 전에 「없습니다」 라고 답하지 않는다.
+  (`filters`) 거기 적혀 있다. 읽기 전에 「없습니다」 라고 답하지 않는다. 큰 타입은 가벼운 진단
+  (`mode: "light"` — 어느 조건 때문인지는 세지 않았다)이 온다 — 필요하면 `diagnose="full"`(ADR 0081).
+- **자료 범위(`scope`)를 함께 말한다**(ADR 0083). 목록 · 통계 · 전수 집계 · 지표 · 분석의 응답에
+  `scope` 가 온다 — 그 타입(지표면 분자 · 분모의 원천 타입)에 설치가 적어 둔 범위(「국내」 · 「해외」 ·
+  「plm」 같은 말). 값이 있으면 「국내 자료 기준」 처럼 붙이고, **`mixed` 면 범위가 섞였다**(`scope_mix` —
+  예: 해외 인입을 국내 판매로 나눈 비율)고 먼저 말한다. null 이면 표지를 안 적은 타입이다.
+- **몰리면 서버가 「잠시 뒤」 를 말한다**(ADR 0080) — 읽기가 `[APP-COMMON-0429]`(자리가 다 참) ·
+  `[APP-COMMON-0503]`(DB 연결이 바닥)으로 거절되면 도구가 `Retry-After` 만큼 기다려 두 번까지 다시
+  부른 뒤다. 그래도 거절이면 `retry_after` 초 뒤에 **하나씩** 다시 부른다 — 여러 도구를 한꺼번에
+  나란히 부르지 않는다(그것이 몰림이다). 같은 것을 곧바로 되풀이하지 않는다.
 - **「모름」 과 「아님」 을 안 섞는다.** 조건에 안 맞아 빠진 것과 **값이 비어 있어서**
   빠진 것은 다른 일이다. 진단의 `filters[].unknown` 이 그 수다 — 「조건에 맞는 것이
   없다」 와 「그 칸을 아직 아무도 안 채웠다」 를 갈라 말한다.
@@ -492,6 +504,13 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 사용자에게 옮길 때 셋을 섞지 않는다. 「없습니다」 와 「안 보입니다」 와 「조건에 맞는 것이
 없습니다」 와 「그 칸을 아직 아무도 안 채웠습니다」 는 **서로 다른 다음 행동**을 부른다.
 
+**큰 타입은 가벼운 진단이다**(ADR 0081). 조건마다 「그것만 빼면 몇 건」 을 세는 일은 2,000만 건
+타입에서 0건 한 번에 세기가 열 번 남짓이라, 설치가 정한 크기(기본 100만)를 넘는 타입은 **다시 세지
+않는다** — `mode: "light"` 이고 `filters` 가 비며, 빈 타입 · 부서 밖 · 고를 값 밖의 값(`values`)까지만
+가른다. 부서로 좁힌 사람이면 `type_total` · `hidden` 이 null 일 수 있다(세지 않았다 — 0 이 아니다).
+어느 조건 때문인지가 필요하면 `objects_list(..., diagnose="full")`(오래 걸릴 수 있다) 또는 조건을 하나씩
+빼며 `objects_summary` 로 센다. 0건이 답인 줄 알면 `diagnose="off"`.
+
 ### 이름이 `none` 이면 — `near` 의 짐작
 
 `object_resolve` 가 `none` 이면 축 타입(모델 · 부품 · 공급사)에서 이름 · 식별자 · 별칭의 **글자가 비슷한 것**이
@@ -728,6 +747,13 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - 「그 칸이 뭔데」 는 `buckets[].key` 를 조건 값으로 `objects_list` — 기준이 `properties.<키>`
   면 field `<키>`, 다른 타입의 칸이면 그 주소, key 가 null 이면 `empty`. **날짜 칸은 `range` 로** —
   `{field, op: "gte", value: range.gte}` 와 `{op: "lt", value: range.lt}` 둘(`eq` 는 0건).
+- **세부 기준 값은 기본 12개**(큰 것부터) — 더 보려면 `split_limit`(200 까지) · `split_offset` 으로
+  넘긴다(`split_offset + len(splits) < split_total` 면 다음 쪽). 이 쪽에 없는 값은 칸마다 `other_part`
+  (「그 밖에 N종류」)로 묶여 `parts` 와 합이 칸의 `count` 다 — 「그 밖에」 를 빼고 옮기지 않는다.
+- **묶음이 많거나 표가 답이면 `objects_census`**(전수 집계, ADR 0079) — 30개에서 접거나 500개로 자르지
+  않고 묶음 **전부**, 그리고 `check`(묶음 건수의 합이 `total` 과 같은가). `check.matches` 가 false 면 그
+  `message`(여러 값 기준이라 겹침 · 어느 묶음에도 안 든 기록)를 먼저 말한다. 5,000 묶음이 넘으면 작업이
+  되고 도구가 첫 쪽을 기다려 붙인다 — 다음 쪽은 `objects_census(type_slug, cursor=<next_cursor>)`.
 
 `object_history(type_slug, object_id)` — 언제·누가·어느 칸을 전→후. 값 기록의
 `snapshot` 이 그 시점의 값 전체다. 되돌리기는 `object_restore(entry_id)` — 그 `snapshot` 을
@@ -1707,6 +1733,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 수명 · B10 | `life` | 판매월 코호트 + 분모 `time=cohort` | `model`(`auto`) · `max_age` |
 | 새 모델이 전작보다 나빠졌나 | `sprt` | 위 + 분모 `on` 에 모델 기준 | `target`(값, 참조면 id) · `reference` 또는 `reference_via` |
 | **어떤 증상이** 전작보다 빨리 늘고 있나 | `sprt` + `by` | 위 + 그 기준(증상) | 위 + `by`(증상 기준) · `top` |
+| 새 모델이 전작의 **몇 배**인가 — 점추정과 95% 구간 · 시장마다 전부 | `ratio` | `sprt` 와 같다 | `sprt` 와 같다 — `target` · `reference` 또는 `reference_via` · `by`(값 **전부**, 상한 없음) |
 | 관리도 — 튀는 달 · 공장 | `control` | 기간 또는 코호트(출고 K 기간 안) | `axis` · `window` · `split`(분모 짝에 있는 기준) · `baseline_to` |
 | 계절을 빼고 언제 바뀌었나 | `changes` | 기간 또는 코호트 | `axis` · `window` |
 | 계절을 빼면 **어떤 증상이** 늘고 있나 | `changes` + `by` | 위 + 그 기준(증상) | 위 + `by` · `top` |
@@ -1734,6 +1761,14 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
   구간을 함께. 「아직」 이면
   `periods_to_*` 가 결론까지의 어림이다. `dispersion` 이 1 보다 크면 전작의 코호트끼리 포아송보다
   크게 흔들려 증거(LLR)를 그만큼 나눴다(`overdispersion` 주의 — 결론이 늦게 서고 구간이 넓다).
+- **전작 대비 배율**(`ratio`, ADR 0082): 「몇 배」 는 **구간과 함께**(「1.8배, 95% 구간 1.3 ~ 2.5」).
+  `ratio` 는 경과를 맞춘 배율(새 모델 건수 / 전작의 경과별 비율로 낸 기대 건수)이고 `crude` 는 경과를
+  안 맞춘 대수당 건수의 비다 — 결론은 `ratio`, 둘이 크게 다르면 판매 시기(경과 구성) 차이 때문이라고
+  말한다. `verdict` 는 `higher`(구간이 1 위) · `lower`(1 아래) · `unclear`(1 을 품는다 — **「같다」 가
+  아니다**). `by` 의 값마다 따로 본 구간이라 165개를 늘어놓으면 몇 개는 우연히 1 을 벗어난다
+  (`per_value_intervals`) — 표는 표로 옮기고, 하나를 결론으로 삼을 때는 그 주의를 함께. `new` 는 전작에
+  없던 값(배율 없음). 시장이 분모 짝이면 대수는 그 시장의 판매 대수, 아니면(증상) 모델의 판매 대수다
+  (`shared_exposure`).
 - 관리도: 신호(넬슨 규칙 번호)는 「조사할 곳」 이지 원인이 아니다. 건수(`kind="c"`)로 그린
   관리도는 판매가 늘어도 신호처럼 보인다.
 - 변화점: `provisional` 은 잠정 — 몇 기간 더 보고 판단한다. 비는 `ratio_ci` 와 함께.

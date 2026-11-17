@@ -40,7 +40,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.shared.errors import AppError, code
+from app.config import get_settings
+from app.shared import pagination
+from app.shared.errors import RETRY_AFTER_SLOTS, AppError, code
 
 log = logging.getLogger(__name__)
 
@@ -90,7 +92,8 @@ class Slots:
 
 
 def _take(db: Session, slots: Slots, what: str) -> None:
-    """빈자리를 쥔다(트랜잭션이 끝나면 풀린다). 없으면 `SLOT_WAIT` 초 동안 다시 보고 429."""
+    """빈자리를 쥔다(트랜잭션이 끝나면 풀린다). 없으면 `SLOT_WAIT` 초 동안 다시 보고 429 —
+    `Retry-After` 를 단다(ADR 0080, 화면 · MCP 가 읽기면 그만큼 기다려 다시 부른다)."""
     until = time.monotonic() + SLOT_WAIT
     while True:
         for at in range(slots.count):
@@ -103,11 +106,29 @@ def _take(db: Session, slots: Slots, what: str) -> None:
             raise AppError(
                 code("COMMON", 429),
                 f"지금 {what} {slots.count}개가 돌고 있습니다 — 서버를 지키려고 한 번에 "
-                "그만큼만 돌립니다. 앞의 것이 끝나면 다시 해 주세요.",
+                f"그만큼만 돌립니다. {RETRY_AFTER_SLOTS}초쯤 뒤에 다시 해 주세요.",
                 status=429,
-                details={"slots": slots.count},
+                details={"slots": slots.count, "retry_after": RETRY_AFTER_SLOTS},
+                headers={"Retry-After": str(RETRY_AFTER_SLOTS)},
             )
         time.sleep(SLOT_RETRY)
+
+
+def take(db: Session, slots: Slots, what: str) -> None:
+    """동기 라우트가 그 자리에서 자리를 쥔다(`run` 없이 — 목록 · 통계처럼 짧은 읽기). 0 이면 안
+    센다. 쥔 자리는 그 요청의 트랜잭션이 끝날 때(세션을 닫을 때) 풀린다."""
+    if slots.count > 0:
+        _take(db, slots, what)
+
+
+def read_slots(request: Request) -> Slots:
+    """목록 · 통계 · 0건 진단 · 전수 집계의 자리(ADR 0080) — **화면과 API 토큰은 자리가
+    따로다.** AI 가 한꺼번에 부르는 몰림이 사람의 화면 자리를 다 쥐지 않게, 화면이 위젯마다
+    함께 부르는 것이 AI 의 자리를 다 쥐지 않게."""
+    settings = get_settings()
+    if pagination.is_machine(request):
+        return Slots("read_token", settings.list_slots_token)
+    return Slots("read_screen", settings.list_slots)
 
 
 @contextmanager

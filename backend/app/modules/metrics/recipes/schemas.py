@@ -857,6 +857,59 @@ class SprtScanOut(AnalysisHeader):
     skipped: list[str]
 
 
+# --- ④-2 전작 대비 배율 --------------------------------------------------------------
+
+
+class RatioRowOut(BaseModel):
+    """배율 한 줄 — 전체 또는 기준(`by`)의 값 하나."""
+
+    key: str | None
+    label: str
+    observed: int
+    """새 모델의 건수(전작과 겹치는 경과까지)."""
+    expected: float
+    """전작의 경과별 비율로 낸 「전작 같았다면」 의 건수."""
+    ratio: float | None
+    """배율 = observed / expected(경과를 맞춘 것). 기대가 0 이면 null(`new`)."""
+    low: float | None
+    high: float | None
+    """95% 구간 — 두 모델의 흔들림과 과분산을 함께."""
+    verdict: Literal["higher", "lower", "unclear"]
+    """`higher`(구간이 1 위) · `lower`(1 아래) · `unclear`(1 을 품는다 — 「같다」 가
+    아니다)."""
+    crude: float | None
+    """단순 배율 — (새 모델 건수 / 대수) ÷ (전작 건수 / 대수), 경과를 안 맞춘 것."""
+    target_units: float
+    target_records: int
+    target_rate: float | None
+    """새 모델의 대수당 건수(닫힌 경과 전부)."""
+    reference_units: float
+    reference_records: int
+    reference_rate: float | None
+    new: bool
+    """전작에 없던 값(기대 0) — 배율이 없다."""
+
+
+class RatioOut(AnalysisHeader):
+    """④-2 전작 대비 배율 — 판매 대수당 건수가 전작의 몇 배인가, 점추정과 95% 구간. `by` 를
+    주면 그 기준의 값마다(상한 없이 전부 — 「시장 165곳 전수표」)."""
+
+    dim: str
+    dim_label: str
+    target: str
+    target_label: str
+    reference: str
+    reference_label: str
+    level: float
+    dispersion: float
+    """전작에서 잰 과분산 φ(1 이상) — 값마다의 구간도 이것으로 넓힌다."""
+    overall: RatioRowOut
+    by: str | None = None
+    by_label: str | None = None
+    items: list[RatioRowOut] = Field(default_factory=list)
+    """`by` 의 값마다 — `higher` 가 먼저, 배율이 큰 것부터. 자르지 않는다."""
+
+
 # --- ⑥ 재방문 위험 요인 --------------------------------------------------------------
 
 

@@ -148,7 +148,9 @@ def test_정적_그리기는_설치_전체에서_자리만큼만_돈다(
         try:
             busy = _whole(client, admin, part)
             assert busy.status_code == 429, busy.text
-            assert busy.json()["error"]["details"] == {"slots": 2}
+            assert busy.json()["error"]["details"] == {"slots": 2, "retry_after": 3}
+            # ADR 0080 — 화면 · MCP 가 그만큼 기다린다.
+            assert busy.headers["Retry-After"] == "3"
             assert "2개가 돌고" in busy.json()["error"]["message"]
             # 하나가 비면 바로 돈다.
             other.execute(text("SELECT pg_advisory_unlock(hashtext('graph_whole:1'))"))

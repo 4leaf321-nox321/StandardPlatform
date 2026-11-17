@@ -8934,6 +8934,33 @@
             "description": "몇 번째 막대부터(0 부터)"
           },
           {
+            "name": "split_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "세부 기준 값을 몇 개까지(쪽) — 기본 12(화면은 12 까지), API 토큰은 200 까지. 이 쪽에 없는 값은 막대마다 「그 밖에」(`other_part`)로 묶인다(ADR 0079)",
+              "default": 12,
+              "title": "Split Limit"
+            },
+            "description": "세부 기준 값을 몇 개까지(쪽) — 기본 12(화면은 12 까지), API 토큰은 200 까지. 이 쪽에 없는 값은 막대마다 「그 밖에」(`other_part`)로 묶인다(ADR 0079)"
+          },
+          {
+            "name": "split_offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "몇 번째 세부 기준 값부터(0 부터)",
+              "default": 0,
+              "title": "Split Offset"
+            },
+            "description": "몇 번째 세부 기준 값부터(0 부터)"
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -9037,6 +9064,388 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/census": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Census",
+        "description": "**전수 집계**(ADR 0079) — 묶음을 30개에서 접거나 500개로 자르지 않고 전부, 묶음 합이\n전체(`total`)와 같은지의 검증값(`check`)과 함께.\n\n거르기 · 기준은 통계와 같다. 묶음이 5,000개 이하면 `rows` 가 전부다(`complete`). 넘으면 수\n· 검증값만 오고 작업(`job`)이 전부를 만든다 — 끝나면 `GET\n.../census/rows?cursor=<next_cursor>` 로 받는다. 이 요청 자체가 시간 상한(504)에 걸리면\n`POST .../census/job` 으로 처음부터 작업으로 돌린다.",
+        "operationId": "census_api_objects__type_slug__census_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "기준 — 통계와 같다(status · workspace · properties.<칸> · 주소)",
+              "title": "Group By"
+            },
+            "description": "기준 — 통계와 같다(status · workspace · properties.<칸> · 주소)"
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "count · sum · avg · min · max",
+              "default": "count",
+              "title": "Metric"
+            },
+            "description": "count · sum · avg · min · max"
+          },
+          {
+            "name": "metric_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "합 · 평균을 낼 숫자 칸",
+              "title": "Metric Field"
+            },
+            "description": "합 · 평균을 낼 숫자 칸"
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "desc · asc · key(키 순 — 날짜는 시간순)",
+              "default": "desc",
+              "title": "Order"
+            },
+            "description": "desc · asc · key(키 순 — 날짜는 시간순)"
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "날짜 축의 기간 단위",
+              "title": "Grain"
+            },
+            "description": "날짜 축의 기간 단위"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under"
+            }
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Deep"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "기준일(YYYY-MM-DD) — 그날 유효한 관계만 따라간다(트리 · 하위 포함 · 관계 조건 · 관계 기준 · 계층 축). 비우면 오늘. 유효 기간을 받지 않는 관계 종류의 관계는 늘 유효하다.",
+              "title": "As Of"
+            },
+            "description": "기준일(YYYY-MM-DD) — 그날 유효한 관계만 따라간다(트리 · 하위 포함 · 관계 조건 · 관계 기준 · 계층 축). 비우면 오늘. 유효 기간을 받지 않는 관계 종류의 관계는 늘 유효하다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CensusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/census/job": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Census Job",
+        "description": "전수 집계를 **처음부터 작업으로** — 그 자리의 집계가 시간 상한(504)에 걸리는 큰 물음.\n거르기는 같은 쿼리 문자열로 온다. 끝나면 `GET .../census/rows?cursor=` 로 받는다(첫 커서는\n작업 id 로 만든다 — MCP 의 `objects_census` 가 알아서 한다).",
+        "operationId": "census_job_api_objects__type_slug__census_job_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "기준 — 통계와 같다",
+              "title": "Group By"
+            },
+            "description": "기준 — 통계와 같다"
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "count",
+              "title": "Metric"
+            }
+          },
+          {
+            "name": "metric_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Metric Field"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "desc",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Grain"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/census/rows": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Census Rows",
+        "description": "작업이 만든 전수 집계를 **커서로 나눠** — 끝나지 않았으면 줄 없이 상태만.",
+        "operationId": "census_rows_api_objects__type_slug__census_rows_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "전수 집계 · 앞 쪽이 준 `next_cursor`",
+              "title": "Cursor"
+            },
+            "description": "전수 집계 · 앞 쪽이 준 `next_cursor`"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5000,
+              "minimum": 1,
+              "default": 1000,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CensusRowsOut"
                 }
               }
             }
@@ -10790,7 +11199,7 @@
           "objects"
         ],
         "summary": "List Objects",
-        "description": "이 타입의 객체 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**\n\n목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.\n`columns`(이어진 칸, ADR 0043)를 주면 줄마다 그 주소의 값이 `linked` 로 함께 온다 —\n상대의 값이 필요할 때 줄마다 상세를 다시 읽지 않게.\n\n`link` 는 같은 조건의 목록 화면 주소다(`listlinks`) — 화면이 주소로 못 받는 인자는\n`link_missing` 에 이름이 적힌다.",
+        "description": "이 타입의 객체 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**\n\n목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.\n`columns`(이어진 칸, ADR 0043)를 주면 줄마다 그 주소의 값이 `linked` 로 함께 온다 —\n상대의 값이 필요할 때 줄마다 상세를 다시 읽지 않게.\n\n`link` 는 같은 조건의 목록 화면 주소다(`listlinks`) — 화면이 주소로 못 받는 인자는\n`link_missing` 에 이름이 적힌다.\n\n**쪽 넘기기는 둘이다**(ADR 0079): `offset`(화면 — 목록 화면의 정렬대로) · `cursor`(전부\n읽기 — id 차례, 뒤쪽으로 가도 같은 비용, 전체 수는 첫 쪽에서만). 쪽 상한은 화면 세션 200 ·\nAPI 토큰 2,000 이다.",
         "operationId": "list_objects_api_objects__type_slug__get",
         "parameters": [
           {
@@ -10919,8 +11328,10 @@
                   "type": "null"
                 }
               ],
+              "description": "쪽 크기 — 기본 50, 화면(로그인 세션) 200 · API 토큰 2,000 까지(ADR 0079)",
               "title": "Limit"
-            }
+            },
+            "description": "쪽 크기 — 기본 50, 화면(로그인 세션) 200 · API 토큰 2,000 까지(ADR 0079)"
           },
           {
             "name": "offset",
@@ -10932,6 +11343,24 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "커서 쪽넘김(ADR 0079) — 처음은 `start`(또는 빈 값), 다음은 응답의 `next_cursor`. id 차례로 넘기고 전체 수는 첫 쪽에서만 센다. 주면 `offset` 은 안 본다.",
+              "title": "Cursor"
+            },
+            "description": "커서 쪽넘김(ADR 0079) — 처음은 `start`(또는 빈 값), 다음은 응답의 `next_cursor`. id 차례로 넘기고 전체 수는 첫 쪽에서만 센다. 주면 `offset` 은 안 본다."
           },
           {
             "name": "columns",
@@ -11243,6 +11672,42 @@
               "title": "As Of"
             },
             "description": "기준일(YYYY-MM-DD) — 그날 유효한 관계만 따라간다(트리 · 하위 포함 · 관계 조건 · 관계 기준 · 계층 축). 비우면 오늘. 유효 기간을 받지 않는 관계 종류의 관계는 늘 유효하다."
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "auto",
+                "full",
+                "light"
+              ],
+              "type": "string",
+              "description": "full(조건마다 빼고 다시 센다) · light(다시 세지 않는다 — 계수표와 「있나」 만) · auto(타입이 DIAGNOSE_FULL_MAX_ROWS 를 넘으면 light, ADR 0081)",
+              "default": "auto",
+              "title": "Mode"
+            },
+            "description": "full(조건마다 빼고 다시 센다) · light(다시 세지 않는다 — 계수표와 「있나」 만) · auto(타입이 DIAGNOSE_FULL_MAX_ROWS 를 넘으면 light, ADR 0081)"
+          },
+          {
+            "name": "total",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "목록이 방금 센 수 — 주면 다시 세지 않는다(MCP 가 0건 목록 뒤에 넘긴다)",
+              "title": "Total"
+            },
+            "description": "목록이 방금 센 수 — 주면 다시 세지 않는다(MCP 가 0건 목록 뒤에 넘긴다)"
           }
         ],
         "responses": {
@@ -16169,6 +16634,132 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SprtOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/analysis/ratio": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Ratio Analysis",
+        "description": "④-2 전작 대비 배율(ADR 0082) — 새 모델의 판매 대수당 건수가 전작의 몇 배인가. 경과를\n맞춘 배율(전작의 경과별 비율로 낸 기대 건수 대비)과 95% 구간, 단순 배율. `by` 를 주면 그\n기준의 값마다 전부. 다른 거르기는 `d.<기준>=<값>`(두 모델에 함께).",
+        "operationId": "ratio_analysis_api_metrics__slug__analysis_ratio_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "새 모델 — 그 기준의 값(관계 기준이면 객체 id)",
+              "title": "Target"
+            },
+            "description": "새 모델 — 그 기준의 값(관계 기준이면 객체 id)"
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "전작 — 그 기준의 값",
+              "title": "Reference"
+            },
+            "description": "전작 — 그 기준의 값"
+          },
+          {
+            "name": "reference_via",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "전작을 새 모델 객체의 이 칸(참조)에서 찾는다 — reference 대신",
+              "title": "Reference Via"
+            },
+            "description": "전작을 새 모델 객체의 이 칸(참조)에서 찾는다 — reference 대신"
+          },
+          {
+            "name": "dim",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "모델 기준 — 비우면 분모 짝(on)의 첫 기준",
+              "title": "Dim"
+            },
+            "description": "모델 기준 — 비우면 분모 짝(on)의 첫 기준"
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "값마다 볼 기준(시장 · 증상) — 상한 없이 값 전부(전수표)",
+              "title": "By"
+            },
+            "description": "값마다 볼 기준(시장 · 증상) — 상한 없이 값 전부(전수표)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RatioOut"
                 }
               }
             }
@@ -25397,6 +25988,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -26454,6 +27063,16 @@
             },
             "type": "array",
             "title": "Parts"
+          },
+          "other_part": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PartOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -27865,6 +28484,337 @@
         "title": "CaveatOut",
         "description": "결과와 함께 **그대로 전해야 하는 말** — 코드는 기계가, 말은 사람이 읽는다."
       },
+      "CensusCheckOut": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "group_sum": {
+            "type": "integer",
+            "title": "Group Sum"
+          },
+          "difference": {
+            "type": "integer",
+            "title": "Difference"
+          },
+          "matches": {
+            "type": "boolean",
+            "title": "Matches"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "group_sum",
+          "difference",
+          "matches",
+          "multi",
+          "message"
+        ],
+        "title": "CensusCheckOut",
+        "description": "**묶음의 합이 전체와 맞는가** — 받은 쪽이 다시 더해 보지 않아도 되게."
+      },
+      "CensusOut": {
+        "properties": {
+          "group_field": {
+            "type": "string",
+            "title": "Group Field"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "metric_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Field"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "order": {
+            "type": "string",
+            "title": "Order"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "groups": {
+            "type": "integer",
+            "title": "Groups"
+          },
+          "check": {
+            "$ref": "#/components/schemas/CensusCheckOut"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/CensusRowOut"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_field",
+          "group_label",
+          "metric",
+          "metric_field",
+          "metric_label",
+          "order",
+          "total",
+          "groups",
+          "check",
+          "complete"
+        ],
+        "title": "CensusOut",
+        "description": "전수 집계(ADR 0079) — 묶음을 **접지도 자르지도 않고 전부**, 합의 검증값과 함께.\n\n묶음이 `INLINE_MAX`(5,000) 개 이하면 `rows` 가 전부다(`complete` 참). 넘으면 수 · 검증값만\n오고 작업(`job`)이 전부를 만든다 — 끝나면 `GET .../census/rows?cursor=<next_cursor>` 로\n나눠 받는다."
+      },
+      "CensusRowOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RangeOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__modules__objects__schemas__DrillOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "count"
+        ],
+        "title": "CensusRowOut",
+        "description": "전수 집계의 묶음 하나(ADR 0079) — 통계의 막대와 같은 모양(조각 없이)."
+      },
+      "CensusRowsOut": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "group_field": {
+            "type": "string",
+            "title": "Group Field",
+            "default": ""
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label",
+            "default": ""
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric",
+            "default": "count"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label",
+            "default": ""
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "groups": {
+            "type": "integer",
+            "title": "Groups",
+            "default": 0
+          },
+          "check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CensusCheckOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "default": 0
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/CensusRowOut"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "CensusRowsOut",
+        "description": "작업이 만든 전수 집계의 한 쪽 — 커서로 넘긴다."
+      },
       "ChangePasswordRequest": {
         "properties": {
           "current_password": {
@@ -28032,6 +28982,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -28598,6 +29566,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -28987,6 +29973,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -29504,6 +30508,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -31379,6 +32401,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -33136,11 +34176,25 @@
             "title": "Message"
           },
           "type_total": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Type Total"
           },
           "hidden": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Hidden"
           },
           "filters": {
@@ -33163,6 +34217,11 @@
             },
             "type": "array",
             "title": "Values"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "full"
           }
         },
         "type": "object",
@@ -35000,6 +36059,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -35991,6 +37068,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -38056,6 +39151,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -39323,6 +40436,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -42932,6 +44063,35 @@
             },
             "type": "array",
             "title": "Freshness"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "type": "object",
@@ -43241,6 +44401,11 @@
             "title": "Revision Key",
             "default": ""
           },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": ""
+          },
           "list_view": {
             "additionalProperties": true,
             "type": "object",
@@ -43457,6 +44622,18 @@
             ],
             "title": "Revision Key"
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
           "core": {
             "anyOf": [
               {
@@ -43632,6 +44809,11 @@
             "title": "Revision Key",
             "default": ""
           },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": ""
+          },
           "list_view": {
             "additionalProperties": true,
             "type": "object",
@@ -43779,6 +44961,12 @@
             "type": "string",
             "maxLength": 48,
             "title": "Revision Key",
+            "default": ""
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Scope",
             "default": ""
           },
           "core": {
@@ -44590,6 +45778,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -46287,6 +47493,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -47492,6 +48716,491 @@
         "title": "RangeOut",
         "description": "날짜 칸의 범위 조건 — `f.<칸>.gte` · `f.<칸>.lt` 로 그대로 쓴다."
       },
+      "RatioOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Through"
+          },
+          "source_through": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Through"
+          },
+          "own_gap": {
+            "type": "boolean",
+            "title": "Own Gap",
+            "default": false
+          },
+          "data_gap": {
+            "type": "boolean",
+            "title": "Data Gap",
+            "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
+          "freshness": {
+            "items": {
+              "$ref": "#/components/schemas/FreshnessOut"
+            },
+            "type": "array",
+            "title": "Freshness"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "link_missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Link Missing"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "dim_label": {
+            "type": "string",
+            "title": "Dim Label"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "target_label": {
+            "type": "string",
+            "title": "Target Label"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "reference_label": {
+            "type": "string",
+            "title": "Reference Label"
+          },
+          "level": {
+            "type": "number",
+            "title": "Level"
+          },
+          "dispersion": {
+            "type": "number",
+            "title": "Dispersion"
+          },
+          "overall": {
+            "$ref": "#/components/schemas/RatioRowOut"
+          },
+          "by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By"
+          },
+          "by_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By Label"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RatioRowOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "dim",
+          "dim_label",
+          "target",
+          "target_label",
+          "reference",
+          "reference_label",
+          "level",
+          "dispersion",
+          "overall"
+        ],
+        "title": "RatioOut",
+        "description": "④-2 전작 대비 배율 — 판매 대수당 건수가 전작의 몇 배인가, 점추정과 95% 구간. `by` 를\n주면 그 기준의 값마다(상한 없이 전부 — 「시장 165곳 전수표」)."
+      },
+      "RatioRowOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "observed": {
+            "type": "integer",
+            "title": "Observed"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low"
+          },
+          "high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "higher",
+              "lower",
+              "unclear"
+            ],
+            "title": "Verdict"
+          },
+          "crude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crude"
+          },
+          "target_units": {
+            "type": "number",
+            "title": "Target Units"
+          },
+          "target_records": {
+            "type": "integer",
+            "title": "Target Records"
+          },
+          "target_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Rate"
+          },
+          "reference_units": {
+            "type": "number",
+            "title": "Reference Units"
+          },
+          "reference_records": {
+            "type": "integer",
+            "title": "Reference Records"
+          },
+          "reference_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Rate"
+          },
+          "new": {
+            "type": "boolean",
+            "title": "New"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "observed",
+          "expected",
+          "ratio",
+          "low",
+          "high",
+          "verdict",
+          "crude",
+          "target_units",
+          "target_records",
+          "target_rate",
+          "reference_units",
+          "reference_records",
+          "reference_rate",
+          "new"
+        ],
+        "title": "RatioRowOut",
+        "description": "배율 한 줄 — 전체 또는 기준(`by`)의 값 하나."
+      },
       "ReachNodeOut": {
         "properties": {
           "id": {
@@ -47974,6 +49683,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -54196,6 +55923,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -55337,6 +57082,24 @@
             "title": "Data Gap",
             "default": false
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
+          },
           "freshness": {
             "items": {
               "$ref": "#/components/schemas/FreshnessOut"
@@ -55917,6 +57680,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -56702,6 +58483,16 @@
             "type": "integer",
             "title": "Other Splits"
           },
+          "split_total": {
+            "type": "integer",
+            "title": "Split Total",
+            "default": 0
+          },
+          "split_offset": {
+            "type": "integer",
+            "title": "Split Offset",
+            "default": 0
+          },
           "metric": {
             "type": "string",
             "title": "Metric"
@@ -56803,6 +58594,24 @@
             },
             "type": "array",
             "title": "Freshness"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           }
         },
         "type": "object",
@@ -57022,6 +58831,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {
@@ -59873,6 +61700,24 @@
             "type": "boolean",
             "title": "Data Gap",
             "default": false
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_mix": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Mix"
           },
           "freshness": {
             "items": {

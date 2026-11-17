@@ -18,6 +18,7 @@ from app.modules.metrics.recipes import (
     logit,
     pareto,
     profile,
+    ratio,
     recurrence,
     sprt,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "logit",
     "pareto",
     "profile",
+    "ratio",
     "recurrence",
     "sprt",
 ]

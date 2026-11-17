@@ -26,6 +26,7 @@ from sqlalchemy import false, or_, select, true
 from sqlalchemy.orm import Session
 from starlette.datastructures import QueryParams
 
+from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.datasources import services as datasource_services
@@ -64,9 +65,12 @@ from app.modules.objects import (
     similar,
     sublists,
     system,
+    typecounts,
     watches,
 )
 from app.modules.objects import attachments as object_attachments
+from app.modules.objects import census as census_service
+from app.modules.objects import cursor as cursors
 from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
 from app.modules.objects import scope as scopes
@@ -103,6 +107,10 @@ from app.modules.objects.schemas import (
     BulkEditRequest,
     BulkEditRow,
     BulkUndoRequest,
+    CensusCheckOut,
+    CensusOut,
+    CensusRowOut,
+    CensusRowsOut,
     DiagnosisOut,
     DrillOut,
     ExplodeLineOut,
@@ -189,6 +197,7 @@ from app.modules.objects.services import (
     apply_year,
     audit_state,
     count_of,
+    cursor_rows,
     normalize_key,
     page_rows,
     properties_of,
@@ -196,7 +205,7 @@ from app.modules.objects.services import (
     require_refs_exist,
     require_unique_properties,
 )
-from app.modules.ontology import managed
+from app.modules.ontology import datascope, managed
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
@@ -206,10 +215,10 @@ from app.modules.ontology.services import (
     validate_properties,
 )
 from app.modules.workspaces.models import Workspace
-from app.shared import audit, querycap, sheets
+from app.shared import audit, querycap, readguard, sheets
 from app.shared.auth import current_user
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
-from app.shared.pagination import clamp_limit
+from app.shared.pagination import clamp_limit, is_machine
 from app.shared.permissions import (
     my_workspace_ids,
     require_owner_edit,
@@ -292,6 +301,12 @@ def _asked_types(request: Request, scope: Scope) -> list[ObjectType]:
     return [one for one in scope.types if one.slug in wanted]
 
 
+def _scope_tag(types: list[ObjectType]) -> dict[str, Any]:
+    """응답의 자료 범위 표지(ADR 0083) — `scope` · `scope_mix`."""
+    scope, mix = datascope.tag(types)
+    return {"scope": scope, "scope_mix": mix}
+
+
 #: 상세의 「관련 객체」 에 참조 칸으로 실을 상한 — 프로젝트 하나를 5천 개 과제가 가리키면 그
 #: 목록은 읽을 수 없다. 넘치면 목록 화면에서 조건으로 본다.
 REF_RELATED_LIMIT = 200
@@ -326,6 +341,32 @@ def _ref_labels(
     return system.ref_labels(db, defs, [row.properties or {} for row in rows], viewer=user)
 
 
+def _own_ref_labels(
+    row: ObjectInstance, ref_labels: dict[uuid.UUID, str] | None
+) -> dict[str, str]:
+    """이 줄이 가리키는 것의 이름만 — 목록은 쪽 전체의 이름을 한 번에 읽고(`_ref_labels`),
+    줄마다 **자기 칸의 값**만 골라 싣는다.
+
+    예전에는 쪽 전체의 이름을 줄마다 통째로 실었다 — 200줄 쪽이면 줄마다 이름 800개 남짓, 줄
+    하나가 1.5KB 가 아니라 23KB 였다(2,000만 건 DB 실측, 쪽 4.3MB). 줄 수와 이름 수를 곱한 만큼
+    커져, 토큰의 2,000줄 쪽(ADR 0079)이면 수백 MB 가 된다. 화면은 줄마다 그 줄의 것만 읽고,
+    조건 칩은 줄들의 것을 합쳐 쓴다 — 어느 쪽도 다른 줄의 이름에 기대지 않는다."""
+    if not ref_labels:
+        return {}
+    mine: dict[str, str] = {}
+    for value in (row.properties or {}).values():
+        for one in value if isinstance(value, list) else [value]:
+            if not isinstance(one, str) or one in mine:
+                continue
+            try:
+                key = uuid.UUID(one)
+            except ValueError:
+                continue
+            if key in ref_labels:
+                mine[one] = ref_labels[key]
+    return mine
+
+
 def _out(
     row: ObjectInstance,
     type_slug: str,
@@ -349,7 +390,7 @@ def _out(
         label=row.label,
         description=row.description,
         properties=row.properties or {},
-        ref_labels={str(k): v for k, v in (ref_labels or {}).items()},
+        ref_labels=_own_ref_labels(row, ref_labels),
         aliases=names,
         external_ids=external,
         status=row.status,
@@ -801,6 +842,17 @@ def summary(
         description="막대를 몇 개까지(쪽) — 기본 30, 쪽으로 넘길 때 500 까지",
     ),
     offset: int = Query(default=0, ge=0, description="몇 번째 막대부터(0 부터)"),
+    split_limit: int = Query(
+        default=summary_service.MAX_SPLITS,
+        ge=1,
+        le=summary_service.MAX_SPLIT_PAGE,
+        description=(
+            "세부 기준 값을 몇 개까지(쪽) — 기본 12(화면은 12 까지), API 토큰은 200 까지. "
+            "이 쪽에 "
+            "없는 값은 막대마다 「그 밖에」(`other_part`)로 묶인다(ADR 0079)"
+        ),
+    ),
+    split_offset: int = Query(default=0, ge=0, description="몇 번째 세부 기준 값부터(0 부터)"),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -821,6 +873,7 @@ def summary(
 
     `link` 는 같은 거르기로 통계를 펼쳐 연 목록 화면 주소다(`listlinks`).
     """
+    readguard.take(db, readguard.read_slots(request), "목록 · 통계 읽기")
     scope = _scope(db, type_slug)
     if _projection(scope) is not None:
         raise Conflict(
@@ -856,6 +909,13 @@ def summary(
         max_value=max_value,
         limit=limit,
         offset=offset,
+        # 화면은 그림이라 12 까지(색 여덟을 돌려 쓴다), API 토큰은 표로 받으므로 200 까지.
+        split_limit=(
+            split_limit
+            if is_machine(request)
+            else min(split_limit, summary_service.MAX_SPLITS)
+        ),
+        split_offset=split_offset,
     )
     defs = scope.defs
     # 같은 조건의 화면 — 답을 받은 AI 가 사람에게 내밀어, 눌러서 같은 통계를 확인하게 한다.
@@ -875,6 +935,8 @@ def summary(
         split_label=found.split_label,
         splits=found.splits,
         other_splits=found.other_splits,
+        split_total=found.split_total,
+        split_offset=found.split_offset,
         metric=found.metric,
         metric_field=found.metric_field,
         metric_label=found.metric_label,
@@ -899,6 +961,16 @@ def summary(
                     PartOut(key=part.key, label=part.label, count=part.count, value=part.value)
                     for part in one.parts
                 ],
+                other_part=(
+                    PartOut(
+                        key=None,
+                        label=one.other_part.label,
+                        count=one.other_part.count,
+                        value=one.other_part.value,
+                    )
+                    if one.other_part is not None
+                    else None
+                ),
             )
             for one in found.buckets
         ],
@@ -926,6 +998,237 @@ def summary(
         link=link,
         link_missing=link_missing,
         freshness=_freshness(db, _asked_types(request, scope)),
+        **_scope_tag(_asked_types(request, scope)),
+    )
+
+
+# --- 전수 집계(ADR 0079) -------------------------------------------------------------
+
+
+def _census_plan(
+    db: Session,
+    user: User,
+    scope: Scope,
+    request: Request,
+    *,
+    group_by: str,
+    metric: str,
+    metric_field: str | None,
+    order: str,
+    grain: str | None,
+    q: str | None,
+    status: str | None,
+    under: uuid.UUID | None,
+    deep: bool,
+    year: int | None,
+    as_of: date | None,
+    cap: bool = True,
+) -> census_service.Plan:
+    """전수 집계의 질의 — 통계와 **같은 거르기 · 같은 기준**(따로 적으면 「통계는 12 인데 전수
+    집계는 15」 가 된다)."""
+    if _projection(scope) is not None:
+        raise Conflict(
+            code("OBJECTS", 47),
+            f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
+        )
+    summary_service.check_grain(grain)
+    stmt = _filtered(
+        db,
+        user,
+        scope,
+        request,
+        q=q,
+        status=status,
+        year=year,
+        under=under,
+        deep=deep,
+        as_of=as_of,
+        cap=cap,
+    )
+    return census_service.Plan(
+        db,
+        scope,
+        stmt,
+        group_by=group_by,
+        metric=metric,
+        metric_field=metric_field,
+        order=order,
+        grain=grain,
+        viewer=user,
+        at=edges.at(as_of),
+    )
+
+
+def _census_query(request: Request) -> dict[str, list[str]]:
+    """작업에 적어 둘 쿼리 — 목록 · 통계와 같은 문자열(내보내기와 같은 길). 기준일은 맡긴 날로
+    박는다(ADR 0039 — 워커가 자정을 넘겨 돌면 「오늘」 이 밀린다)."""
+    query: dict[str, list[str]] = {}
+    for key, value in request.query_params.multi_items():
+        query.setdefault(key, []).append(value)
+    query.setdefault("as_of", [edges.today().isoformat()])
+    return query
+
+
+def _census_job(db: Session, user: User, scope: Scope, request: Request) -> JobOut:
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="objects_census",
+        params={"type_slug": scope.slug, "query": _census_query(request)},
+        upload=None,
+        workspace_slug=None,
+    )
+    return jobs_routes._out(db, job)
+
+
+@router.get("/{type_slug}/census", response_model=CensusOut)
+def census(
+    type_slug: str,
+    request: Request,
+    group_by: str = Query(
+        description="기준 — 통계와 같다(status · workspace · properties.<칸> · 주소)"
+    ),
+    metric: str = Query(default="count", description="count · sum · avg · min · max"),
+    metric_field: str | None = Query(default=None, description="합 · 평균을 낼 숫자 칸"),
+    order: str = Query(default="desc", description="desc · asc · key(키 순 — 날짜는 시간순)"),
+    grain: str | None = Query(default=None, description="날짜 축의 기간 단위"),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None),
+    deep: bool = Query(default=True),
+    year: int | None = Query(default=None, ge=1900, le=2999),
+    as_of: date | None = Query(default=None, description=AS_OF),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CensusOut:
+    """**전수 집계**(ADR 0079) — 묶음을 30개에서 접거나 500개로 자르지 않고 전부, 묶음 합이
+    전체(`total`)와 같은지의 검증값(`check`)과 함께.
+
+    거르기 · 기준은 통계와 같다. 묶음이 5,000개 이하면 `rows` 가 전부다(`complete`). 넘으면 수
+    · 검증값만 오고 작업(`job`)이 전부를 만든다 — 끝나면 `GET
+    .../census/rows?cursor=<next_cursor>` 로 받는다. 이 요청 자체가 시간 상한(504)에 걸리면
+    `POST .../census/job` 으로 처음부터 작업으로 돌린다."""
+    readguard.take(db, readguard.read_slots(request), "목록 · 통계 읽기")
+    scope = _scope(db, type_slug)
+    plan = _census_plan(
+        db,
+        user,
+        scope,
+        request,
+        group_by=group_by,
+        metric=metric,
+        metric_field=metric_field,
+        order=order,
+        grain=grain,
+        q=q,
+        status=status,
+        under=under,
+        deep=deep,
+        year=year,
+        as_of=as_of,
+    )
+    found = plan.inline()
+    job = None
+    next_cursor = None
+    if not found.complete:
+        job = _census_job(db, user, scope, request)
+        next_cursor = census_service.encode_cursor(job.id, 0)
+    link, link_missing = listlinks.list_link(
+        scope.slug,
+        request.query_params.multi_items(),
+        interface=scope.is_interface,
+        summary=True,
+        defs=scope.defs,
+    )
+    return CensusOut(
+        group_field=found.group_field,
+        group_label=found.group_label,
+        metric=found.metric,
+        metric_field=found.metric_field,
+        metric_label=found.metric_label,
+        order=found.order,
+        grain=found.grain,
+        total=found.total,
+        groups=found.groups,
+        check=CensusCheckOut(**found.check.out(found.groups)),
+        rows=[CensusRowOut(**one.out()) for one in found.rows],
+        complete=found.complete,
+        job=job,
+        next_cursor=next_cursor,
+        link=link,
+        link_missing=link_missing,
+        freshness=_freshness(db, _asked_types(request, scope)),
+        **_scope_tag(_asked_types(request, scope)),
+    )
+
+
+@router.post("/{type_slug}/census/job", response_model=JobOut, status_code=202)
+def census_job(
+    type_slug: str,
+    request: Request,
+    group_by: str = Query(description="기준 — 통계와 같다"),
+    metric: str = Query(default="count"),
+    metric_field: str | None = Query(default=None),
+    order: str = Query(default="desc"),
+    grain: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """전수 집계를 **처음부터 작업으로** — 그 자리의 집계가 시간 상한(504)에 걸리는 큰 물음.
+    거르기는 같은 쿼리 문자열로 온다. 끝나면 `GET .../census/rows?cursor=` 로 받는다(첫 커서는
+    작업 id 로 만든다 — MCP 의 `objects_census` 가 알아서 한다)."""
+    scope = _scope(db, type_slug)
+    if _projection(scope) is not None:
+        raise Conflict(
+            code("OBJECTS", 47),
+            f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
+        )
+    summary_service.check_grain(grain)
+    # 기준 · 셈이 틀렸으면 맡기기 전에 422 로(몇 분 뒤 「실패」 가 아니라) — 질의는 세우기만.
+    census_service.Plan(
+        db,
+        scope,
+        select(ObjectInstance).where(scope.clause()),
+        group_by=group_by,
+        metric=metric,
+        metric_field=metric_field,
+        order=order,
+        grain=grain,
+        viewer=user,
+    )
+    return _census_job(db, user, scope, request)
+
+
+@router.get("/{type_slug}/census/rows", response_model=CensusRowsOut)
+def census_rows(
+    type_slug: str,
+    cursor: str = Query(description="전수 집계 · 앞 쪽이 준 `next_cursor`"),
+    limit: int = Query(default=census_service.PAGE_DEFAULT, ge=1, le=census_service.PAGE_MAX),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CensusRowsOut:
+    """작업이 만든 전수 집계를 **커서로 나눠** — 끝나지 않았으면 줄 없이 상태만."""
+    job_id, at = census_service.decode_cursor(cursor)
+    job = job_services.get_visible(db, user, job_id)
+    if job.kind != "objects_census" or (job.params or {}).get("type_slug") != type_slug:
+        raise NotFound(code("OBJECTS", 158), "이 타입의 전수 집계 작업이 아닙니다.")
+    if job.status != "done" or job.output_file_id is None:
+        return CensusRowsOut(job_id=job.id, status=job.status, offset=at)
+    head = job.result or {}
+    rows, more = census_service.page(db, job.output_file_id, at, limit)
+    return CensusRowsOut(
+        job_id=job.id,
+        status=job.status,
+        group_field=str(head.get("group_field") or ""),
+        group_label=str(head.get("group_label") or ""),
+        metric=str(head.get("metric") or "count"),
+        metric_label=str(head.get("metric_label") or ""),
+        total=int(head.get("total") or 0),
+        groups=int(head.get("groups") or 0),
+        check=CensusCheckOut(**head["check"]) if head.get("check") else None,
+        offset=at,
+        rows=[CensusRowOut(**one) for one in rows],
+        next_cursor=census_service.encode_cursor(job.id, at + len(rows)) if more else None,
     )
 
 
@@ -2352,8 +2655,18 @@ def list_objects(
         default=None, ge=1900, le=2999, description="그 해에 해당하는 것만"
     ),
     as_of: date | None = Query(default=None, description=AS_OF),
-    limit: int | None = Query(default=None),
+    limit: int | None = Query(
+        default=None,
+        description="쪽 크기 — 기본 50, 화면(로그인 세션) 200 · API 토큰 2,000 까지(ADR 0079)",
+    ),
     offset: int = Query(default=0, ge=0),
+    cursor: str | None = Query(
+        default=None,
+        description=(
+            "커서 쪽넘김(ADR 0079) — 처음은 `start`(또는 빈 값), 다음은 응답의 `next_cursor`. "
+            "id 차례로 넘기고 전체 수는 첫 쪽에서만 센다. 주면 `offset` 은 안 본다."
+        ),
+    ),
     columns: list[str] = Query(
         default=[],
         description=(
@@ -2376,9 +2689,15 @@ def list_objects(
 
     `link` 는 같은 조건의 목록 화면 주소다(`listlinks`) — 화면이 주소로 못 받는 인자는
     `link_missing` 에 이름이 적힌다.
+
+    **쪽 넘기기는 둘이다**(ADR 0079): `offset`(화면 — 목록 화면의 정렬대로) · `cursor`(전부
+    읽기 — id 차례, 뒤쪽으로 가도 같은 비용, 전체 수는 첫 쪽에서만). 쪽 상한은 화면 세션 200 ·
+    API 토큰 2,000 이다.
     """
+    # 몰리면 429 · Retry-After(ADR 0080) — 화면과 API 토큰은 자리가 따로다.
+    readguard.take(db, readguard.read_slots(request), "목록 · 통계 읽기")
     scope = _scope(db, type_slug)
-    capped = clamp_limit(limit)
+    capped = clamp_limit(limit, request)
     # 이어진 칸 — 목록을 세기 전에 주소를 본다(틀린 주소는 422 로 먼저).
     linked_columns = (
         linked.parse(paths.Resolver(db, scope, viewer=user, at=edges.at(as_of)), columns)
@@ -2388,6 +2707,13 @@ def list_objects(
 
     projected = _projection(scope)
     if projected is not None:
+        if cursor is not None:
+            raise AppError(
+                code("OBJECTS", 156),
+                f"{scope.label}은(는) 다른 표를 비추는 타입이라 커서로 넘기지 않습니다 — "
+                "offset 으로 넘기세요.",
+                status=422,
+            )
         # 행이 없다 — 원 표를 그대로 투영한다. 거르기는 검색어뿐이다(속성이 없으므로).
         refs, total = system.source_of(projected).search(db, user, q, capped, offset)
         now = datetime.now(UTC)
@@ -2401,6 +2727,7 @@ def list_objects(
             offset=offset,
             link=link,
             link_missing=link_missing,
+            **_scope_tag(scope.types),
         )
 
     stmt = _filtered(
@@ -2416,12 +2743,26 @@ def list_objects(
         as_of=as_of,
     )
 
-    total = count_of(db, stmt)
-    if total == 0 and offset == 0 and q:
+    next_cursor: str | None = None
+    if cursor is not None:
+        # 커서 쪽(ADR 0079) — 전체 수는 첫 쪽에서만 센다. 조건의 지문이 다르면 422.
+        made_for = cursors.fingerprint(request.query_params.multi_items())
+        at = cursors.decode(cursor, made_for)
+        total = at.total if at.total is not None else count_of(db, stmt)
+        first = at.after is None
+        rows = cursor_rows(db, stmt, total=total, after=at.after, limit=capped)
+        found = rows[:capped]
+        if len(rows) > capped:
+            next_cursor = cursors.encode(found[-1].id, total, at.seen + len(found), made_for)
+        offset = at.seen
+    else:
+        total = count_of(db, stmt)
+        first = offset == 0
+        found = page_rows(db, stmt, scope.list_view, total=total, limit=capped, offset=offset)
+    if total == 0 and first and q:
         _note_miss(
             background, user, scope, request, q=q, status=status, year=year, under=under
         )
-    found = page_rows(db, stmt, scope.list_view, total=total, limit=capped, offset=offset)
     workspaces = _workspace_slugs(db)
     labels = _ref_labels(db, user, scope.defs, found)
     names = aliases.of(db, [row.id for row in found])
@@ -2464,6 +2805,8 @@ def list_objects(
         link=link,
         link_missing=link_missing,
         freshness=_freshness(db, _asked_types(request, scope)),
+        next_cursor=next_cursor,
+        **_scope_tag(_asked_types(request, scope)),
     )
 
 
@@ -2594,6 +2937,18 @@ def diagnose_list(
     deep: bool = Query(default=True),
     year: int | None = Query(default=None, ge=1900, le=2999),
     as_of: date | None = Query(default=None, description=AS_OF),
+    mode: Literal["auto", "full", "light"] = Query(
+        default="auto",
+        description=(
+            "full(조건마다 빼고 다시 센다) · light(다시 세지 않는다 — 계수표와 「있나」 만) · "
+            "auto(타입이 DIAGNOSE_FULL_MAX_ROWS 를 넘으면 light, ADR 0081)"
+        ),
+    ),
+    total: int | None = Query(
+        default=None,
+        ge=0,
+        description="목록이 방금 센 수 — 주면 다시 세지 않는다(MCP 가 0건 목록 뒤에 넘긴다)",
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DiagnosisOut:
@@ -2602,6 +2957,7 @@ def diagnose_list(
     「없다」 와 「안 보인다」 와 「조건이 좁다」 를 가른다. 조건 때문이면 어느 조건을
     빼면 몇 건인지, 그리고 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 말한다.
     """
+    readguard.take(db, readguard.read_slots(request), "목록 · 통계 읽기")
     scope = _scope(db, type_slug)
 
     def build(omit: str | None) -> Any:
@@ -2648,11 +3004,19 @@ def diagnose_list(
             return None
 
     projected = _projection(scope)
-    total = (
-        system.source_of(projected).search(db, user, q, 1, 0)[1]
-        if projected is not None
-        else count_of(db, build(None))
+    # 큰 타입은 가벼운 진단(ADR 0081) — 2,000만 건에서 조건마다 다시 세면 0건 하나에 세기가 열
+    # 번 남짓이다. 크기는 계수표로 본다(ADR 0038 — 세지 않는다).
+    type_rows = sum(typecounts.counts(db).get(one.id, 0) for one in scope.types)
+    light = projected is None and (
+        mode == "light"
+        or (mode == "auto" and type_rows > get_settings().diagnose_full_max_rows)
     )
+    if total is None:
+        total = (
+            system.source_of(projected).search(db, user, q, 1, 0)[1]
+            if projected is not None
+            else count_of(db, build(None))
+        )
     # 고를 값 칸에 고를 값 밖의 값을 건 조건 — 제외 · 같은 관계 묶음 안의 것은 묶음째 본다.
     checks = [
         (key, key[2:], "eq", [value])
@@ -2677,6 +3041,8 @@ def diagnose_list(
         unknown=unknown,
         count=lambda stmt: count_of(db, stmt),
         values=resolve.value_misses(defs, checks),
+        light=light,
+        type_rows=type_rows,
     )
     return DiagnosisOut.model_validate(found)
 

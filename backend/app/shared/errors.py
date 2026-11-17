@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.branding import ERROR_PREFIX
@@ -61,6 +62,12 @@ _VALIDATION_MESSAGES = {
 
 #: 한 번에 보여 줄 항목 수. 다 늘어놓으면 첫 줄부터 안 읽는다.
 _MAX_VALIDATION_ITEMS = 3
+
+#: 몰림의 「다시 해 주세요」 까지(초, `Retry-After`) — DB 연결 풀이 바닥났을 때의 503(ADR
+#: 0080). 앞 요청들이 끝나 연결이 돌아오는 시간이다.
+RETRY_AFTER_BUSY = 5
+#: 읽기 자리(`readguard.Slots`)가 다 찼을 때의 429 — 자리는 몇 초 기다리고도 비지 않은 것이다.
+RETRY_AFTER_SLOTS = 3
 
 
 def describe_validation(errors: Sequence[Any]) -> str:
@@ -141,12 +148,15 @@ class AppError(Exception):
         *,
         status: int = 400,
         details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
         self.details = details or {}
+        self.headers = headers or {}
+        """응답 머리 — 몰림의 429 · 503 이 `Retry-After` 를 단다(ADR 0080)."""
 
 
 class NotFound(AppError):
@@ -241,9 +251,15 @@ def register_error_handlers(app: FastAPI) -> None:
             extra={"details": exc.details},
         )
         if isinstance(exc, PlainTextError):
-            return PlainTextResponse(f"{exc.message} ({exc.code})", status_code=exc.status)
+            return PlainTextResponse(
+                f"{exc.message} ({exc.code})",
+                status_code=exc.status,
+                headers=exc.headers or None,
+            )
         return JSONResponse(
-            status_code=exc.status, content=_body(exc.code, exc.message, exc.details)
+            status_code=exc.status,
+            content=_body(exc.code, exc.message, exc.details),
+            headers=exc.headers or None,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -303,6 +319,34 @@ def register_error_handlers(app: FastAPI) -> None:
                 "서버 오류가 발생했습니다. 요청 ID를 관리자에게 알려주세요.",
             ),
             headers={REQUEST_ID_HEADER: get_request_id()},
+        )
+
+    @app.exception_handler(PoolTimeout)
+    async def _pool_exhausted(request: Request, exc: PoolTimeout) -> JSONResponse:
+        """**DB 연결을 기다리다 시간이 다 됐다**(연결 풀이 바닥 — 요청이 몰렸다, ADR 0080).
+
+        그대로 두면 500 「서버 오류」 라 사람은 고장으로 읽고, AI 는 같은 요청을 곧바로 다시
+        보내 몰림을 키운다. 503 과 `Retry-After` 로 「잠시 뒤 다시」 를 말한다 — 화면 · MCP 가
+        읽기면 그만큼 기다려 한 번 더 부른다. 이중화의 nginx 는 503 을 다른 서버에 다시 보낸다
+        (그쪽이 한가하면 그대로 답이 된다)."""
+        logger.warning(
+            "%s %s -> 503 DB 연결 대기 시간 초과(몰림): %s",
+            request.method,
+            request.url.path,
+            exc,
+        )
+        return JSONResponse(
+            status_code=503,
+            content=_body(
+                code("COMMON", 503),
+                f"지금 요청이 몰려 서버가 DB 연결을 내주지 못했습니다 — {RETRY_AFTER_BUSY}초 "
+                "뒤에 다시 해 주세요. 바뀐 것은 없습니다.",
+                {"retry_after": RETRY_AFTER_BUSY},
+            ),
+            headers={
+                REQUEST_ID_HEADER: get_request_id(),
+                "Retry-After": str(RETRY_AFTER_BUSY),
+            },
         )
 
     @app.exception_handler(OperationalError)

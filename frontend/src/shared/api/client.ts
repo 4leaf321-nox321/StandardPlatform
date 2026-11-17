@@ -181,8 +181,54 @@ export async function refreshSession<T>(): Promise<T> {
   return outcome.body as T
 }
 
+/** 몰림의 「다시 해 주세요」 를 몇 번까지 따르나(ADR 0080) — 읽기만. */
+const BUSY_RETRIES = 2
+/** `Retry-After` 를 이만큼까지만 기다린다(초) — 더 길면 기다리지 않고 오류를 보인다. */
+const BUSY_WAIT_MAX = 15
+
+/**
+ * 몰려서 거절된 읽기면 기다릴 시간(ms), 아니면 null.
+ *
+ * 서버는 목록 · 통계 자리가 다 찼으면 429, DB 연결이 바닥났으면 503 을 `Retry-After` 와 함께
+ * 낸다(ADR 0080). **화면은 여러 목록 · 통계를 한꺼번에 부른다**(홈의 위젯 · 목록과 통계) — 몰릴
+ * 때 그 몇 개가 오류로 비지 않게 읽기(GET)는 그만큼 기다려 다시 부른다. 쓰기는 다시 보내지
+ * 않는다(한 번 들어갔을 수 있다). 기다리는 사이를 흩뜨려 같이 거절된 것들이 같은 순간 다시
+ * 몰리지 않게 한다.
+ */
+function busyWait(response: Response, init?: RequestInit): number | null {
+  if (response.status !== 429 && response.status !== 503) return null
+  if ((init?.method ?? 'GET').toUpperCase() !== 'GET') return null
+  const seconds = Number(response.headers.get('Retry-After'))
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > BUSY_WAIT_MAX) return null
+  return seconds * 1000 + Math.random() * 1000
+}
+
+function pause(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', stop)
+      resolve()
+    }, ms)
+    function stop() {
+      clearTimeout(timer)
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal?.addEventListener('abort', stop, { once: true })
+  })
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response = await send(path, init)
+  for (let tries = 0; tries < BUSY_RETRIES; tries += 1) {
+    const wait = busyWait(response, init)
+    if (wait === null) break
+    await pause(wait, init?.signal)
+    response = await send(path, init)
+  }
 
   // access 는 12시간이면 만료된다. 사용자가 그 순간 하던 일을 잃지 않도록 한 번만
   // 조용히 갱신하고 재시도한다. /auth/* 는 제외 — 갱신 자체가 실패한 상황에서

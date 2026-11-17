@@ -461,6 +461,78 @@ def _list_query(work: Work) -> tuple[ObjectType, Any]:
     return object_type, stmt
 
 
+def objects_census(work: Work) -> dict[str, Any]:
+    """전수 집계(ADR 0079)를 **전부** — 묶음을 덩어리마다 읽어 줄마다 JSON 한 줄로 결과 파일에
+    쓴다. 받는 쪽은 `GET /api/objects/{slug}/census/rows?cursor=` 로 나눠 읽는다(파일은 작업의
+    결과라 `GET /api/jobs/{id}/download` 로도 받는다). 결과(`jobs.result`)에는 묶음 수 ·
+    검증값.
+
+    거르기 · 기준은 그 자리의 전수 집계와 같은 `_census_plan` — 맡길 때 적은 쿼리를 요청
+    모양으로 되돌린다(내보내기와 같은 길). 시간 상한은 없다(`cap=False` — 사람이 기다리지
+    않는다)."""
+    from starlette.datastructures import QueryParams
+
+    from app.modules.objects import routes as objects_routes
+
+    query = work.params.get("query") or {}
+    pairs = [(key, value) for key, values in query.items() for value in values]
+    params = QueryParams(pairs)
+    request = SimpleNamespace(query_params=params)
+    scope = objects_routes._scope(work.db, str(work.params.get("type_slug") or ""))
+    under = params.get("under")
+    year = params.get("year")
+    as_of = params.get("as_of")
+    plan = objects_routes._census_plan(
+        work.db,
+        _user(work),
+        scope,
+        request,  # type: ignore[arg-type]
+        group_by=params.get("group_by") or "",
+        metric=params.get("metric") or "count",
+        metric_field=params.get("metric_field") or None,
+        order=params.get("order") or "desc",
+        grain=params.get("grain") or None,
+        q=params.get("q") or None,
+        status=params.get("status") or None,
+        under=uuid.UUID(under) if under else None,
+        deep=(params.get("deep") or "true").lower() != "false",
+        year=int(year) if year else None,
+        as_of=date.fromisoformat(as_of) if as_of else None,
+        cap=False,
+    )
+    total = int(
+        work.db.scalar(select(func.count()).select_from(plan.filtered.subquery())) or 0
+    )
+    work.progress("세기", 0, 0)
+    buffer = io.BytesIO()
+    written = 0
+    for rows in plan.stream():
+        buffer.write(
+            "".join(json.dumps(one.out(), ensure_ascii=False) + "\n" for one in rows).encode()
+        )
+        written += len(rows)
+        work.progress("쓰기", written, plan.stats[0])
+    groups, group_sum = plan.stats
+    head = plan.head(total, groups, group_sum)
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    work.emit(
+        name=f"census-{scope.slug}-{stamp}.jsonl",
+        content_type="application/x-ndjson",
+        data=buffer.getvalue(),
+    )
+    return {
+        "type_slug": scope.slug,
+        "group_field": head.group_field,
+        "group_label": head.group_label,
+        "metric": head.metric,
+        "metric_label": head.metric_label,
+        "total": total,
+        "groups": groups,
+        "rows": written,
+        "check": head.check.out(groups),
+    }
+
+
 #: 내보내기가 한 번에 읽는 행 수 — 기록 200만 건을 한 목록으로 싣지 않는다.
 EXPORT_CHUNK = 2_000
 #: 이보다 많으면 zip 으로 묶어 낸다 — 작업 결과 파일은 DB 에 들고(Postgres 한 값은 1GB 까지),
@@ -1066,6 +1138,7 @@ register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import)
 register(Kind("bundle_undo", "묶음 되돌리기", False, True, bundle_undo))
 register(Kind("bundle_export", "묶음 내보내기", False, False, bundle_export, admin_only=True))
 register(Kind("objects_export", "객체 내보내기", False, False, objects_export))
+register(Kind("objects_census", "전수 집계", False, False, objects_census))
 register(Kind("ontology_export", "온톨로지 통째로 내보내기", False, False, ontology_export))
 register(Kind("relations_export", "관계 내보내기", False, False, relations_export))
 register(

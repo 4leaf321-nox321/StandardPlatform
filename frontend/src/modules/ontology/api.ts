@@ -156,6 +156,11 @@ export interface ObjectType {
    * 수정 시각으로 판정한다.
    */
   revision_key?: string
+  /**
+   * **자료 범위 표지**(ADR 0083) — 이 타입의 기록이 어느 범위의 자료인가(「국내」 · 「해외」 ·
+   * 「plm」 같은 설치의 말). 빈 글자면 미지정. 응답의 `scope` 가 이것을 모은다.
+   */
+  scope?: string
   is_active: boolean
   object_count: number
 }

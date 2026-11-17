@@ -22,6 +22,7 @@ import { LifeView } from '@/modules/metrics/analysis/LifeView'
 import { LogitView } from '@/modules/metrics/analysis/LogitView'
 import { ParetoView } from '@/modules/metrics/analysis/ParetoView'
 import { ProfileView } from '@/modules/metrics/analysis/ProfileView'
+import { RatioView } from '@/modules/metrics/analysis/RatioView'
 import { RecurrenceView } from '@/modules/metrics/analysis/RecurrenceView'
 import { SprtView } from '@/modules/metrics/analysis/SprtView'
 import { Button } from '@/shared/components/ui/button'
@@ -32,6 +33,7 @@ const ORDER = [
   'forecast',
   'control',
   'sprt',
+  'ratio',
   'groups',
   'cutin',
   'coverage',
@@ -64,7 +66,7 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
   const given = initial && initial.recipe === recipe ? initial.params : undefined
   const unavailable = listed.filter((one) => !one.ok)
   // 기간 범위는 접수 기간이다 — 수명 · 순차 검정은 코호트마다 닫힌 경과까지 보므로 안 쓴다.
-  const cohortOnly = recipe === 'life' || recipe === 'sprt'
+  const cohortOnly = recipe === 'life' || recipe === 'sprt' || recipe === 'ratio'
   const ranged = Boolean(read.period_from || read.period_to)
   return (
     <div className="space-y-4">
@@ -106,6 +108,7 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
       {recipe === 'control' && <ControlView metric={metric} read={read} initial={given} />}
       {recipe === 'changes' && <ChangesView metric={metric} read={read} initial={given} />}
       {recipe === 'sprt' && <SprtView metric={metric} read={read} initial={given} />}
+      {recipe === 'ratio' && <RatioView metric={metric} read={read} initial={given} />}
       {recipe === 'groups' && <GroupsView metric={metric} read={read} initial={given} />}
       {recipe === 'cutin' && <CutinView metric={metric} read={read} initial={given} />}
       {recipe === 'coverage' && <CoverageView metric={metric} read={read} initial={given} />}

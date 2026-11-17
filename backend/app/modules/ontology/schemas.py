@@ -14,6 +14,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
+from app.modules.ontology.models import SCOPE_MAX
+
 
 class NavGroupOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -133,6 +135,10 @@ class ObjectTypeOut(BaseModel):
     """개정 칸(ADR 0041) — 이 타입의 판을 적는 속성(글자 · 고르기 · 숫자, 값 하나)의 키. 계보
     관계의 원천이면 선이 맺힐 때 이 값이 박히고, 바뀌면 파생물이 낡음이다. 비었으면 개정 칸이
     없어 객체의 바뀐 때로 판정한다."""
+    scope: str = ""
+    """자료 범위 표지(ADR 0083) — 이 타입의 기록이 어느 범위의 자료인가(「국내」 · 「해외」 ·
+    「plm」 같은 설치의 말). 비면 미지정. 목록 · 통계 · 지표 · 분석의 응답 `scope` 가 이것을
+    모은다."""
     list_view: dict[str, Any]
     form_view: dict[str, Any]
     detail_view: dict[str, Any]
@@ -168,6 +174,8 @@ class ObjectTypeWriteRequest(BaseModel):
     revision_key: str = Field(default="", max_length=48)
     """개정 칸 — 이 타입의 글자 · 고르기 · 숫자 속성(값 하나)의 키. 만들 때는 속성이 아직
     없으므로 대개 비운다."""
+    scope: str = Field(default="", max_length=SCOPE_MAX)
+    """자료 범위 표지(ADR 0083) — 비우면 미지정."""
     core: bool = False
     list_view: dict[str, Any] = Field(default_factory=dict)
     form_view: dict[str, Any] = Field(default_factory=dict)
@@ -205,6 +213,8 @@ class ObjectTypePatchRequest(BaseModel):
     revision_key: str | None = Field(default=None, max_length=48)
     """개정 칸 — 빈 글자(`""`)는 개정 칸을 비운다. 바꾸면 그 타입을 원천으로 둔 계보 선의
     고정이 판정을 지키며 옮겨진다(ADR 0041)."""
+    scope: str | None = Field(default=None, max_length=SCOPE_MAX)
+    """자료 범위 표지(ADR 0083) — 빈 글자(`""`)는 미지정으로 되돌린다."""
     core: bool | None = None
     list_view: dict[str, Any] | None = None
     form_view: dict[str, Any] | None = None

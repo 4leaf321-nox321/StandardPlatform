@@ -312,6 +312,8 @@ def _register_extensions() -> None:
         "/api/bundles/export",
         "/api/objects/*/export",
         "/api/objects/*/relations/export",
+        # 전수 집계를 작업으로(ADR 0079) — 세어서 결과 파일을 주기만 한다.
+        "/api/objects/*/census/job",
     ):
         scopes.register_read_only_post_pattern(pattern)
     # **이름 풀기도 읽기다.** POST 인 이유는 이름을 오백 개까지 담기 때문이고(주소에 넣을 수

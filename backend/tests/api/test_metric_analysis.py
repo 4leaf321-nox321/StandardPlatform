@@ -1273,6 +1273,107 @@ def test_순차_검정을_증상마다_훑으면_나빠진_증상과_새로_생�
     assert refused["code"].endswith("METRICS-0029")
 
 
+def test_전작_대비_배율은_증상마다_전부와_구간을_낸다(
+    client: TestClient, admin: Signed
+) -> None:
+    """④-2(ADR 0082) — 순차 검정 훑기와 같은 자료: 소음은 둘 다 경과마다 2건(배율 1), 발열은
+    2 → 6건(배율 3, 높다), 누수는 전작에 없다(배율 없음). 값은 자르지 않는다."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    watermark = datetime(2028, 2, 15, tzinfo=UTC)
+    per = {"소음": (2, 2), "발열": (2, 6), "누수": (0, 3)}
+    cells: list[dict[str, Any]] = []
+    for i in range(24):
+        a_start, s_start = _month(date(2024, 1, 1), i), _month(date(2026, 1, 1), i)
+        for symptom, (a_count, s_count) in per.items():
+            a_dims = {"base_model": w["a_base"], "symptom": symptom, "factory": "F1"}
+            s_dims = {"base_model": w["s_base"], "symptom": symptom, "factory": "F1"}
+            if a_count:
+                cells += [
+                    {
+                        "period": _month(a_start, age),
+                        "cohort": a_start,
+                        "age": age,
+                        "dims": a_dims,
+                        "count": a_count,
+                    }
+                    for age in range(min(36, 48 - i))
+                ]
+            cells += [
+                {
+                    "period": _month(s_start, age),
+                    "cohort": s_start,
+                    "age": age,
+                    "dims": s_dims,
+                    "count": s_count,
+                }
+                for age in range(24 - i)
+            ]
+    _plant(cases["slug"], cells, watermark)
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(date(2024, 1, 1), i),
+                "dims": {"base_model": base},
+                "count": 1,
+                "value_count": 1,
+                "sum": 1000.0,
+            }
+            for base, offset in ((w["a_base"], 0), (w["s_base"], 24))
+            for i in range(offset, offset + 24)
+        ],
+        watermark,
+    )
+    whole = _analysis(
+        client, admin, cases["slug"], "ratio", target=w["s_base"], reference=w["a_base"]
+    )
+    assert whole["recipe"] == "ratio" and whole["items"] == [] and whole["by"] is None
+    # 전체 — 전작 경과마다 4건(소음 2 + 발열 2), 새 모델 11건(2 + 6 + 3).
+    assert whole["overall"]["ratio"] == pytest.approx(11 / 4)
+    assert whole["overall"]["verdict"] == "higher"
+    assert whole["overall"]["low"] < whole["overall"]["ratio"] < whole["overall"]["high"]
+    assert "records_not_units" in {one["code"] for one in whole["caveats"]}
+    assert "tab=analysis" in whole["link"] and "recipe=ratio" in whole["link"]
+
+    found = _analysis(
+        client,
+        admin,
+        cases["slug"],
+        "ratio",
+        by="symptom",
+        target=w["s_base"],
+        reference=w["a_base"],
+    )
+    items = {one["key"]: one for one in found["items"]}
+    assert set(items) == {"소음", "발열", "누수"}
+    assert (
+        items["발열"]["ratio"] == pytest.approx(3.0) and items["발열"]["verdict"] == "higher"
+    )
+    assert (
+        items["소음"]["ratio"] == pytest.approx(1.0) and items["소음"]["verdict"] == "unclear"
+    )
+    assert items["누수"]["ratio"] is None and items["누수"]["new"] is True
+    # 대수는 모델의 판매 대수 그대로(증상은 분모 짝이 아니다).
+    assert items["소음"]["target_units"] == items["발열"]["target_units"]
+    assert found["items"][0]["key"] == "누수"  # 「높다」 · 새로 생긴 것이 먼저
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"per_value_intervals", "shared_exposure", "new_values"} <= codes
+    # 인자는 순차 검정과 같다 — 전작 없음 · 모델 기준으로 값마다는 거절.
+    assert _refused(client, admin, cases["slug"], "ratio", target=w["s_base"])[
+        "code"
+    ].endswith("METRICS-0029")
+    assert _refused(
+        client,
+        admin,
+        cases["slug"],
+        "ratio",
+        by="base_model",
+        target=w["s_base"],
+        reference=w["a_base"],
+    )["code"].endswith("METRICS-0029")
+
+
 # --- ⑤ 집단 비교 ------------------------------------------------------------------------
 
 
