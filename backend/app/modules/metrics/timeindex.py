@@ -44,9 +44,37 @@ def name_of(type_id: uuid.UUID, key: str) -> str:
     return f"{PREFIX}{digest}"
 
 
+def configured(db: Session, raw: str) -> set[tuple[uuid.UUID, str]]:
+    """`DATE_INDEX_FIELDS`(`<타입 slug>.<칸 키>` 를 쉼표로) — 지표의 시간 칸이 아니어도 목록 ·
+    통계의 날짜 범위 조건이 자주 거는 칸(ADR 0084, 「빈 날」 0건 세기). 없는 타입 · 날짜가 아닌
+    칸은 건너뛴다(색인은 날짜로 읽는 식이다)."""
+    from app.modules.ontology.models import ObjectType, PropertyDef
+
+    out: set[tuple[uuid.UUID, str]] = set()
+    for one in (part.strip() for part in raw.split(",")):
+        slug, _, key = one.partition(".")
+        if not slug or not key:
+            continue
+        found = db.execute(
+            select(ObjectType.id)
+            .join(PropertyDef, PropertyDef.owner_id == ObjectType.id)
+            .where(
+                ObjectType.slug == slug,
+                PropertyDef.owner_kind == "type",
+                PropertyDef.key == key,
+                PropertyDef.data_type == "date",
+            )
+        ).scalar()
+        if found is not None:
+            out.add((found, key))
+    return out
+
+
 def wanted(db: Session, *, min_rows: int = MIN_ROWS) -> dict[str, tuple[uuid.UUID, str]]:
-    """켜진 지표의 시간 칸 → 색인 이름 : (원천 타입, 칸)."""
-    pairs: set[tuple[uuid.UUID, str]] = set()
+    """켜진 지표의 시간 칸과 설정의 날짜 칸(`DATE_INDEX_FIELDS`) → 색인 이름 : (타입, 칸)."""
+    from app.config import get_settings
+
+    pairs: set[tuple[uuid.UUID, str]] = configured(db, get_settings().date_index_fields)
     for source, spec in db.execute(
         select(MetricDef.source_type_id, MetricDef.spec).where(MetricDef.is_active.is_(True))
     ):

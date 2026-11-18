@@ -78,6 +78,7 @@ from sqlalchemy import (
     false,
     func,
     literal,
+    literal_column,
     not_,
     or_,
     select,
@@ -236,6 +237,19 @@ def _column(field: str, entity: Any = ObjectInstance) -> Any:
     return entity.properties[field].astext
 
 
+def keyed_text(entity: Any, field: str) -> Any:
+    """`<entity>.properties ->> '<키>'` — **키를 글자로 박는다**(ADR 0084).
+
+    `entity.properties[field].astext` 는 키를 매개변수(`->> $1`)로 보낸다. 날짜 칸 식
+    색인(`metrics.timeindex` — `sp_date(properties ->> '<키>')`)은 키가 글자로 박힌 식이다.
+    지금은 질의를 준비해 두지 않아(ADR 0066) 플래너가 매개변수 값을 넣어 보고 둘을
+    맞춘다(시험으로 확인) — 그래도 글자로 적는다: 준비된 질의의 일반 계획은 매개변수를 못 넣어
+    보므로, 그 설정이 돌아오는 날 날짜 조건이 말없이 색인을 잃는다(증분 계산의
+    `incremental.date_expr` 와 같은 까닭)."""
+    quoted = field.replace("'", "''")
+    return entity.properties.op("->>")(literal_column(f"'{quoted}'"))
+
+
 def split_values(raw: str) -> list[str]:
     """`in` 의 값 여럿(`A|B`) — 빈 것은 뺀다."""
     return [one.strip() for one in raw.split(MULTI_SEP) if one.strip()]
@@ -384,7 +398,8 @@ def clause(
         # 글자로 견주면 `20260310`(정규형이 아닌 유효한 날짜)은 범위 밖이고 `2026-02-30`(못
         # 읽는 값)은 안이라, 막대를 눌러 나온 목록의 수가 막대의 수와 어긋난다.
         when = _date(label, raw)
-        normalized = axes.date_or_null(column)
+        # 키를 글자로 — 날짜 칸 식 색인이 있으면 그것을 탄다(ADR 0084, 「빈 날」 0건 세기).
+        normalized = axes.date_or_null(keyed_text(entity, field))
         return {
             "gt": normalized > when,
             "gte": normalized >= when,
