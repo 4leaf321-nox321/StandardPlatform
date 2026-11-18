@@ -654,3 +654,70 @@ def test_구독의_소스는_구독과_같은_차례에_돈다(
     assert result["order"].index(f"{twin['material']}_core") < result["order"].index(
         f"{twin['part']}_core"
     )
+
+
+def test_다른_주소의_형제_코어_소스가_받는_타입은_건너뛰고_주소를_맞추면_맡는다(
+    client: TestClient, admin: Signed, world: tuple[str, Hub]
+) -> None:
+    """같은 허브를 다른 표기(IP · 호스트 이름)로 적은 소스는 넘겨받지 못한다 — 그대로 두면
+    구독이 같은 타입에 소스를 하나 더 만들어 둘이 번갈아 받는다. 그래서 그 타입은 건너뛰고
+    까닭을
+    말한다."""
+    tag, _ = world
+    twin = _twin(client, admin, _names(tag, "hub"), tag)
+    alias = f"http://hub-{tag}-alias.local/api"
+    old = client.post(
+        "/api/datasources/subscriptions",
+        json={
+            "base_url": alias,
+            "auth_kind": "bearer",
+            "auth_secret": "old-token",
+            "groups": [twin["group"]],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert old.status_code == 200, old.text
+    made_old = {one["type_slug"]: one["source_slug"] for one in old.json()["items"]}
+    other = made_old[twin["part"]]
+    # 재질은 옛 소스를 지웠다 — 구독이 새로 만든다.
+    removed = client.delete(
+        f"/api/datasources/{made_old[twin['material']]}", headers=admin.headers
+    )
+    assert removed.status_code == 204, removed.text
+
+    plan = _create(client, admin, twin["group"], apply=False).json()
+    actions = {one["type_slug"]: one for one in plan["types"]}
+    assert actions[twin["material"]]["action"] == "create"
+    assert actions[twin["part"]]["action"] == "skip"
+    assert "다른 주소" in actions[twin["part"]]["reason"]
+    assert actions[twin["part"]]["source_slug"] == other
+
+    made = _subscribed(client, admin, twin["group"])
+    assert made["result"]["created"] == [f"{twin['material']}_core"]
+    assert any("다른 주소" in one for one in made["result"]["notes"])
+    assert twin["part"] not in _sources(made["id"])
+    with SessionLocal() as db:
+        type_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == twin["part"]))
+        assert (
+            len(
+                list(
+                    db.scalars(
+                        select(DataSource).where(
+                            DataSource.kind == "sp_core", DataSource.type_id == type_id
+                        )
+                    )
+                )
+            )
+            == 1
+        )
+
+    # 그 소스의 주소를 구독 주소와 같게 수정하면 다음 확인이 맡는다(새로 만들지 않는다).
+    fixed = client.patch(
+        f"/api/datasources/{other}", json={"base_url": _base(tag)}, headers=admin.headers
+    )
+    assert fixed.status_code == 200, fixed.text
+    again = _check(client, admin, made["id"])
+    assert again["adopted"] == [other], again
+    assert again["created"] == []
+    assert _sources(made["id"])[twin["part"]].auth.get("secret") == "hub-token"

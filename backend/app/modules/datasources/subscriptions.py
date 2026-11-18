@@ -424,6 +424,33 @@ def _own_sources(db: Session, row: CoreSubscription) -> list[DataSource]:
     )
 
 
+def rival(db: Session, object_type: ObjectType, base_url: str) -> DataSource | None:
+    """이 타입을 이미 받는 **다른 주소의 형제 코어 소스**(다른 구독의 것 포함) — 있으면 구독은
+    그 타입에 소스를 만들지 않는다.
+
+    같은 허브를 IP · 호스트 이름처럼 다르게 적은 소스는 넘겨받지 못한다(같은 주소만 맡는다).
+    그대로 두면 구독이 같은 타입에 소스를 하나 더 만들어 둘이 번갈아 받는다 — 같은 허브면 같은
+    행을 두 번, 다른 허브면 서로의 값을 덮는다."""
+    return db.scalar(
+        select(DataSource)
+        .where(
+            DataSource.kind == "sp_core",
+            DataSource.type_id == object_type.id,
+            DataSource.base_url != base_url,
+        )
+        .order_by(DataSource.slug)
+    )
+
+
+def rival_reason(other: DataSource) -> str:
+    return (
+        f"다른 주소({other.base_url})의 형제 코어 소스 「{other.name}」({other.slug})가 이미 "
+        "이 타입을 받아 건너뜁니다 — 한 타입을 소스 둘이 받지 않게. 같은 허브면 그 소스의 "
+        "주소를 구독 주소와 같게 수정하세요(다음 확인에서 구독이 맡습니다). 필요 없는 소스면 "
+        "삭제하면 구독이 새로 만듭니다(받은 자료는 남고, 처음부터 다시 받습니다)."
+    )
+
+
 def _merge_mapping(
     db: Session, source: DataSource, found: dict[str, Any], object_type: ObjectType
 ) -> tuple[list[str], list[str], list[str]]:
@@ -551,6 +578,10 @@ def _sources(
                     f"{slug}: 이 설치의 같은 이름 타입은 {owner} 가 관리해 받지 않습니다"
                     f"(구독의 관리 이름 {row.source_name})."
                 )
+                continue
+            other = rival(db, object_type, row.base_url)
+            if other is not None:
+                out.notes.append(f"{slug}: {rival_reason(other)}")
                 continue
             source = source_services.core_source(
                 db,
@@ -956,6 +987,10 @@ def plan(
             item.action = "skip"
             owner = managed.owner_of(local) or "이 설치"
             item.reason = f"이 설치의 같은 이름 타입은 {owner} 가 관리합니다."
+        elif (other := rival(db, local, base_url)) is not None:
+            item.action = "skip"
+            item.reason = rival_reason(other)
+            item.source_slug = other.slug
     return out
 
 
