@@ -411,10 +411,13 @@ def test_번들에_deb_가_있으면_그것을_먼저_깐다(tmp_path: Path) -> 
 
 
 def test_번들이_apptainer_deb_를_동봉한다() -> None:
-    """build_bundle.sh 가 빌드 머신에서 받아 넣고, deploy.sh 가 그 폴더를 본다."""
+    """build_bundle.sh 가 빌드 머신에서 받아 넣고(PPA 가 잠깐 멎어도 세 번까지 — v0.4.96 의
+    번들이 그 한 번에 .deb 없이 섰다), deploy.sh 가 그 폴더를 본다."""
     builder = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
     installer = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
-    assert "apt-get download apptainer" in builder and "apptainer_debs" in builder
+    assert 'fetch_debs "$STAGE/apptainer_debs" apptainer' in builder
+    assert "for attempt in 1 2 3" in _piece(builder, "fetch_debs")
+    assert 'apt-get download "$@"' in _piece(builder, "fetch_debs")
     assert "apptainer_debs" in _piece(installer, "ensure_apptainer")
 
 

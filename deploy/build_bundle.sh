@@ -206,7 +206,22 @@ chmod +x "$STAGE"/*.sh
 # 있는 의존성이다.
 echo "==> [3a/4] apptainer .deb 동봉 (오프라인 설치용)"
 mkdir -p "$STAGE/apptainer_debs"
-if (cd "$STAGE/apptainer_debs" && apt-get download apptainer uidmap libfuse3-3 >/dev/null 2>&1); then
+# **세 번까지 받는다** — PPA(launchpadcontent)가 잠깐 멎으면 한 번에 실패한다. 설치 단계는
+# 재시도로 넘겼는데 여기서 한 번 실패해 v0.4.96 의 번들이 .deb 없이 서고 게시가 막혔다.
+fetch_debs() {
+    local dir="$1"; shift
+    local attempt
+    for attempt in 1 2 3; do
+        if (cd "$dir" && apt-get download "$@" >/dev/null 2>&1); then
+            return 0
+        fi
+        echo "    … 받지 못했습니다($attempt/3) — 잠시 뒤 다시"
+        rm -f "$dir"/*.deb
+        sleep $((attempt * 10))
+    done
+    return 1
+}
+if fetch_debs "$STAGE/apptainer_debs" apptainer uidmap libfuse3-3; then
     echo "    동봉: $(ls "$STAGE/apptainer_debs" | tr '\n' ' ')"
 else
     rm -rf "$STAGE/apptainer_debs"
@@ -224,7 +239,7 @@ mkdir -p "$STAGE/pgvector_debs"
 pgvector_ver="$(apt-cache madison "postgresql-$PG_VERSION-pgvector" 2>/dev/null \
     | awk -F'|' '$3 !~ /pgdg/ { gsub(/ /, "", $2); print $2; exit }')"
 if [[ -n "$pgvector_ver" ]] \
-    && (cd "$STAGE/pgvector_debs" && apt-get download "postgresql-$PG_VERSION-pgvector=$pgvector_ver" >/dev/null 2>&1); then
+    && fetch_debs "$STAGE/pgvector_debs" "postgresql-$PG_VERSION-pgvector=$pgvector_ver"; then
     echo "    동봉: $(ls "$STAGE/pgvector_debs" | tr '\n' ' ')"
 else
     rm -rf "$STAGE/pgvector_debs"
