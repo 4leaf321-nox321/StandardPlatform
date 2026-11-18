@@ -232,6 +232,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         form_view=row.form_view or {},
         detail_view=row.detail_view or {},
         title_template=row.title_template,
+        label_prefix=row.label_prefix or "",
         is_active=row.is_active,
         object_count=count,
     )
@@ -518,7 +519,13 @@ def create_type(
     # 있다.
     interfaces.apply_bindings(db, bindings)
     defs = _properties_of(db, row.id)
-    row.list_view = views.validate_list_view(payload.list_view, defs)
+    row.list_view, old = views.lift_tree_prefix(
+        views.validate_list_view(payload.list_view, defs)
+    )
+    sent_prefix = "label_prefix" in payload.model_fields_set
+    row.label_prefix = views.validate_label_prefix(
+        payload.label_prefix if sent_prefix or old is None else old, defs
+    )
     row.form_view = views.validate_form_view(payload.form_view, defs, what="폼 화면")
     row.detail_view = views.validate_form_view(payload.detail_view, defs, what="상세 화면")
     # 개정 칸(ADR 0041) — 구현한 인터페이스의 공통 속성까지 선 뒤에 본다.
@@ -630,8 +637,16 @@ def update_type(
     # **모르는 키가 오면 거절한다 — 조용히 무시하지 않는다.** 무시하면 「스펙에는
     # 있는데 안 그려지는 필드」 가 쌓이고, 적은 쪽은 적용된 줄 안다(ADR 0005).
     defs = _properties_of(db, row.id)
+    if "label_prefix" in sent and payload.label_prefix is not None:
+        row.label_prefix = views.validate_label_prefix(payload.label_prefix, defs)
     if "list_view" in sent and payload.list_view is not None:
-        row.list_view = views.validate_list_view(payload.list_view, defs)
+        # 옛 자리(`tree.prefix`)로 온 앞머리는 타입의 앞머리로 옮긴다(ADR 0088) — 이 요청이
+        # 앞머리를 따로 보냈으면 그것이 이긴다.
+        row.list_view, old = views.lift_tree_prefix(
+            views.validate_list_view(payload.list_view, defs)
+        )
+        if old is not None and "label_prefix" not in sent:
+            row.label_prefix = views.validate_label_prefix(old, defs)
     for name, what in (("form_view", "폼 화면"), ("detail_view", "상세 화면")):
         spec: dict[str, Any] | None = getattr(payload, name)
         if name not in sent or spec is None:
@@ -2615,6 +2630,8 @@ def _property_deletion(db: Session, owner: ObjectType, row: PropertyDef) -> _Del
     found.removes.append("속성 정의")
     if views.prune_field(owner.list_view or {}, row.key) != (owner.list_view or {}):
         found.removes.append("목록의 열")
+    if owner.label_prefix == f"properties.{row.key}":
+        found.removes.append("이름 앞에 붙일 값(앞머리)")
     left = [one for one in _properties_of(db, owner.id) if one.id != row.id]
     if any(
         views.prune_sections(spec or {}, left) != (spec or {})
@@ -2696,6 +2713,8 @@ def delete_property(
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     owner.list_view = views.prune_field(owner.list_view or {}, key)
+    if owner.label_prefix == f"properties.{key}":
+        owner.label_prefix = ""
     # 폼 · 상세도 같다 — 이 속성이 그 묶음의 마지막이었으면 빈 묶음이 남아 다음 타입 수정이
     # 「그 묶음에 속한 속성이 없습니다」 로 거절됐다(2026-10-08).
     _prune_sections(db, owner, without=row.id)

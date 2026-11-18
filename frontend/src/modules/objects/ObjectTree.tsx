@@ -247,7 +247,7 @@ function NodeButton({
       )}
       title={node.key ? `${shownName(node)} · ${node.key}` : shownName(node)}
     >
-      {/* **앞머리**(타입의 `tree.prefix` — 문서의 절 번호)는 이름에 넣지 않고 앞에 흐리게 붙인다. */}
+      {/* **앞머리**(타입의 `label_prefix` — 문서의 절 번호, ADR 0088)는 이름에 넣지 않고 앞에 흐리게 붙인다. */}
       {node.prefix && (
         <span className="text-muted-foreground mr-1 tabular-nums">{node.prefix}</span>
       )}

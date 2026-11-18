@@ -279,6 +279,61 @@ def validate_form_view(
     return spec
 
 
+def validate_label_prefix(field: Any, defs: Sequence[FieldDef]) -> str:
+    """타입의 **앞머리**(`ObjectType.label_prefix`, ADR 0088) — 칸 하나. 비우면 ''.
+
+    트리 앞머리와 같은 검사다 — 그 타입에 있는 속성(`properties.<키>`)이나 기본 칸, 파일 · 문서
+    칸은 값이 따로 있어 거절한다. 이름(`label`) 자신은 거절한다 — 「측정 방법 측정 방법」 이
+    된다."""
+    if field is None or field == "":
+        return ""
+    keys = {d.key for d in defs}
+    kinds = {d.key: d.data_type for d in defs}
+    _require_field(field, keys, what=LABEL_PREFIX)
+    _require_value(field, kinds, what=LABEL_PREFIX)
+    if field == "label":
+        raise InvalidValue(
+            code("ONTOLOGY", 102), f"{LABEL_PREFIX}: 이름 자신은 앞에 붙일 수 없습니다."
+        )
+    return str(field)
+
+
+#: 화면 · 오류 문구의 이름(용어집 「앞머리」).
+LABEL_PREFIX = "이름 앞에 붙일 값(앞머리)"
+
+
+def lift_tree_prefix(list_view: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """옛 자리(`list_view.tree.prefix`, 0.4.95 · ADR 0086)의 앞머리를 떼어 낸다 — (트리에서 뺀
+    목록 모양, 떼어 낸 값 또는 None).
+
+    부르는 쪽이 그 값을 타입의 앞머리(`label_prefix`)로 쓴다 — 같은 요청 · 파일이 앞머리를 따로
+    보냈으면 그것이 이긴다. 둘에 두면 어느 쪽이 맞는지 갈린다. 옛 판이 내보낸 정의 · 옛 화면 ·
+    옛 MCP 가 보낸 목록 모양이 이 길로 온다.
+    """
+    tree = (list_view or {}).get("tree")
+    if not isinstance(tree, dict) or "prefix" not in tree:
+        return list_view, None
+    lifted = dict(tree)
+    old = lifted.pop("prefix")
+    return {**list_view, "tree": lifted}, (old if isinstance(old, str) else "")
+
+
+def lift_type_payload(one: dict[str, Any]) -> dict[str, Any]:
+    """정의 가져오기 · 묶음 · 코어 구독의 타입 한 줄 — 옛 자리의 앞머리를 `label_prefix` 로
+    옮긴 사본. 계획과 적용이 같은 모양을 보고, 옛 허브가 매번 보내는 `tree.prefix` 가 「바뀜」
+    으로 잡히지 않는다."""
+    spec = one.get("list_view")
+    if not isinstance(spec, dict):
+        return one
+    lifted, old = lift_tree_prefix(spec)
+    if old is None:
+        return one
+    out = {**one, "list_view": lifted}
+    if "label_prefix" not in one:
+        out["label_prefix"] = old
+    return out
+
+
 def prune_field(spec: dict[str, Any], key: str) -> dict[str, Any]:
     """지워진 속성을 뷰에서 걷어낸다.
 

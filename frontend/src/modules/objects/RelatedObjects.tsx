@@ -255,7 +255,7 @@ export function RelatedObjects({
                         className="text-sm font-medium hover:underline"
                         to={`/o/${row.object_type_slug}/${row.object_id}`}
                       >
-                        {row.object_label}
+                        {row.object_display_label || row.object_label}
                       </Link>
                       <span className="text-muted-foreground ml-2 text-xs">
                         {row.object_type_label}
@@ -294,7 +294,7 @@ export function RelatedObjects({
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={`${row.object_label} 관계 수정`}
+                        aria-label={`${row.object_display_label || row.object_label} 관계 수정`}
                         onClick={() => setEditing(row)}
                       >
                         <Pencil className="size-4" />
@@ -304,7 +304,7 @@ export function RelatedObjects({
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={`${row.object_label} 연결 해제`}
+                        aria-label={`${row.object_display_label || row.object_label} 연결 해제`}
                         onClick={() => setCutting(row)}
                       >
                         <X className="size-4" />
@@ -465,7 +465,7 @@ export function RelatedObjects({
         <ConfirmDialog
           open
           destructive
-          title={`${cutting.object_label} 와(과)의 관계를 끊습니다`}
+          title={`${cutting.object_display_label || cutting.object_label} 와(과)의 관계를 끊습니다`}
           description={
             <>
               「{cutting.label}」 연결만 사라집니다

@@ -103,6 +103,8 @@ TYPE_FIELDS = {
     "form_view",
     "detail_view",
     "title_template",
+    # 이름 앞에 붙일 값(앞머리, ADR 0088) — 칸 하나. 계획이 그 타입의 칸인지 본다.
+    "label_prefix",
     "is_active",
     "core",
     "properties",
@@ -365,6 +367,20 @@ PARENT_GONE = (
 )
 
 
+def _lifted(payload: dict[str, Any]) -> dict[str, Any]:
+    """옛 자리의 앞머리(`list_view.tree.prefix`)를 타입의 `label_prefix` 로 옮긴 사본(ADR 0088)
+    — 0.4.95 가 내보낸 정의도 그대로 받는다. 계획과 적용이 같은 모양을 본다."""
+    types = payload.get("types")
+    if not isinstance(types, list):
+        return payload
+    return {
+        **payload,
+        "types": [
+            views.lift_type_payload(one) if isinstance(one, dict) else one for one in types
+        ],
+    }
+
+
 def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
     """적용하면 무엇이 바뀌는지 — **적용하지 않고** 돌려준다.
 
@@ -378,6 +394,7 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
     **적용이 거절할 것은 여기서 다 본다**(칸의 종류 · 길이, 화면 모양) — 미리 보기가 오류
     없이 통과한 파일이 적용에서 422 · 500 이 나면, 미리 보기를 믿을 수 없다."""
     _require_shape(payload)
+    payload = _lifted(payload)
     _reject_unknown(payload, TOP_KEYS, what="스키마")
     out = Plan()
 
@@ -723,8 +740,11 @@ def _check_type_views(
             and target.after.data_type != "number"
         }
         specs = _views_of(one, types.get(slug), defs, gone)
+        current = types.get(slug)
+        prefix = one.get("label_prefix", current.label_prefix if current is not None else "")
         try:
             views.validate_list_view(specs["list_view"], defs)
+            views.validate_label_prefix(prefix, defs)
             views.validate_form_view(specs["form_view"], defs, what="폼 화면")
             views.validate_form_view(specs["detail_view"], defs, what="상세 화면")
         except InvalidValue as caught:
@@ -1480,6 +1500,7 @@ def apply(
     prepared = plan(db, payload, source=source)
     if prepared.errors:
         return prepared
+    payload = _lifted(payload)
 
     for index, one in enumerate(payload.get("groups") or []):
         slug = one["slug"]
@@ -1626,6 +1647,7 @@ def apply(
                     views.prune_sections(getattr(object_type, name) or {}, defs),
                 )
         object_type.list_view = views.validate_list_view(object_type.list_view or {}, defs)
+        object_type.label_prefix = views.validate_label_prefix(object_type.label_prefix, defs)
         object_type.form_view = views.validate_form_view(
             object_type.form_view or {}, defs, what="폼 화면"
         )

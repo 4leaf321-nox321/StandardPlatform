@@ -44907,6 +44907,11 @@
             "type": "string",
             "title": "Label"
           },
+          "display_label": {
+            "type": "string",
+            "title": "Display Label",
+            "default": ""
+          },
           "description": {
             "type": "string",
             "title": "Description"
@@ -45454,6 +45459,11 @@
             "type": "string",
             "title": "Title Template"
           },
+          "label_prefix": {
+            "type": "string",
+            "title": "Label Prefix",
+            "default": ""
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
@@ -45721,6 +45731,18 @@
             ],
             "title": "Title Template"
           },
+          "label_prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label Prefix"
+          },
           "is_active": {
             "anyOf": [
               {
@@ -45861,6 +45883,11 @@
           "title_template": {
             "type": "string",
             "title": "Title Template"
+          },
+          "label_prefix": {
+            "type": "string",
+            "title": "Label Prefix",
+            "default": ""
           },
           "is_active": {
             "type": "boolean",
@@ -46021,6 +46048,12 @@
           "title_template": {
             "type": "string",
             "title": "Title Template",
+            "default": ""
+          },
+          "label_prefix": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Label Prefix",
             "default": ""
           },
           "is_active": {
@@ -51298,6 +51331,11 @@
             "type": "string",
             "title": "Object Label"
           },
+          "object_display_label": {
+            "type": "string",
+            "title": "Object Display Label",
+            "default": ""
+          },
           "object_key": {
             "anyOf": [
               {
@@ -56213,6 +56251,11 @@
             "type": "string",
             "title": "Label"
           },
+          "display_label": {
+            "type": "string",
+            "title": "Display Label",
+            "default": ""
+          },
           "key": {
             "anyOf": [
               {
@@ -60639,6 +60682,11 @@
               }
             ],
             "title": "Prefix"
+          },
+          "display_label": {
+            "type": "string",
+            "title": "Display Label",
+            "default": ""
           }
         },
         "type": "object",
@@ -63590,6 +63638,11 @@
           "label": {
             "type": "string",
             "title": "Label"
+          },
+          "display_label": {
+            "type": "string",
+            "title": "Display Label",
+            "default": ""
           },
           "key": {
             "anyOf": [

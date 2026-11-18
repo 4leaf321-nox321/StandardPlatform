@@ -20,6 +20,10 @@ class ObjectOut(BaseModel):
     type_slug: str
     key: str | None
     label: str
+    display_label: str = ""
+    """**보여 줄 이름**(ADR 0088) — 타입의 앞머리(`label_prefix`, 문서의 절이면 절 번호)를 이름
+    앞에 붙인 「3.2 측정 방법」. 앞머리가 없으면 `label` 과 같다. 저장 · 수정 · 이름으로 찾기는
+    `label` 이다."""
     description: str
     properties: dict[str, Any]
     ref_labels: dict[str, str] = Field(default_factory=dict)
@@ -219,6 +223,8 @@ class RelatedObjectOut(BaseModel):
 
     object_id: uuid.UUID
     object_label: str
+    object_display_label: str = ""
+    """상대의 보여 줄 이름(앞머리 + 이름, ADR 0088). 비면 `object_label`."""
     object_key: str | None
     object_type_slug: str
     object_type_label: str
@@ -252,8 +258,11 @@ class TreeNodeOut(BaseModel):
     """**자식 수를 미리 준다.** 없는데 펼침 화살표가 보이면 눌러 보고서야 빈 것을
     안다 — 그 한 번이 매 노드마다 반복된다."""
     prefix: str | None = None
-    """**앞머리** — 타입의 `list_view.tree.prefix` 로 정한 칸의 값(문서의 절이면 절 번호
-    「3.2」). 이름 앞에 붙여 보인다. 정하지 않았거나 값이 없으면 null."""
+    """**앞머리** — 그 노드 타입의 「이름 앞에 붙일 값」(`label_prefix`, ADR 0088 — 0.4.95 의
+    `list_view.tree.prefix` 를 넓힌 것)으로 정한 칸의 값(문서의 절이면 절 번호 「3.2」). 이름
+    앞에 붙여 보인다. 정하지 않았거나 값이 없으면 null."""
+    display_label: str = ""
+    """앞머리 + 이름(「3.2 측정 방법」) — 다른 응답의 `display_label` 과 같다."""
 
 
 class TreeOut(BaseModel):

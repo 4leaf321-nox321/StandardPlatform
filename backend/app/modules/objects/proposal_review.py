@@ -31,7 +31,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
-from app.modules.objects import access, edges, proposals, reviewkit, system
+from app.modules.objects import access, display, edges, proposals, reviewkit, system
 from app.modules.objects.models import ObjectInstance, RelationProposal
 from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, RelationType
@@ -154,6 +154,12 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
     }
     ignored = reviewkit.ignored(db, KIND)
     editor = access.Editor(db, user)
+    # 양 끝은 보여 줄 이름으로(ADR 0088) — 가린 도착은 그대로 가린다.
+    shown = display.labels(
+        db,
+        user,
+        [*(s for _p, s, _d in rows), *(d for _p, _s, d in rows if d.id not in hidden)],
+    )
     items: list[Item] = []
     for row, s, d in rows:
         signature = _signature(row)
@@ -165,7 +171,7 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
             continue
         kind = kinds.get(row.relation)
         kind_label = kind.label if kind else row.relation
-        dst_label = system.HIDDEN_LABEL if d.id in hidden else d.label
+        dst_label = system.HIDDEN_LABEL if d.id in hidden else shown.get(d.id, d.label)
         blocked: str | None = None
         if kind is None or not kind.is_active:
             blocked = (
@@ -199,7 +205,10 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
             Item(
                 kind=KIND,
                 id=str(row.id),
-                question=f"「{s.label}」 —{kind_label}→ 「{dst_label}」 을(를) 이을까요?",
+                question=(
+                    f"「{shown.get(s.id, s.label)}」 —{kind_label}→ 「{dst_label}」 을(를) "
+                    "이을까요?"
+                ),
                 evidence=[
                     f"{s_type.label} → {d_type.label if d_type else '알 수 없음'}",
                     *_evidence(

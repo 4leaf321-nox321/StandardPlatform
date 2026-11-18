@@ -84,14 +84,13 @@ export interface RollupSpec {
 }
 
 /**
- * 목록 왼쪽 트리 — 관계 · 부모 쪽, 같은 부모 아래의 차례(`sort` — 칸 이름의 목록, 앞의 칸부터)와
- * 이름 앞에 붙일 앞머리(`prefix` — 칸 하나, 문서의 절 번호처럼 이름에 넣지 않고 보이는 값).
+ * 목록 왼쪽 트리 — 관계 · 부모 쪽, 같은 부모 아래의 차례(`sort` — 칸 이름의 목록, 앞의 칸부터).
+ * 이름 앞에 붙일 앞머리는 타입의 `label_prefix`(ADR 0088 — 0.4.95 의 `tree.prefix` 를 넓혔다).
  */
 export interface TreeSpec {
   relation: string
   parent?: 'src' | 'dst'
   sort?: string[]
-  prefix?: string
 }
 
 export interface ListView {
@@ -161,6 +160,12 @@ export interface ObjectType {
   form_view: SectionView
   detail_view: SectionView
   title_template: string
+  /**
+   * **이름 앞에 붙일 값(앞머리)**(ADR 0088) — 칸 하나(`properties.section_no` · 기본 칸). 그 타입의
+   * 객체가 목록 · 상세 제목 · 참조 링크 · 관계 목록 · 검색 · 검토함 · 트리에서 이 값을 이름 앞에 붙여
+   * 보인다. 저장된 이름은 그대로. 빈 글자면 없음.
+   */
+  label_prefix?: string
   /**
    * **개정 칸**(ADR 0041) — 이 타입의 판(「Rev.C」 · 「3」)을 적는 속성 키(글자 · 선택 · 숫자, 값
    * 하나). 원천의 개정이 고정 뒤에 바뀌면 파생물이 낡음이 된다. 빈 글자면 개정 칸이 없고 원천의

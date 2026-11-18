@@ -1,4 +1,5 @@
-"""트리의 **차례**와 **앞머리** — 타입의 `list_view.tree.sort` · `prefix`.
+"""트리의 **차례**와 **앞머리** — 타입의 `list_view.tree.sort` 와 `label_prefix`
+(ADR 0086 · 0088).
 
 문서의 절(「3.2 측정 방법」)을 객체로 넣을 때, 번호를 이름에 넣으면 이름으로 찾기 · 별칭 · 다른
 판과의 대응이 번호에 묶인다(절 하나가 끼면 뒤의 이름이 다 바뀐다). 그래서 번호는 칸
@@ -22,8 +23,9 @@
 
 ## 앞머리
 
-`prefix` 로 정한 칸의 값을 글자로(참조면 상대의 이름, 여럿이면 쉼표로). 비었으면 없음. 볼 수
-없는 상대의 이름은 싣지 않는다.
+타입의 `label_prefix`(옛 자리 `tree.prefix`)로 정한 칸의 값을 글자로(참조면 상대의 이름,
+여럿이면 쉼표로). 비었으면 없음. 볼 수 없는 상대의 이름은 싣지 않는다. 트리 밖(목록 · 상세 ·
+참조 링크 · 검색 · 검토함)도 같은 값을 붙인다 — `objects/display.py`.
 """
 
 from __future__ import annotations
@@ -47,12 +49,21 @@ from app.shared.permissions import visible_owner_clause
 DOTTED = r"^[0-9]+(\.[0-9]+)*\.?$"
 
 
-def spec(list_view: dict[str, Any] | None) -> tuple[list[str], str | None]:
-    """(`sort` 칸들, `prefix` 칸) — 정해 두지 않았으면 ([], None)."""
+def spec(list_view: dict[str, Any] | None) -> list[str]:
+    """`sort` 칸들 — 정해 두지 않았으면 []."""
     tree = (list_view or {}).get("tree") or {}
-    order = [str(one) for one in tree.get("sort") or [] if isinstance(one, str) and one]
-    prefix = tree.get("prefix")
-    return order, (prefix if isinstance(prefix, str) and prefix else None)
+    return [str(one) for one in tree.get("sort") or [] if isinstance(one, str) and one]
+
+
+def prefix_field(object_type: ObjectType) -> str | None:
+    """앞머리 칸 — 타입의 `label_prefix`(ADR 0088). 비었으면 옛 자리(`list_view.tree.prefix`,
+    0.4.95)를 본다 — 마이그레이션 0106 과 쓰는 길이 옛 값을 옮기지만, 옮기기 전의 값이 남은
+    곳(복원한 스냅샷 등)에서도 같은 이름이 보이게."""
+    if object_type.label_prefix:
+        return object_type.label_prefix
+    tree = (object_type.list_view or {}).get("tree") or {}
+    old = tree.get("prefix") if isinstance(tree, dict) else None
+    return old if isinstance(old, str) and old else None
 
 
 def order_by(db: Session, object_type: ObjectType, fields: list[str]) -> list[Any]:

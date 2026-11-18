@@ -12,6 +12,11 @@ export interface ObjectRow {
   type_slug: string
   key: string | null
   label: string
+  /**
+   * 보여 줄 이름(ADR 0088) — 타입의 앞머리(절 번호 등)를 이름 앞에 붙인 「3.2 측정 방법」. 앞머리가
+   * 없으면 `label` 과 같다. 수정 창 · 찾기는 `label`. 시험 자료에는 없을 수 있다(`shownName`).
+   */
+  display_label?: string
   description: string
   properties: Record<string, unknown>
   /** `object_ref` 가 가리키는 객체의 이름 (id -> 이름). **서버가 한 번에 모아 준다.** */
@@ -136,6 +141,8 @@ export interface RelatedObject {
   outgoing: boolean
   object_id: string
   object_label: string
+  /** 상대의 보여 줄 이름(앞머리 + 이름, ADR 0088). 없으면 `object_label`. */
+  object_display_label?: string
   object_key: string | null
   object_type_slug: string
   object_type_label: string
@@ -278,7 +285,7 @@ export interface TreeNode {
   status: string
   /** **자식 수를 미리 준다** — 없는데 펼침 화살표가 보이면 눌러 보고서야 안다. */
   child_count: number
-  /** 앞머리 — 타입의 `tree.prefix` 칸의 값(문서의 절 번호). 이름 앞에 붙여 보인다. */
+  /** 앞머리 — 타입의 「이름 앞에 붙일 값」(`label_prefix`) 칸의 값(문서의 절 번호). 이름 앞에 붙여 보인다. */
   prefix?: string | null
 }
 

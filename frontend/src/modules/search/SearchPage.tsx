@@ -238,7 +238,7 @@ export default function SearchPage() {
               >
                 <TypeIcon name={one.icon} className="shrink-0" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{one.label}</span>
+                  <span className="block truncate">{one.display_label || one.label}</span>
                   <span className="text-muted-foreground block truncate text-xs">
                     {one.type_label}
                     {one.key && <span className="ml-2 font-mono">{one.key}</span>}
@@ -315,7 +315,7 @@ export default function SearchPage() {
                     <TypeIcon name={one.icon} className="shrink-0" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">
-                        {one.label}
+                        {one.display_label || one.label}
                         {path && <span className="text-muted-foreground"> › {path}</span>}
                       </span>
                       <span className="text-muted-foreground block truncate text-xs">

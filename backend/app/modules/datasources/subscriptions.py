@@ -228,6 +228,8 @@ def prepare(db: Session, ontology: dict[str, Any], source_name: str) -> Prepared
                 one.pop(name, None)
             if one.get("revision_key") in dropped:
                 one.pop("revision_key", None)
+            if one.get("label_prefix") in {f"properties.{key}" for key in dropped}:
+                one.pop("label_prefix", None)
     kept_kinds = []
     for one in ontology.get("relation_types") or []:
         slug = str(one.get("slug"))

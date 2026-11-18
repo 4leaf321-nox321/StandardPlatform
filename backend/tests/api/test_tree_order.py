@@ -1,5 +1,6 @@
 """트리의 차례와 앞머리(`list_view.tree.sort` · `prefix`) — 문서의 절 번호를 이름에 넣지 않고
-보인다.
+보인다. 앞머리는 0.4.97 부터 타입의 `label_prefix`(ADR 0088)다 — 여기 시험은 옛 자리로 적어도
+그대로 도는지(옮겨 받는지)를 본다.
 
 - 정의: `sort` 는 칸 이름의 목록, `prefix` 는 칸 하나 — 그 타입에 있는 속성 · 기본 칸만(목록의
   정렬과 같은 검사), 파일 · 문서 칸은 안 된다. 정의 가져오기가 그대로 저장하고 스키마 조회가
@@ -189,7 +190,8 @@ def test_정렬_앞머리는_있는_칸만_받고_가져오기_스키마가_그�
     assert patch({"prefix": "properties.pic"}).status_code == 422  # 파일 칸은 값이 따로다
     assert patch({"sort": ["properties.seq", "label"], "prefix": "key"}).status_code == 200
 
-    # 정의 가져오기가 그대로 저장하고, 스키마 조회가 돌려준다.
+    # 정의 가져오기가 차례는 그대로 저장하고, 옛 자리의 앞머리(`tree.prefix`)는 타입의
+    # 앞머리(`label_prefix`, ADR 0088)로 옮긴다 — 0.4.95 가 내보낸 정의도 그대로 받는다.
     spec = {
         "relation": kind,
         "parent": "dst",
@@ -204,7 +206,8 @@ def test_정렬_앞머리는_있는_칸만_받고_가져오기_스키마가_그�
     assert got["applied"] is True, got
     schema = client.get("/api/ontology/schema", headers=admin.headers).json()
     stored = next(one for one in schema["types"] if one["slug"] == sec)
-    assert stored["list_view"]["tree"] == spec
+    assert stored["list_view"]["tree"] == {k: v for k, v in spec.items() if k != "prefix"}
+    assert stored["label_prefix"] == "properties.section_no"
 
     # 칸을 지우면 차례 · 앞머리에서 걷는다 — 안 걷으면 다음 타입 수정이 「없는 속성」 으로
     # 거절된다.
@@ -219,4 +222,5 @@ def test_정렬_앞머리는_있는_칸만_받고_가져오기_스키마가_그�
         "parent": "dst",
         "sort": ["properties.seq"],
     }
+    assert stored["label_prefix"] == ""
     assert patch({"sort": ["properties.seq"]}).status_code == 200

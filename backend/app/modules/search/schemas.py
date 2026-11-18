@@ -26,6 +26,9 @@ class SearchHitOut(BaseModel):
     type_label: str
     icon: str
     label: str
+    display_label: str = ""
+    """보여 줄 이름(앞머리 + 이름, ADR 0088). 찾기는 `label` · 식별자 · 별칭으로 한다 —
+    앞머리로 찾으려면 그 칸을 검색 대상 속성에 넣는다."""
     key: str | None
     matched: str
     """label · key · alias — **왜 이게 나왔나.** 안 적으면 엉뚱해 보이는 줄이 오류로 읽힌다."""
@@ -56,6 +59,8 @@ class SearchMeaningOut(BaseModel):
     type_label: str
     icon: str
     label: str
+    display_label: str = ""
+    """보여 줄 이름(앞머리 + 이름, ADR 0088)."""
     key: str | None
     similarity: float
     """코사인 유사도(0 ~ 1) — 클수록 가깝다."""

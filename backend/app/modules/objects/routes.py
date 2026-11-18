@@ -42,6 +42,7 @@ from app.modules.objects import (
     bulk,
     bulkedit,
     conditions,
+    display,
     edges,
     explode,
     fill,
@@ -340,7 +341,14 @@ def _ref_labels(
     타입이면 원 표에서 읽는다 — `system.ref_labels` 가 가른다. 보는 사람이 못 보는
     객체는 이름을 가린다(`system.HIDDEN_LABEL`).
     """
-    return system.ref_labels(db, defs, [row.properties or {} for row in rows], viewer=user)
+    found = system.ref_labels(db, defs, [row.properties or {} for row in rows], viewer=user)
+    # 참조 링크도 보여 줄 이름으로(ADR 0088) — 가린 것 · 지워진 것은 그대로 둔다.
+    live = [
+        one
+        for one, label in found.items()
+        if label != system.HIDDEN_LABEL and not label.endswith(" (지워짐)")
+    ]
+    return {**found, **display.labels_for_ids(db, user, live)}
 
 
 def _own_ref_labels(
@@ -375,7 +383,11 @@ def _out(
     workspaces: dict[uuid.UUID, Workspace],
     ref_labels: dict[uuid.UUID, str] | None = None,
     alias_rows: list[ObjectAlias] | None = None,
+    *,
+    shown: dict[uuid.UUID, str],
 ) -> ObjectOut:
+    """객체 한 줄. `shown` 은 보여 줄 이름(`display.labels` — 앞머리가 붙는 줄만, ADR 0088) —
+    빠뜨리면 앞머리가 사라지므로 늘 받는다."""
     names = [one.value for one in (alias_rows or []) if one.kind == aliases.HUMAN]
     external = {
         one.kind.split(":", 1)[1]: one.value
@@ -390,6 +402,7 @@ def _out(
         type_slug=type_slug,
         key=row.key,
         label=row.label,
+        display_label=shown.get(row.id, row.label),
         description=row.description,
         properties=row.properties or {},
         ref_labels=_own_ref_labels(row, ref_labels),
@@ -1524,7 +1537,7 @@ def object_tree(
 
     # **볼 수 있는 것만 준다.** 남의 부서 것은 트리에도 안 나온다. 차례는 타입의 `tree.sort` —
     # 뿌리와 하위가 이 한 질의를 같이 쓴다(없으면 이름순, 끝에 이름 · id).
-    order, prefix_field = treeview.spec(object_type.list_view)
+    order = treeview.spec(object_type.list_view)
     rows = list(
         db.scalars(
             select(ObjectInstance)
@@ -1536,7 +1549,8 @@ def object_tree(
             .order_by(*treeview.order_by(db, object_type, order))
         )
     )
-    prefixes = treeview.prefixes(db, user, object_type, prefix_field, rows)
+    # 앞머리는 노드마다 제 타입의 것(ADR 0088) — 트리 관계가 다른 타입을 이을 수 있다.
+    prefixes = display.prefixes(db, user, rows)
     counts = graph.child_counts(
         db,
         relation=relation,
@@ -1554,6 +1568,7 @@ def object_tree(
                 status=row.status,
                 child_count=counts.get(row.id, 0),
                 prefix=prefixes.get(row.id),
+                display_label=display.shown(row.label, prefixes.get(row.id)),
             )
             for row in rows
         ],
@@ -2771,6 +2786,7 @@ def list_objects(
         )
     workspaces = _workspace_slugs(db)
     labels = _ref_labels(db, user, scope.defs, found)
+    shown = display.labels(db, user, found)
     names = aliases.of(db, [row.id for row in found])
     # **줄마다 제 타입** — 인터페이스 목록은 여러 타입이 섞인다(링크가 그 타입의 상세로 간다).
     slug_of = {one.id: one.slug for one in scope.types}
@@ -2789,6 +2805,7 @@ def list_objects(
                 workspaces,
                 labels,
                 names.get(row.id),
+                shown=shown,
             )
             for row in found
         ],
@@ -3152,6 +3169,7 @@ def object_profile(
             _workspace_slugs(db),
             _ref_labels(db, user, defs, [row]),
             aliases.of(db, [row.id]).get(row.id),
+            shown=display.labels(db, user, [row]),
         ),
         type_label=object_type.label,
         properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
@@ -3230,7 +3248,9 @@ def create_object(
     watches.watch_own(db, object_id=row.id, user_id=user.id)
     db.commit()
     db.refresh(row)
-    return _out(row, object_type.slug, _workspace_slugs(db))
+    return _out(
+        row, object_type.slug, _workspace_slugs(db), shown=display.labels(db, user, [row])
+    )
 
 
 @router.patch("/{type_slug}/{object_id}", response_model=ObjectOut)
@@ -3300,7 +3320,9 @@ def update_object(
     )
     db.commit()
     db.refresh(row)
-    return _out(row, object_type.slug, _workspace_slugs(db))
+    return _out(
+        row, object_type.slug, _workspace_slugs(db), shown=display.labels(db, user, [row])
+    )
 
 
 @router.put("/{type_slug}/{object_id}/aliases", response_model=ObjectOut)
@@ -3339,6 +3361,7 @@ def set_aliases(
         _workspace_slugs(db),
         _ref_labels(db, user, properties_of(db, object_type.id), [row]),
         aliases.of(db, [row.id]).get(row.id),
+        shown=display.labels(db, user, [row]),
     )
 
 
@@ -3919,7 +3942,11 @@ def restore_object(
     db.refresh(row)
     defs = properties_of(db, object_type.id)
     return _out(
-        row, object_type.slug, _workspace_slugs(db), _ref_labels(db, user, defs, [row])
+        row,
+        object_type.slug,
+        _workspace_slugs(db),
+        _ref_labels(db, user, defs, [row]),
+        shown=display.labels(db, user, [row]),
     )
 
 
@@ -4115,6 +4142,7 @@ def _related(
     }
     kinds = {one.slug: one for one in db.scalars(select(RelationType))}
     types = {one.id: one for one in db.scalars(select(ObjectType))}
+    shown = display.labels(db, user, list(others.values()))
 
     out: list[RelatedObjectOut] = []
     for edge in found_edges:
@@ -4142,6 +4170,7 @@ def _related(
                 outgoing=outgoing,
                 object_id=other.id,
                 object_label=other.label,
+                object_display_label=shown.get(other.id, other.label),
                 object_key=other.key,
                 object_type_slug=object_type.slug if object_type else "",
                 object_type_label=object_type.label if object_type else "알 수 없음",
@@ -4173,6 +4202,7 @@ def _related_refs(db: Session, user: User, row: ObjectInstance) -> list[RelatedO
         for one in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(other_ids)))
     }
     types = {one.id: one for one in db.scalars(select(ObjectType))}
+    shown = display.labels(db, user, list(others.values()))
     out: list[RelatedObjectOut] = []
     for edge in found:
         outgoing = edge.src == row.id
@@ -4189,6 +4219,7 @@ def _related_refs(db: Session, user: User, row: ObjectInstance) -> list[RelatedO
                 outgoing=outgoing,
                 object_id=other.id,
                 object_label=other.label,
+                object_display_label=shown.get(other.id, other.label),
                 object_key=other.key,
                 object_type_slug=object_type.slug if object_type else "",
                 object_type_label=object_type.label if object_type else "알 수 없음",
@@ -4231,6 +4262,7 @@ def _related_links(db: Session, user: User, mine: uuid.UUID) -> list[RelatedObje
                 outgoing=outgoing,
                 object_id=other.id,
                 object_label=other.label,
+                object_display_label=other.label,
                 object_key=None,
                 object_type_slug=other.type_slug,
                 object_type_label=other_type.label if other_type else "알 수 없음",

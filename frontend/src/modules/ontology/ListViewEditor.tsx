@@ -61,7 +61,6 @@ const NOT_A_GOOD_COLUMN = new Set(['text_long', 'document'])
 /** 「트리 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NO_TREE = '__none__'
 /** 「앞머리 없음」 — 같은 까닭. */
-const NO_PREFIX = '__none__'
 
 /** 열을 안 골랐을 때 목록이 떨어지는 기본. `ObjectListPage` 와 같아야 한다. */
 const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
@@ -551,6 +550,14 @@ function treeFields(defs: PropertyDef[]): { id: string; label: string }[] {
   ]
 }
 
+/**
+ * 「이름 앞에 붙일 값(앞머리)」 으로 고를 수 있는 칸 — 트리 차례와 같고 이름 자신만 뺀다(「측정 방법
+ * 측정 방법」 이 된다). 타입 수정 창이 쓴다(ADR 0088).
+ */
+export function prefixFields(defs: PropertyDef[]): { id: string; label: string }[] {
+  return treeFields(defs).filter((one) => one.id !== 'label')
+}
+
 /** `key` 를 뺀 사본 — 비운 설정은 키째 빼고 보낸다(정의 파일이 짧게 남는다). */
 function without<K extends keyof TreeSpec>(tree: TreeSpec, key: K): TreeSpec {
   const copy = { ...tree }
@@ -559,10 +566,11 @@ function without<K extends keyof TreeSpec>(tree: TreeSpec, key: K): TreeSpec {
 }
 
 /**
- * 트리의 **차례**(같은 부모 아래 — 칸 이름의 목록, 앞의 칸부터)와 **앞머리**(이름 앞에 붙일 값).
+ * 트리의 **차례**(같은 부모 아래 — 칸 이름의 목록, 앞의 칸부터). 앞머리(이름 앞에 붙일 값)는 타입의
+ * `label_prefix` 로 옮겼다(ADR 0088 — 트리 밖에서도 붙는다).
  *
  * 문서의 절을 객체로 넣을 때 번호를 이름에 넣으면 이름으로 찾기 · 별칭이 번호에 묶인다(절 하나가 끼면
- * 뒤의 이름이 다 바뀐다). 번호는 칸에 두고 여기서 차례 · 앞머리로 건다 — 트리는 「3.2 측정 방법」 처럼
+ * 뒤의 이름이 다 바뀐다). 번호는 칸에 두고 여기서 차례로 건다 — 트리는 「3.2 측정 방법」 처럼
  * 보이고 이름은 「측정 방법」 그대로다.
  */
 function TreeOrder({
@@ -665,30 +673,10 @@ function TreeOrder({
         </p>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="tree-prefix">이름 앞에 붙일 값(앞머리)</Label>
-        <Select
-          value={tree.prefix ?? NO_PREFIX}
-          onValueChange={(id) =>
-            onChange(id === NO_PREFIX ? without(tree, 'prefix') : { ...tree, prefix: id })
-          }
-        >
-          <SelectTrigger id="tree-prefix">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_PREFIX}>없음</SelectItem>
-            {fields.map((one) => (
-              <SelectItem key={one.id} value={one.id}>
-                {one.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-muted-foreground text-xs">
-          트리에서 이름 앞에 흐리게 붙습니다 — 문서의 절 번호는 이름에 넣지 말고 이 칸으로 두세요.
-        </p>
-      </div>
+      <p className="text-muted-foreground text-xs">
+        이름 앞에 붙일 값(앞머리 — 문서의 절 번호)은 타입 수정 창의 「이름 앞에 붙일 값」 에서
+        정합니다. 트리 · 목록 · 상세 · 검색 어디서나 붙습니다.
+      </p>
     </div>
   )
 }

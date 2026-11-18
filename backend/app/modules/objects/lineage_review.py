@@ -28,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import lineage, reviewkit
+from app.modules.objects import display, lineage, reviewkit
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType, RelationType
 from app.modules.review import registry
@@ -106,6 +106,7 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     ignored = reviewkit.ignored(db, KIND)
     editable = reviewkit.Editable(db, user)
+    shown = display.labels(db, user, [derived for derived, _type in rows])
     items: list[Item] = []
     for derived, object_type in rows:
         mine = by_derived[derived.id]
@@ -120,7 +121,10 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
             Item(
                 kind=KIND,
                 id=str(derived.id),
-                question=f"「{derived.label}」 의 원천이 바뀌었습니다 — 영향을 확인할까요?",
+                question=(
+                    f"「{shown.get(derived.id, derived.label)}」 의 원천이 바뀌었습니다 — "
+                    "영향을 확인할까요?"
+                ),
                 evidence=[
                     f"{object_type.label} — 원천 {len(mine)}개가 고정 뒤에 바뀜",
                     *(lineage.reason(one, labels.get(one.source_id)) for one in mine),

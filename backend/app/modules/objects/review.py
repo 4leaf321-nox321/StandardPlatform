@@ -55,6 +55,7 @@ from app.modules.objects import (
     aliases,
     bulk,
     bulkedit,
+    display,
     lifecycle,
     misses,
     quality,
@@ -290,6 +291,10 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
                 )
             }
         )
+    # 후보는 보여 줄 이름으로(ADR 0088) — 「개요」 가 여럿이면 앞머리(절 번호)로 가른다.
+    shown = display.labels_for_ids(
+        db, user, [hit.id for one in found for hit in one.suggestions]
+    )
     items: list[Item] = []
     for one in found:
         row = one.row
@@ -314,7 +319,7 @@ def collect_candidates(db: Session, user: User, flt: Filters) -> Collected:
                 choices=[
                     Choice(
                         value=str(hit.id),
-                        label=hit.label,
+                        label=shown.get(hit.id, hit.label),
                         detail=hit.type_label
                         + (f" · {hit.key}" if hit.key else "")
                         + (" · 뜻으로 찾음" if hit.matched == "meaning" else ""),
@@ -574,11 +579,13 @@ def collect_aliases(db: Session, user: User, flt: Filters) -> Collected:
             f"{total - len(found):,}건은 이것을 처리한 뒤에 표시됩니다."
         )
     editable = reviewkit.Editable(db, user)
+    shown = display.labels_for_ids(db, user, [one[0].object_id for one in found])
     items: list[Item] = []
     for alias_row, label, key, workspace_id, object_type, similarity, clash in found:
         choice, confidence, reason = _alias_recommendation(
             alias_row.value, label, key, similarity, clash
         )
+        name = shown.get(alias_row.object_id, label)
         blocked = managed.objects_refusal(object_type, what="별칭을 검수하지")
         blocked = blocked or editable.why_not(workspace_id)
         source = alias_row.source or ""
@@ -586,9 +593,9 @@ def collect_aliases(db: Session, user: User, flt: Filters) -> Collected:
             Item(
                 kind="alias_review",
                 id=str(alias_row.id),
-                question=f"「{alias_row.value}」 이(가) {label}의 별칭이 맞나요?",
+                question=f"「{alias_row.value}」 이(가) {name}의 별칭이 맞나요?",
                 evidence=[
-                    f"{object_type.label} · {label}" + (f" ({key})" if key else ""),
+                    f"{object_type.label} · {name}" + (f" ({key})" if key else ""),
                     f"출처: {source}" if source else "출처 없음",
                     f"메모: {alias_row.note}" if alias_row.note else "",
                     f"붙은 때 {alias_row.created_at:%Y-%m-%d}",
@@ -757,8 +764,10 @@ class _Member:
     properties: dict[str, Any] | None = None
 
 
-def _member_label(one: _Member) -> str:
-    return one.label + (f" ({one.key})" if one.key else "")
+def _member_label(one: _Member, shown: dict[uuid.UUID, str] | None = None) -> str:
+    """병합 후보 한 줄의 이름 — 보여 줄 이름(앞머리, ADR 0088)과 식별자."""
+    name = (shown or {}).get(one.id, one.label)
+    return name + (f" ({one.key})" if one.key else "")
 
 
 def _owner_name(one: _Member, names: dict[uuid.UUID, str]) -> str:
@@ -894,6 +903,8 @@ def collect_duplicates(db: Session, user: User, flt: Filters) -> Collected:
                 }
             )
         labels = {one.key: one.label for one in properties_of(db, object_type.id)}
+        # 이름이 같아 모인 줄들이다 — 앞머리(절 번호)가 있으면 그것이 가른다(ADR 0088).
+        shown = display.labels_for_ids(db, user, member_ids)
         refusal = managed.objects_refusal(object_type, what="병합하지")
         for norm, members in dupes.items():
             for one in members:
@@ -919,11 +930,12 @@ def collect_duplicates(db: Session, user: User, flt: Filters) -> Collected:
                 Item(
                     kind="duplicate",
                     id=item_id,
-                    question=f"「{winner.label}」 {len(members)}개를 하나로 병합할까요?",
+                    question=f"「{shown.get(winner.id, winner.label)}」 {len(members)}개를 "
+                    "하나로 병합할까요?",
                     evidence=[
                         f"{object_type.label} — 이름을 정규화하면 같음",
                         *(
-                            f"{_member_label(one)} · {_owner_name(one, names)} · "
+                            f"{_member_label(one, shown)} · {_owner_name(one, names)} · "
                             f"가리키는 것 {one.refs:,}건"
                             for one in members
                         ),
@@ -931,7 +943,7 @@ def collect_duplicates(db: Session, user: User, flt: Filters) -> Collected:
                     choices=[
                         Choice(
                             value=str(one.id),
-                            label=_member_label(one),
+                            label=_member_label(one, shown),
                             detail=(
                                 f"{_owner_name(one, names)} · 가리키는 것 {one.refs:,}건 · "
                                 f"{one.created_at:%Y-%m-%d} 생성"
@@ -1134,6 +1146,8 @@ class _Dead:
     deleted_at: datetime | None
     merged_into: uuid.UUID | None
     known: bool
+    shown: str = ""
+    """보여 줄 이름(앞머리 + 이름, ADR 0088) — 찾기(이름이 같은 것)는 `label` 로."""
 
 
 def _dead_info(db: Session, user: User, ids: list[uuid.UUID]) -> dict[uuid.UUID, _Dead]:
@@ -1157,6 +1171,9 @@ def _dead_info(db: Session, user: User, ids: list[uuid.UUID]) -> dict[uuid.UUID,
                 merged_into=row.merged_into_id,
                 known=bool(row.visible),
             )
+    shown = display.labels_for_ids(db, user, [key for key, one in out.items() if one.known])
+    for key, one in out.items():
+        one.shown = shown.get(key, one.label)
     return out
 
 
@@ -1172,10 +1189,12 @@ def _ref_candidates(
         seen,
     )
     found: dict[str, Choice] = {}
+    rows: dict[uuid.UUID, ObjectInstance] = {}
     note = ""
 
     def put(row: ObjectInstance, score: float, detail: str) -> None:
         old = found.get(str(row.id))
+        rows[row.id] = row
         if old is None or (old.score or 0) < score:
             found[str(row.id)] = Choice(
                 value=str(row.id),
@@ -1197,7 +1216,7 @@ def _ref_candidates(
                 if row.type_id in target_ids and db.scalar(
                     select(ObjectInstance.id).where(ObjectInstance.id == row.id, seen)
                 ):
-                    put(row, MERGED_SCORE, f"「{dead.label}」 이(가) 병합된 곳")
+                    put(row, MERGED_SCORE, f"「{dead.shown or dead.label}」 이(가) 병합된 곳")
                 break
             hop = row.merged_into_id
         same = list(
@@ -1236,6 +1255,12 @@ def _ref_candidates(
                 .limit(3)
             ):
                 put(row, float(similarity) * SIMILAR_FACTOR, f"이름이 비슷함 {similarity:.2f}")
+    # 후보는 보여 줄 이름으로(ADR 0088) — 한 번에 읽는다.
+    shown = display.labels(db, user, list(rows.values()))
+    for one in found.values():
+        row = rows[uuid.UUID(one.value)]
+        if row.id in shown:
+            one.label = shown[row.id] + (f" ({row.key})" if row.key else "")
     ranked = sorted(found.values(), key=lambda one: (-(one.score or 0), one.label))
     return ranked, note
 
@@ -1326,7 +1351,7 @@ def collect_broken_refs(db: Session, user: User, flt: Filters) -> Collected:
         if confidence is not None and _close(scores):
             confidence = round(confidence * CLOSE_FACTOR, 2)
             reason += f" · 다음 후보 「{choices[1].label}」 와 차이가 작음"
-        dead_label = info.label if info else f"없는 객체({str(dst_id)[:8]})"
+        dead_label = (info.shown or info.label) if info else f"없는 객체({str(dst_id)[:8]})"
         field_label = field.definition.label
         evidence = [f"{field.owner.label} · 「{field_label}」 칸 {int(count):,}건"]
         if info and info.deleted_at:

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.board import services as board
-from app.modules.objects import misses
+from app.modules.objects import display, misses
 from app.modules.search import services
 from app.modules.search.schemas import (
     SearchHitOut,
@@ -79,6 +79,9 @@ def search(
             among=services.type_ids_for(db, type_slug),
             exclude=[one.id for one in found.hits],
         )
+    # 보여 줄 이름(ADR 0088) — 찾기는 이름 · 식별자 · 별칭 그대로, 보이는 줄만 앞머리를 붙인다.
+    shown = display.labels(db, user, [one.row for one in near])
+    shown.update(display.labels_for_ids(db, user, [one.id for one in found.hits]))
     return SearchOut(
         q=q.strip(),
         total=found.total,
@@ -100,6 +103,7 @@ def search(
                 type_label=one.type_label,
                 icon=one.icon,
                 label=one.label,
+                display_label=shown.get(one.id, one.label),
                 key=one.key,
                 matched=one.matched,
                 matched_text=one.matched_text,
@@ -129,6 +133,7 @@ def search(
                 type_label=one.object_type.label,
                 icon=one.object_type.icon,
                 label=one.row.label,
+                display_label=shown.get(one.row.id, one.row.label),
                 key=one.row.key,
                 similarity=one.similarity,
                 section=one.heading,

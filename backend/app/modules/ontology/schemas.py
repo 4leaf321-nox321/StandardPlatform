@@ -143,6 +143,10 @@ class ObjectTypeOut(BaseModel):
     form_view: dict[str, Any]
     detail_view: dict[str, Any]
     title_template: str
+    label_prefix: str = ""
+    """**이름 앞에 붙일 값(앞머리)**(ADR 0088) — 칸 하나(`properties.section_no` · 기본 칸). 그
+    타입의 객체가 목록 · 상세 제목 · 참조 링크 · 관계 목록 · 검색 · 검토함 · 트리에서 이 값을
+    이름 앞에 붙여 보인다(응답의 `display_label`). 저장된 이름(`label`)은 그대로. 비면 없음."""
     is_active: bool
     object_count: int
     """이 타입의 객체가 몇 개인가. **지우기 전에 무엇이 걸렸는지 알아야 한다** —
@@ -181,6 +185,9 @@ class ObjectTypeWriteRequest(BaseModel):
     form_view: dict[str, Any] = Field(default_factory=dict)
     detail_view: dict[str, Any] = Field(default_factory=dict)
     title_template: str = ""
+    label_prefix: str = Field(default="", max_length=80)
+    """이름 앞에 붙일 값(앞머리, ADR 0088) — 칸 하나. 만들 때는 속성이 아직 없으므로 기본 칸만
+    쓸 수 있다(식별자 · 상태 …). 대개 비우고 속성을 만든 뒤 수정한다."""
     is_active: bool = True
 
 
@@ -220,6 +227,8 @@ class ObjectTypePatchRequest(BaseModel):
     form_view: dict[str, Any] | None = None
     detail_view: dict[str, Any] | None = None
     title_template: str | None = None
+    label_prefix: str | None = Field(default=None, max_length=80)
+    """이름 앞에 붙일 값(앞머리, ADR 0088) — 빈 글자(`""`)는 앞머리를 뺀다."""
     is_active: bool | None = None
 
 

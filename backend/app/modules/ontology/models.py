@@ -325,6 +325,13 @@ class ObjectType(Base):
     기계가 객체를 대량으로 만들 때 `label` 을 매번 정하는 것보다 **타입이 규칙을
     갖는 편이 낫다.** 비어 있으면 사람이 적은 `label` 을 그대로 쓴다."""
 
+    label_prefix: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    """**이름 앞에 붙일 값(앞머리)**(ADR 0088) — 칸 하나(`properties.section_no` · 기본 칸).
+    문서의 절이면 절 번호 — 이름(`label`)에 넣지 않고 목록 · 상세 제목 · 참조 링크 · 관계
+    목록 · 검색 · 검토함 · 트리에서 「3.2 측정 방법」 으로 보인다(응답의 `display_label`).
+    저장된 이름 · 이름으로 찾기 · 별칭 · 내보내기 · 코어 API 는 `label` 그대로. 비우면 없음.
+    0.4.95 의 `list_view.tree.prefix` 를 넓힌 것이다(옛 자리의 값은 여기로 옮긴다)."""
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     created_at: Mapped[datetime] = mapped_column(

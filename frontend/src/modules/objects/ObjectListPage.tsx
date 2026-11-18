@@ -17,6 +17,7 @@ import type { OntologySchema } from '@/modules/ontology/api'
 import { workspaceApi } from '@/modules/workspaces/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
+import { shownName } from '@/modules/objects/names'
 import type {
   Condition,
   FileCell,
@@ -112,7 +113,7 @@ function buildColumns(type: ObjectType, defs: PropertyDef[]): Column[] {
   return wanted
     .map((id): Column | null => {
       if (id === 'key') return { id, label: '식별자', render: (row) => row.key ?? '—' }
-      if (id === 'label') return { id, label: '이름', render: (row) => row.label }
+      if (id === 'label') return { id, label: '이름', render: (row) => shownName(row) }
       if (id === 'status') return { id, label: '상태', render: (row) => row.status }
       if (id === 'updated_at')
         return { id, label: '수정한 때', render: (row) => shownDateTime(row.updated_at) }
@@ -969,7 +970,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                       <TableCell className="w-8">
                         <input
                           type="checkbox"
-                          aria-label={`${row.label} 선택`}
+                          aria-label={`${shownName(row)} 선택`}
                           className="size-4"
                           disabled={list.stale}
                           checked={picked.has(row.id)}

@@ -14,6 +14,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BarChart3 } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
+import { shownName } from '@/modules/objects/names'
 import type { Condition, LinkedField, ObjectQuery, ObjectRow } from '@/modules/objects/api'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { propertyText } from '@/modules/objects/PropertyFields'
@@ -77,7 +78,7 @@ function columnsOf(
   return wanted
     .map((id): Column | null => {
       if (id === 'type') return { id, label: '타입', render: (row) => typeLabel(row.type_slug) }
-      if (id === 'label') return { id, label: '이름', render: (row) => row.label }
+      if (id === 'label') return { id, label: '이름', render: (row) => shownName(row) }
       if (id === 'key') return { id, label: '식별자', render: (row) => row.key ?? '—' }
       if (id === 'status') return { id, label: '상태', render: (row) => row.status }
       if (id === 'updated_at')

@@ -13,7 +13,7 @@
 
 import { useState } from 'react'
 
-import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
+import { ListViewEditor, prefixFields } from '@/modules/ontology/ListViewEditor'
 import { MapHubKeyField } from '@/modules/ontology/MapHubKeyField'
 import { SectionViewEditor } from '@/modules/ontology/SectionViewEditor'
 import { TypeDeleteDialog } from '@/modules/ontology/TypeDeleteDialog'
@@ -105,6 +105,7 @@ export function TypeEditDialog({
   const [isActive, setIsActive] = useState(type.is_active)
   const [core, setCore] = useState(type.core ?? false)
   const [revisionKey, setRevisionKey] = useState(type.revision_key ?? '')
+  const [labelPrefix, setLabelPrefix] = useState(type.label_prefix ?? '')
   const [scope, setScope] = useState(type.scope ?? '')
   const [listView, setListView] = useState<ListView>(type.list_view ?? {})
   const [formView, setFormView] = useState<SectionView>(type.form_view ?? {})
@@ -139,6 +140,8 @@ export function TypeEditDialog({
         // **바꾼 때만 보낸다** — 안 보낸 것(그대로)과 빈 글자(개정 칸 비움)는 다른 말이다. 안 맞는
         // 속성이면 서버가 거절한다(ONTOLOGY-0098) — 그 말이 위에 뜬다.
         ...(revisionKey !== (type.revision_key ?? '') ? { revision_key: revisionKey } : {}),
+        // 앞머리(ADR 0088) — 바꾼 때만. 빈 글자는 앞머리를 뺀다.
+        ...(labelPrefix !== (type.label_prefix ?? '') ? { label_prefix: labelPrefix } : {}),
         // 자료 범위 표지(ADR 0083) — 바꾼 때만. 빈 글자는 미지정으로 되돌린다.
         ...(scope.trim() !== (type.scope ?? '') ? { scope: scope.trim() } : {}),
         list_view: listView,
@@ -391,6 +394,13 @@ export function TypeEditDialog({
 
                   {/* 투영은 속성이 없다 — 고를 것도 없다. */}
                   {kindClass !== 'system' && (
+                    <PrefixField
+                      properties={type.properties}
+                      value={labelPrefix}
+                      onChange={setLabelPrefix}
+                    />
+                  )}
+                  {kindClass !== 'system' && (
                     <RevisionField
                       properties={type.properties}
                       value={revisionKey}
@@ -536,6 +546,47 @@ function Field({
           ))}
         </SelectContent>
       </Select>
+    </div>
+  )
+}
+
+/**
+ * 이름 앞에 붙일 값(앞머리, ADR 0088) — 칸 하나, 또는 없음. 문서의 절 번호처럼 이름에 넣지 않고
+ * 목록 · 상세 제목 · 참조 링크 · 관계 목록 · 검색 · 검토함 · 트리에서 이름 앞에 붙여 보일 값.
+ */
+function PrefixField({
+  properties,
+  value,
+  onChange,
+}: {
+  properties: PropertyDef[]
+  value: string
+  onChange: (next: string) => void
+}) {
+  const fields = prefixFields(properties)
+  /** 지금 값이 후보에 없으면(옛 정의) 그대로 보인다 — 안 보이면 저장 한 번에 말없이 비워진다. */
+  const orphan = value && !fields.some((one) => one.id === value) ? value : null
+  return (
+    <div className="space-y-1.5 border-t pt-3">
+      <Label htmlFor="type-edit-prefix">이름 앞에 붙일 값(앞머리)</Label>
+      <Select value={value || NONE} onValueChange={(next) => onChange(next === NONE ? '' : next)}>
+        <SelectTrigger id="type-edit-prefix" aria-label="이름 앞에 붙일 값(앞머리)">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE}>없음</SelectItem>
+          {fields.map((one) => (
+            <SelectItem key={one.id} value={one.id}>
+              {one.label}
+            </SelectItem>
+          ))}
+          {orphan && <SelectItem value={orphan}>{orphan}</SelectItem>}
+        </SelectContent>
+      </Select>
+      <p className="text-muted-foreground text-xs">
+        문서의 절 번호처럼 이름에 넣지 않고 앞에 붙여 보일 값입니다 — 목록 · 상세 제목 · 참조 링크 ·
+        관계 목록 · 검색 · 검토함 · 트리에서 「3.2 측정 방법」 으로 보이고, 저장된 이름은 그대로입니다.
+      </p>
     </div>
   )
 }

@@ -93,14 +93,17 @@ describe('롤업 줄의 수량 반영 · 말단만 · 곱', () => {
   })
 })
 
-describe('트리의 차례와 앞머리', () => {
-  it('차례에 칸을 더하고 앞머리를 고른다 — 파일 칸은 고를 수 없다', async () => {
+describe('트리의 차례', () => {
+  it('차례에 칸을 더한다 — 파일 칸은 고를 수 없고, 앞머리는 타입 수정 창에서 정한다고 말한다', async () => {
     const onChange = await mount({ tree: { relation: 'bom_of', parent: 'dst' } })
     await userEvent.click(screen.getByRole('button', { name: '차례에 절 번호 추가' }))
     expect(onChange).toHaveBeenLastCalledWith({
       tree: { relation: 'bom_of', parent: 'dst', sort: ['properties.section_no'] },
     })
     expect(screen.queryByRole('button', { name: '차례에 그림 추가' })).toBeNull()
+    // 앞머리는 타입 전체 설정으로 옮겼다(ADR 0088).
+    expect(screen.queryByLabelText('이름 앞에 붙일 값(앞머리)')).toBeNull()
+    expect(screen.getByText(/타입 수정 창의 「이름 앞에 붙일 값」 에서/)).toBeInTheDocument()
   })
 
   it('차례를 옮기고 빼며, 다 빼면 키째 뺀다', async () => {
@@ -109,7 +112,6 @@ describe('트리의 차례와 앞머리', () => {
         relation: 'bom_of',
         parent: 'dst',
         sort: ['properties.section_no', 'label'],
-        prefix: 'properties.section_no',
       },
     })
     await userEvent.click(screen.getByRole('button', { name: '차례 이름 위로' }))
@@ -118,7 +120,6 @@ describe('트리의 차례와 앞머리', () => {
         relation: 'bom_of',
         parent: 'dst',
         sort: ['label', 'properties.section_no'],
-        prefix: 'properties.section_no',
       },
     })
     onChange.mockClear()
@@ -137,13 +138,12 @@ describe('트리의 차례와 앞머리', () => {
     expect(one).toHaveBeenLastCalledWith({ tree: { relation: 'bom_of', parent: 'dst' } })
   })
 
-  it('관계 방향을 바꿔도 차례 · 앞머리는 그대로 둔다', async () => {
+  it('관계 방향을 바꿔도 차례는 그대로 둔다', async () => {
     const onChange = await mount({
       tree: {
         relation: 'bom_of',
         parent: 'dst',
         sort: ['properties.section_no'],
-        prefix: 'properties.section_no',
       },
     })
     const direction = screen
@@ -156,7 +156,6 @@ describe('트리의 차례와 앞머리', () => {
         relation: 'bom_of',
         parent: 'src',
         sort: ['properties.section_no'],
-        prefix: 'properties.section_no',
       },
     })
   })

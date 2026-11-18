@@ -26,6 +26,7 @@ import { inLineage } from '@/modules/objects/lineage'
 import { UsedInSlides } from '@/modules/slides/UsedInSlides'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
+import { shownName } from '@/modules/objects/names'
 import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyValues } from '@/modules/objects/PropertyFields'
 import { ObjectDeleteDialog } from '@/modules/objects/ObjectDeleteDialog'
@@ -187,7 +188,7 @@ function ObjectProfile() {
     // 오른쪽 단(가리키는 기록 · 다른 이름 · 이력 · 첨부)으로 가르고, 관계도는 맨 아래에 전체 폭으로.
     <div className="mx-auto max-w-screen-2xl space-y-6">
       <PageHeader
-        title={row.label}
+        title={shownName(row)}
         description={row.key ? `식별자 ${row.key}` : undefined}
         back={{ to: `/o/${typeSlug}`, label: profile.data.type_label }}
         actions={
@@ -399,7 +400,7 @@ function ObjectProfile() {
           <RelatedObjects
             typeSlug={typeSlug}
             objectId={objectId}
-            objectLabel={row.label}
+            objectLabel={shownName(row)}
             objectTypeSlug={row.type_slug}
             related={profile.data.related}
             relationTypes={schema.data?.relation_types ?? []}

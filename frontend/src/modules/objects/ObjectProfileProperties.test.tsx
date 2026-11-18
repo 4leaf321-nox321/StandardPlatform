@@ -5,6 +5,7 @@
  *   정했으면(1열 포함) 그대로 따른다.
  * - 숫자는 세 자리마다 쉼표.
  * - 참조 칸은 누르면 그 객체로 간다 — 못 찾은 객체에는 링크를 걸지 않는다(누르면 404).
+ * - 제목 · 관련 객체는 보여 줄 이름(앞머리 + 이름, ADR 0088)이다.
  */
 
 import { render, screen } from '@testing-library/react'
@@ -118,5 +119,37 @@ describe('상세의 기본 정보', () => {
     const fixed = screen.getByText('나').closest('dl')
     expect(loose?.className).toContain('xl:grid-cols-3')
     expect(fixed?.className).not.toContain('grid-cols')
+  })
+
+  it('제목과 관련 객체는 보여 줄 이름(앞머리 + 이름, ADR 0088)이다', async () => {
+    const shown = profileWith({}, [])
+    objectApi.profile.mockResolvedValue({
+      ...shown,
+      object: { ...shown.object, display_label: '3.2 외관 파손' },
+      related: [
+        {
+          relation_id: 'r1',
+          relation: 'sub_of',
+          label: '상위 절',
+          outgoing: true,
+          object_id: 'p1',
+          object_label: '방법',
+          object_display_label: '3 방법',
+          object_key: null,
+          object_type_slug: 'svc_case',
+          object_type_label: '시장 서비스',
+          properties: {},
+          evidence_note: '',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    })
+    await mount()
+
+    expect(screen.getByRole('heading', { name: '3.2 외관 파손' })).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: '3 방법' })).toHaveAttribute(
+      'href',
+      '/o/svc_case/p1',
+    )
   })
 })

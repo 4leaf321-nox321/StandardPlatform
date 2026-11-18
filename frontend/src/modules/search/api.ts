@@ -17,6 +17,8 @@ export interface SearchHit {
   type_label: string
   icon: string
   label: string
+  /** 보여 줄 이름(앞머리 + 이름, ADR 0088). 찾기는 이름 · 식별자 · 별칭으로. */
+  display_label?: string
   key: string | null
   /** label · key · alias — **왜 이게 나왔나.** */
   matched: string
@@ -32,6 +34,8 @@ export interface SearchMeaning {
   type_label: string
   icon: string
   label: string
+  /** 보여 줄 이름(앞머리 + 이름, ADR 0088). */
+  display_label?: string
   key: string | null
   /** 코사인 유사도(0 ~ 1) — 클수록 가깝다. */
   similarity: number

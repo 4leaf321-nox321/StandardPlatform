@@ -482,10 +482,19 @@ def definitions_of(db: Session, types: list[ObjectType], group_slugs: set[str]) 
     ontology = {
         "groups": [one for one in schema["groups"] if one["slug"] in group_slugs],
         "interfaces": [one for one in schema["interfaces"] if one["slug"] in carried],
-        "types": [one for one in schema["types"] if one["slug"] in slugs],
+        "types": [_shared(one) for one in schema["types"] if one["slug"] in slugs],
         "relation_types": relation_types,
     }
     return Definitions(ontology, outside, defs_of)
+
+
+def _shared(one: dict[str, Any]) -> dict[str, Any]:
+    """다른 설치로 보낼 타입 한 줄 — **비어 있는 앞머리(`label_prefix`, ADR 0088)는 싣지
+    않는다.** 0.4.96 까지의 받는 쪽은 모르는 칸을 거절한다 — 쓰지 않는 칸 때문에 정의 받기 ·
+    코어 구독이 통째로 막히지 않게. 쓰는 타입이 있으면 받는 쪽도 함께 올려야 한다."""
+    if one.get("label_prefix"):
+        return one
+    return {name: value for name, value in one.items() if name != "label_prefix"}
 
 
 def groups_of(db: Session, wanted: list[str]) -> list[NavGroup]:
