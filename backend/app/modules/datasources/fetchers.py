@@ -143,9 +143,38 @@ def core_row(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+#: 형제 SP 의 코어에 **연결하는 데** 기다리는 초 — 응답을 읽는 대기(`odata.TIMEOUT_SECONDS`,
+#: 60초)와 따로다. 주소를 잘못 적으면(응답하지 않는 호스트 · 포트) 연결이 60초를 다
+#: 기다렸고, 그 사이 앞단(사내 게이트웨이 · nginx)의 시간 제한이 먼저 끝나 화면에는 「504
+#: Gateway Time-out」 만 떴다 — 주소가 틀렸다는 까닭이 화면에 닿지 않았다(2026-11-18 운영,
+#: 코어 구독의 미리 보기). 같은 사내망의 SP 는 연결이 1초 안에 선다 — 10초면 느린 망도
+#: 넉넉하다.
+CONNECT_SECONDS = 10.0
+
+
+def unreachable(caught: httpx.HTTPError) -> str:
+    """코어 창구에 닿지 못한 까닭 — 연결이 안 선 것과 응답이 늦은 것을 사람의 말로 가른다."""
+    if isinstance(caught, httpx.ConnectTimeout):
+        return (
+            f"코어 창구에 {CONNECT_SECONDS:.0f}초 안에 연결하지 못했습니다 — 주소(호스트 · "
+            "포트)가 맞는지, 이 서버에서 그 주소로 나가는 길(방화벽)이 열려 있는지 확인하세요."
+        )
+    if isinstance(caught, httpx.ConnectError):
+        return (
+            "코어 창구에 연결하지 못했습니다 — 주소(호스트 이름 · 포트)를 확인하세요. "
+            f"까닭: {caught}"
+        )
+    if isinstance(caught, httpx.ReadTimeout):
+        return (
+            f"코어 창구가 {odata.TIMEOUT_SECONDS:.0f}초 안에 답하지 않았습니다 — 상대 설치가 "
+            "바쁘거나 멈췄을 수 있습니다. 잠시 뒤에 다시 하세요."
+        )
+    return f"코어 창구에 닿지 못했습니다: {caught}"
+
+
 def _core_client(auth: Auth, transport: httpx.BaseTransport | None) -> httpx.Client:
     return httpx.Client(
-        timeout=odata.TIMEOUT_SECONDS,
+        timeout=httpx.Timeout(odata.TIMEOUT_SECONDS, connect=CONNECT_SECONDS),
         transport=transport,
         headers={"Accept": "application/json", **auth.headers()},
         auth=auth.basic(),
@@ -230,9 +259,7 @@ def _core_pages(
                     out.next = str(current)
                     return out
     except httpx.HTTPError as caught:
-        raise AppError(
-            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
-        ) from caught
+        raise AppError(code("DATASOURCES", 38), unreachable(caught), status=502) from caught
     out.truncated = True
     out.next = str(current) if current else None
     return out
@@ -416,9 +443,7 @@ def core_catalog(
             _raise_for_core(response)
             body = _core_body(response, "/api/core")
     except httpx.HTTPError as caught:
-        raise AppError(
-            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
-        ) from caught
+        raise AppError(code("DATASOURCES", 38), unreachable(caught), status=502) from caught
     if not isinstance(body, dict) or not isinstance(body.get("types"), list):
         raise AppError(
             code("DATASOURCES", 37),
@@ -458,9 +483,7 @@ def core_definitions(
             _raise_for_core(response)
             body = _core_body(response, "/api/core/sp-definitions")
     except httpx.HTTPError as caught:
-        raise AppError(
-            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
-        ) from caught
+        raise AppError(code("DATASOURCES", 38), unreachable(caught), status=502) from caught
     if not isinstance(body, dict) or "mark" not in body:
         raise AppError(
             code("DATASOURCES", 37),

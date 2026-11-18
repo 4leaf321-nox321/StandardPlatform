@@ -39,6 +39,7 @@ from typing import Any
 
 from sqlalchemy import (
     DateTime,
+    Select,
     String,
     and_,
     cast,
@@ -335,11 +336,8 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
     if ids:
         latest_of = {
             type_id: when
-            for type_id, when in db.execute(
-                select(ObjectInstance.type_id, func.max(ObjectInstance.updated_at))
-                .where(ObjectInstance.type_id.in_(ids), visible)
-                .group_by(ObjectInstance.type_id)
-            )
+            for type_id, when in db.execute(latest_changes(ids, visible))
+            if when is not None
         }
 
     open_slugs = {one.slug for one in types}
@@ -374,6 +372,24 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
         as_of=_stamp(datetime.now(UTC)) or "",
         types=out,
     )
+
+
+def latest_changes(ids: list[uuid.UUID], visible: ColumnElement[bool]) -> Select[Any]:
+    """타입마다 **가장 늦은 수정 시각** — 한 질의로, 그러나 타입마다 색인(`type_id,
+    updated_at`)의 끝 한 줄만 읽는다.
+
+    ⚠️ `GROUP BY type_id` 의 `max(updated_at)` 으로 쓰지 않는다. PostgreSQL 은 그것을 색인의
+       끝에서 집지 못하고(묶음마다 건너뛰는 훑기가 없다) 공개 타입의 행을 **전부** 읽는다 —
+       2,000만 건 타입에서 객체 표 20GB 를 읽어 14.5초가 걸렸다(2026-11-18 규모 DB 실측).
+       카탈로그는 바깥 시스템이 처음 붙을 때와 코어 구독이 확인할 때마다(ADR 0085) 부른다.
+       타입마다의 하위 질의는 색인 끝에서 한 줄을 집어 0.2초다."""
+    found = (
+        select(func.max(ObjectInstance.updated_at))
+        .where(ObjectInstance.type_id == ObjectType.id, visible)
+        .correlate(ObjectType)
+        .scalar_subquery()
+    )
+    return select(ObjectType.id, found).where(ObjectType.id.in_(ids))
 
 
 def definitions(
