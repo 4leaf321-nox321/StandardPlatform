@@ -172,6 +172,30 @@ def quiet(db: Session, on: bool = True) -> None:
         db.info.pop(_QUIET, None)
 
 
+_STAMP = "audit_stamp"
+
+
+def stamp(db: Session, fields: dict[str, Any] | None) -> None:
+    """이 세션이 남기는 기록마다 **같은 표식**을 `changes` 에 붙인다 — 묶음 판 번호처럼
+    (`{"_run": "<판 id>"}`, ADR 0087). None 이면 뗀다.
+
+    `quiet` 와 같은 방식(세션에 매단다)이다. 인자로 들고 다니면 기록을 남기는 함수 열댓 개에
+    매개변수가 하나씩 늘고, 그중 하나를 안 넘긴 자리가 조용히 표식 없이 남는다. 표식의 키는
+    `_` 로 시작한다 — 객체 이력은 그것을 사람이 읽을 칸으로 보이지 않는다(`_batch` 와 같다).
+    """
+    if fields:
+        db.info[_STAMP] = dict(fields)
+    else:
+        db.info.pop(_STAMP, None)
+
+
+def _stamped(db: Session, changes: dict[str, Any] | None) -> dict[str, Any] | None:
+    extra = db.info.get(_STAMP)
+    if not extra:
+        return changes
+    return {**(changes or {}), **extra}
+
+
 def record(
     db: Session,
     *,
@@ -200,7 +224,7 @@ def record(
         target_id=target_id,
         target_label=target_label,
         workspace_id=workspace_id,
-        changes=changes,
+        changes=_stamped(db, changes),
         reason=reason,
     )
     entry = AuditEntry(**values)
@@ -308,7 +332,7 @@ class Batch:
             target_id=target_id,
             target_label=target_label,
             workspace_id=workspace_id,
-            changes=changes,
+            changes=_stamped(self.db, changes),
             reason=reason,
         )
         _stage(self.db, values)
@@ -361,7 +385,7 @@ def record_rows(
                 "target_id": target_id,
                 "target_label": label[:300],
                 "workspace_id": workspace_id,
-                "changes": changes,
+                "changes": _stamped(db, changes),
                 "reason": reason,
                 "request_id": request_id,
             }

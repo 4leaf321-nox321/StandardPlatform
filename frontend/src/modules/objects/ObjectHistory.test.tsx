@@ -280,3 +280,69 @@ describe('제안된 관계의 기록(ADR 0042)', () => {
     expect(screen.getAllByText(/→ ACME/).length).toBeGreaterThan(0)
   })
 })
+
+describe('변경 이력의 원천(ADR 0087)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('묶음으로 넣은 기록은 판 · 원천 실행을 적고 원천의 추적으로 잇는다', async () => {
+    objectApi.history.mockResolvedValue([
+      {
+        ...ENTRIES[2],
+        id: 'b1',
+        action: 'object.create',
+        reason: '일괄 가져오기',
+        run: {
+          id: '0f3c9a2b-1111-2222-3333-444455556666',
+          at: '2026-11-18T06:00:00Z',
+          source: 'mes',
+          label: 'part',
+          origin: {
+            system: 'datarelay',
+            pipeline: 'mes-parts',
+            run: '20261118T153000Z',
+            url: 'https://relay.example/relay/pipelines/mes-parts',
+          },
+          trace_url: 'https://relay.example/relay/pipelines/mes-parts?trace_type=part&trace_key=P-1',
+        },
+      },
+      { ...ENTRIES[0], id: 'plain' },
+    ])
+    await mount()
+    expect(await screen.findByText(/원천 datarelay · mes-parts · 실행 20261118T153000Z/)).toBeInTheDocument()
+    expect(screen.getByText(/mes 관리/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '원천에서 추적' })).toHaveAttribute(
+      'href',
+      'https://relay.example/relay/pipelines/mes-parts?trace_type=part&trace_key=P-1',
+    )
+    expect(screen.getByRole('link', { name: '실행 보기' })).toHaveAttribute(
+      'href',
+      'https://relay.example/relay/pipelines/mes-parts',
+    )
+    // 묶음이 아닌 기록에는 원천 줄이 없다.
+    expect(screen.getAllByText(/원천에서 추적|원천 정보 없음/)).toHaveLength(1)
+  })
+
+  it('원천을 싣지 않은 묶음은 그렇다고 적고 링크를 두지 않는다', async () => {
+    objectApi.history.mockResolvedValue([
+      {
+        ...ENTRIES[2],
+        id: 'b2',
+        action: 'object.create',
+        reason: '일괄 가져오기',
+        run: {
+          id: '7a7a7a7a-1111-2222-3333-444455556666',
+          at: '2026-11-18T06:00:00Z',
+          source: '',
+          label: '',
+          origin: {},
+          trace_url: null,
+        },
+      },
+    ])
+    await mount()
+    expect(await screen.findByText(/관리 시스템 없음/)).toBeInTheDocument()
+    expect(screen.getByText(/원천 정보 없음/)).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '원천에서 추적' })).toBeNull()
+    expect(screen.queryByRole('link', { name: '실행 보기' })).toBeNull()
+  })
+})

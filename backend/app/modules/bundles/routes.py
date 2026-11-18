@@ -100,6 +100,8 @@ class RunOut(BaseModel):
     actor: str
     source: str = ""
     label: str = ""
+    origin: dict[str, Any] = Field(default_factory=dict)
+    """어디서 왔나 — 원천 파이프라인의 실행(`BundleOriginIn`). 비면 직접 넣은 묶음."""
     counts: dict[str, Any] = Field(default_factory=dict)
     undoable: bool = True
     """거짓이면 되돌릴 수 없다 — 이미 되돌렸거나 보관 기간이 지나 기록을 지웠다."""
@@ -126,6 +128,7 @@ def list_runs(
             actor=one.actor_label,
             source=one.source,
             label=one.label,
+            origin=dict(one.origin or {}),
             counts=dict(one.counts or {}),
             undoable=one.undone_at is None and counted.get(one.id, 0) > 0,
             undone_at=one.undone_at,

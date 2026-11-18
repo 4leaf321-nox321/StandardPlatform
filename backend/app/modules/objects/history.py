@@ -26,6 +26,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -94,6 +95,9 @@ class Entry:
     document: dict[str, Any] | None = None
     """문서를 고친 기록(ADR 0053)이면 `{key, revision, chars, via, note}` — 값이 아니라 판이라
     그 시점의 값(되돌리기)이 없다. 옛 판은 문서의 「판 이력」 에서 연다."""
+    run: dict[str, Any] | None = None
+    """묶음 가져오기로 남은 기록이면 그 판과 원천 — `{id, at, source, label, origin,
+    trace_url}`(ADR 0087)."""
 
 
 def _workspace_names(db: Session, rows: list[AuditEntry]) -> dict[str, str]:
@@ -208,6 +212,7 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
     running: dict[str, Any] = audit_state(row)
     workspaces = _workspace_names(db, rows)
     hidden = _hidden_ends(db, viewer, rows)
+    runs = _runs_of(db, row, rows)
     out: list[Entry] = []
     for entry in reversed(rows):
         is_object = entry.target_table == "objects"
@@ -227,6 +232,7 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
                         name: changes.get(name)
                         for name in ("key", "revision", "chars", "via", "note")
                     },
+                    run=runs.get(str(changes.get("_run") or "")),
                 )
             )
             continue
@@ -278,8 +284,48 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
                 relation=relation,
                 snapshot=snapshot,
                 batch=_batch_of(changes) if is_object else None,
+                run=runs.get(str(changes.get("_run") or "")),
             )
         )
+    return out
+
+
+def _runs_of(
+    db: Session, row: ObjectInstance, rows: list[AuditEntry]
+) -> dict[str, dict[str, Any]]:
+    """기록에 찍힌 묶음 판(`_run`, `bundles/journal.start`)과 그 원천 — 판 id → 이력에 실을 것.
+
+    원천이 객체 하나의 출처를 보는 주소의 틀(`origin.trace`)을 줬으면 `{type}` · `{key}` 를 이
+    객체로 채워 둔다 — 이력의 한 줄이 원천의 추적으로 바로 간다. 30일 뒤 지워지는 것은 판의
+    되돌릴 줄뿐이고(`jobs/files.purge_old_undo_journals`) 판 · 원천은 남는다."""
+    from app.modules.bundles.models import BundleRun
+    from app.modules.ontology.models import ObjectType
+
+    wanted: set[uuid.UUID] = set()
+    for entry in rows:
+        raw = (entry.changes or {}).get("_run")
+        with contextlib.suppress(ValueError, TypeError):
+            wanted.add(uuid.UUID(str(raw)))
+    if not wanted:
+        return {}
+    type_slug = db.scalar(select(ObjectType.slug).where(ObjectType.id == row.type_id)) or ""
+    out: dict[str, dict[str, Any]] = {}
+    for run in db.scalars(select(BundleRun).where(BundleRun.id.in_(wanted))):
+        origin = dict(run.origin or {})
+        template = str(origin.get("trace") or "")
+        trace_url = None
+        if template and row.key:
+            trace_url = template.replace("{type}", quote(type_slug, safe="")).replace(
+                "{key}", quote(row.key, safe="")
+            )
+        out[str(run.id)] = {
+            "id": run.id,
+            "at": run.at,
+            "source": run.source,
+            "label": run.label,
+            "origin": origin,
+            "trace_url": trace_url,
+        }
     return out
 
 

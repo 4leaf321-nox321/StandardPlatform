@@ -377,7 +377,13 @@ def _snapshot_world(
             for one in rows
         ),
         "audit": [
-            (one.action, plain(one.target_id), plain(one.target_label), plain(one.changes))
+            # 판 번호(`_run`, ADR 0087)는 적용마다 새로 선다 — 두 길이 같은 판을 쓸 수 없다.
+            (
+                one.action,
+                plain(one.target_id),
+                plain(one.target_label),
+                plain({k: v for k, v in (one.changes or {}).items() if k != "_run"}),
+            )
             for one in logged
         ],
         "undo": [

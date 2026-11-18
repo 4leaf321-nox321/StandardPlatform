@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
-from app.shared import copyin
+from app.shared import audit, copyin
 
 _KEY = "bundle_journal"
 
@@ -38,18 +38,30 @@ class _Open:
     개고, 세션이 이미 그것을 들고 있다(`db.add`)."""
 
 
-def start(db: Session, user: User, *, source: str = "", label: str = "") -> uuid.UUID:
-    """이 세션의 쓰기를 **한 판으로 묶는다.** 판 번호를 돌려준다."""
+def start(
+    db: Session,
+    user: User,
+    *,
+    source: str = "",
+    label: str = "",
+    origin: dict[str, Any] | None = None,
+) -> uuid.UUID:
+    """이 세션의 쓰기를 **한 판으로 묶는다.** 판 번호를 돌려준다.
+
+    판이 열린 동안 남는 감사 기록마다 판 번호(`_run`)를 찍는다(`audit.stamp`) — 객체 이력이
+    「어느 판 · 어느 원천 실행에서 왔나」 를 말하게(ADR 0087). `origin` 은 묶음의 원천 실행."""
     run = BundleRun(
         id=uuid.uuid4(),
         actor_id=user.id,
         actor_label=(user.display_name or user.email)[:200],
         source=source[:100],
         label=label[:300],
+        origin=dict(origin or {}),
         counts={},
     )
     db.add(run)
     db.info[_KEY] = _Open(run_id=run.id)
+    audit.stamp(db, {"_run": str(run.id)})
     return run.id
 
 
@@ -62,6 +74,7 @@ def finish(db: Session, *, counts: dict[str, Any], label: str = "") -> uuid.UUID
     """판을 닫고 **무엇이 몇 건이었나**를 적는다. 적은 줄이 없으면 판도 남기지 않는다 —
     아무것도 안 바뀐 판이 목록에 쌓이면 되돌릴 판을 그 사이에서 찾게 된다."""
     state = db.info.pop(_KEY, None)
+    audit.stamp(db, None)
     if not isinstance(state, _Open):
         return None
     # **세션의 새것부터 찾는다** — 이 세션은 스스로 flush 하지 않아(`autoflush=False`),
@@ -86,8 +99,10 @@ def finish(db: Session, *, counts: dict[str, Any], label: str = "") -> uuid.UUID
 
 
 def drop(db: Session) -> None:
-    """롤백하는 길 — 판을 세션에서 떼기만 한다(줄은 롤백이 가져간다)."""
+    """롤백하는 길 — 판을 세션에서 떼기만 한다(줄은 롤백이 가져간다). 판 번호 표식도 뗀다 —
+    안 떼면 같은 세션의 다음 기록이 없는 판을 가리킨다."""
     db.info.pop(_KEY, None)
+    audit.stamp(db, None)
 
 
 def created(db: Session, table: str, target_id: uuid.UUID, *, label: str = "") -> None:

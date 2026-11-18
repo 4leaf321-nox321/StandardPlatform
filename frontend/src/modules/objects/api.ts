@@ -415,6 +415,18 @@ export interface HistoryEntry {
   snapshot: Snapshot | null
   /** 일괄 수정으로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다. */
   batch?: { id: string; field_label: string; size: number } | null
+  /**
+   * 묶음 가져오기로 남은 기록이면 그 판과 원천(ADR 0087) — 어느 시스템의 어느 실행에서 왔나, 이 객체의
+   * 출처를 원천에서 거꾸로 보는 주소(`trace_url`).
+   */
+  run?: {
+    id: string
+    at: string
+    source: string
+    label: string
+    origin: { system?: string; pipeline?: string; run?: string; url?: string; trace?: string }
+    trace_url: string | null
+  } | null
   /** 문서를 고친 기록(ADR 0053) — 값이 아니라 판이라 그 시점의 값이 없다. */
   document?: {
     key: string

@@ -735,6 +735,22 @@ class HistoryBatchOut(BaseModel):
     """그때 같이 바뀐 행 수."""
 
 
+class HistoryRunOut(BaseModel):
+    """이 기록을 남긴 **묶음 판**과 그 원천(ADR 0087)."""
+
+    id: uuid.UUID
+    """묶음 판 번호 — 그 판을 통째로 되돌리는 자리(`POST /bundles/runs/{id}/undo`)."""
+    at: datetime
+    source: str = ""
+    """그 묶음의 관리 이름(잠금) — 비면 잠금 없이 넣었다."""
+    label: str = ""
+    origin: dict[str, Any] = Field(default_factory=dict)
+    """원천 파이프라인의 실행 `{system, pipeline, run, url, trace}` — 비면 직접 넣은 묶음."""
+    trace_url: str | None = None
+    """이 객체 하나의 출처를 원천에서 거꾸로 보는 주소 — `origin.trace` 의 `{type}` ·
+    `{key}` 를 채운 것. 식별자가 없거나 원천이 틀을 안 줬으면 없다."""
+
+
 class HistoryEntryOut(BaseModel):
     id: uuid.UUID
     at: datetime
@@ -750,6 +766,8 @@ class HistoryEntryOut(BaseModel):
     """값 기록에만 있다. 되돌리기의 목표."""
     batch: HistoryBatchOut | None = None
     """여럿 골라 고치기로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다."""
+    run: HistoryRunOut | None = None
+    """묶음 가져오기로 남은 기록이면 그 판과 원천(어느 시스템의 어느 실행에서 왔나)."""
     document: dict[str, Any] | None = None
     """문서를 고친 기록(ADR 0053)이면 `{key, revision, chars, via, note}` — 되돌리기는 문서의
     판 이력에서."""

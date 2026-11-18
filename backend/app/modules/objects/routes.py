@@ -126,6 +126,7 @@ from app.modules.objects.schemas import (
     GroupOptionOut,
     HistoryBatchOut,
     HistoryEntryOut,
+    HistoryRunOut,
     HomeMetricOut,
     HomeWidgetOut,
     ImportPlanOut,
@@ -3894,6 +3895,7 @@ def object_history(
             snapshot=SnapshotOut(**vars(one.snapshot)) if one.snapshot else None,
             batch=HistoryBatchOut(**one.batch) if one.batch else None,
             document=one.document,
+            run=HistoryRunOut(**one.run) if one.run else None,
         )
         for one in history.history_of(db, row, viewer=user)
     ]

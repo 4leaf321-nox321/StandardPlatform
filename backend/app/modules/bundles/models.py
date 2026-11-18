@@ -58,6 +58,9 @@ class BundleRun(Base):
     """허브에서 받은 묶음이면 그 출처. 빈 값이면 이 설치에서 만든 묶음이다."""
     label: Mapped[str] = mapped_column(String(300), default="")
     """무엇이 들어갔나 — 타입 slug 들. 목록에서 사람이 이 판을 알아보는 줄이다."""
+    origin: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """**어디서 왔나** — 원천 파이프라인의 실행 `{system, pipeline, run, url, trace}`(묶음의
+    `origin`, ADR 0087). 비면 이 설치 · 허브에서 직접 넣은 묶음이다."""
     counts: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     undone_by_id: Mapped[uuid.UUID | None] = mapped_column(

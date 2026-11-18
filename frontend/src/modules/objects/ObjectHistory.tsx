@@ -262,6 +262,7 @@ export function ObjectHistory({
                     <ChevronRight className="text-muted-foreground mt-1 size-4 shrink-0" />
                   )}
                 </button>
+                {one.run && <RunLine run={one.run} />}
               </li>
             )
           })}
@@ -474,5 +475,37 @@ function SnapshotDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * 이 기록을 남긴 **묶음 판과 원천**(ADR 0087) — 어느 시스템의 어느 실행에서 왔나, 그리고 이 객체 하나의
+ * 출처를 원천에서 거꾸로 보는 링크. 한 줄 단추 안에는 링크를 둘 수 없어 그 아래에 따로 선다.
+ */
+function RunLine({ run }: { run: NonNullable<HistoryEntry['run']> }) {
+  const origin = run.origin ?? {}
+  const parts = [origin.system, origin.pipeline, origin.run ? `실행 ${origin.run}` : ''].filter(Boolean)
+  return (
+    <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-0.5 pb-2 pl-[9.5rem] pr-3 text-xs">
+      <span>
+        일괄 가져오기 <span className="font-mono">{run.id.slice(0, 8)}</span>
+        {run.source ? ` · ${run.source} 관리` : ' · 관리 시스템 없음'}
+      </span>
+      {parts.length > 0 ? (
+        <span>· 원천 {parts.join(' · ')}</span>
+      ) : (
+        <span>· 원천 정보 없음</span>
+      )}
+      {run.trace_url && (
+        <a className="text-primary underline" href={run.trace_url} target="_blank" rel="noreferrer">
+          원천에서 추적
+        </a>
+      )}
+      {origin.url && (
+        <a className="text-primary underline" href={origin.url} target="_blank" rel="noreferrer">
+          실행 보기
+        </a>
+      )}
+    </div>
   )
 }

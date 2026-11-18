@@ -134,7 +134,13 @@ def run(
             # **넣으면서 되돌릴 것을 적는다.** 미리 보기에는 안 켠다(아무것도 안 바뀐다).
             # 백필은 `audit="summary"` 로 도니 줄마다의 감사 기록으로는 되돌릴 수 없다 —
             # 그것이 이 기록이 따로 있는 이유다.
-            journal.start(db, user, source=bundle.source, label=_label_of(bundle))
+            journal.start(
+                db,
+                user,
+                source=bundle.source,
+                label=_label_of(bundle),
+                origin=bundle.origin.model_dump() if bundle.origin else None,
+            )
         _stages(db, user, bundle, outcome, max_rows=max_rows, on_progress=on_progress)
         if bundle.apply and outcome.ok and before_commit is not None:
             before_commit(outcome)

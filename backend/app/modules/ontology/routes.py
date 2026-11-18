@@ -3125,7 +3125,15 @@ def build_from_inferred(
 @router.post("/import", response_model=ImportPlanOut)
 def import_schema(
     payload: dict[str, Any],
+    request: Request,
     dry_run: bool = Query(default=True, description="적용하지 않고 계획만 본다"),
+    source: str = Query(
+        default="",
+        pattern=r"^([a-z][a-z0-9_-]{0,39})?$",
+        description="이 정의를 관리하는 원천의 이름(`managed_by`) — 적으면 이 가져오기가 "
+        "세우는 타입 · 관계 종류 · 인터페이스가 그 원천의 것으로 잠긴다(묶음 가져오기의 "
+        "`source` 와 같다)",
+    ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> ImportPlanOut:
@@ -3144,7 +3152,9 @@ def import_schema(
     snapshot = None if dry_run else _snapshot(db, user, reason="가져오기")
     try:
         prepared = (
-            importer.plan(db, payload) if dry_run else importer.apply(db, payload, actor=user)
+            importer.plan(db, payload, source=source)
+            if dry_run
+            else importer.apply(db, payload, source=source, actor=user)
         )
     except ValueError as caught:
         # **모르는 항목은 거절한다.** 조용히 무시하면 보낸 쪽은 적용된 줄 안다.
@@ -3154,7 +3164,9 @@ def import_schema(
     if snapshot is None or prepared.errors:
         # 오류가 하나라도 있으면 **아무것도 안 바꾼다**(남긴 스냅샷도 함께 되돌린다).
         db.rollback()
-        return _plan_out(prepared, applied=False, snapshot_id=None)
+        return _unlocked(
+            request, source, prepared, _plan_out(prepared, applied=False, snapshot_id=None)
+        )
 
     _audit(
         db,
@@ -3165,7 +3177,37 @@ def import_schema(
         label=f"{len([c for c in prepared.changes if c.action != 'unchanged'])}건",
     )
     db.commit()
-    return _plan_out(prepared, applied=True, snapshot_id=snapshot.id)
+    return _unlocked(
+        request, source, prepared, _plan_out(prepared, applied=True, snapshot_id=snapshot.id)
+    )
+
+
+#: 원천 잠금 없이 새 정의를 세운다는 경고 — 기계(토큰)가 부를 때만(ADR 0087).
+UNLOCKED_WARNING = (
+    "source 없이 새 정의({names})를 생성합니다 — 원천 잠금(managed_by)이 없어 화면 · 파일 · "
+    "MCP 로 누구나 수정할 수 있고, 원천이 다시 적재하면 사람이 수정한 값을 덮어씁니다. 원천 "
+    "시스템이 관리하는 정의면 source=<원천 이름>(묶음 가져오기의 source · 원천이 적재할 때 "
+    "쓰는 이름과 같게)으로 다시 보내세요. 이 설치에서 직접 관리할 정의면 그대로 두어도 됩니다."
+)
+
+
+def _unlocked(
+    request: Request, source: str, prepared: importer.Plan, out: ImportPlanOut
+) -> ImportPlanOut:
+    """**잠금 없이 새 정의를 세우면 말한다** — 원천(datarelay · 허브)의 정의를 안내대로 이 길로
+    넣으면 잠금 없는 타입이 생겼다(운영 지적, 2026-11-18). 기계(토큰)가 부를 때만 — 화면에서
+    사람이 자기 정의를 만드는 것까지 경고하면 그 경고는 곧 안 읽힌다."""
+    if source or getattr(request.state, "token_scopes", None) is None:
+        return out
+    made = [
+        one.slug
+        for one in prepared.changes
+        if one.action == "create" and one.kind in ("type", "relation_type", "interface")
+    ]
+    if made:
+        shown = ", ".join(made[:5]) + (f" 외 {len(made) - 5}개" if len(made) > 5 else "")
+        out.warnings.append(UNLOCKED_WARNING.format(names=shown))
+    return out
 
 
 @router.get("/delete-plan", response_model=DeletePlanOut)

@@ -7695,6 +7695,19 @@
               "title": "Dry Run"
             },
             "description": "적용하지 않고 계획만 본다"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^([a-z][a-z0-9_-]{0,39})?$",
+              "description": "이 정의를 관리하는 원천의 이름(`managed_by`) — 적으면 이 가져오기가 세우는 타입 · 관계 종류 · 인터페이스가 그 원천의 것으로 잠긴다(묶음 가져오기의 `source` 와 같다)",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "이 정의를 관리하는 원천의 이름(`managed_by`) — 적으면 이 가져오기가 세우는 타입 · 관계 종류 · 인터페이스가 그 원천의 것으로 잠긴다(묶음 가져오기의 `source` 와 같다)"
           }
         ],
         "requestBody": {
@@ -27793,6 +27806,16 @@
             "title": "Source",
             "default": ""
           },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BundleOriginIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "apply": {
             "type": "boolean",
             "title": "Apply",
@@ -27846,6 +27869,46 @@
         },
         "type": "object",
         "title": "BundleIn"
+      },
+      "BundleOriginIn": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "System"
+          },
+          "pipeline": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Pipeline",
+            "default": ""
+          },
+          "run": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Run",
+            "default": ""
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Url",
+            "default": ""
+          },
+          "trace": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Trace",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "system"
+        ],
+        "title": "BundleOriginIn",
+        "description": "**이 묶음이 어디서 왔나** — 원천 파이프라인의 실행(datarelay 등). 묶음 판에 남고, 그\n판이 넣은 객체의 이력이 이것을 보이며 원천의 추적으로 링크한다(ADR 0087).\n\n예전에는 객체 이력에 「시스템 관리자 · 일괄 가져오기」 만 남아, 어느 원천의 어느 실행에서\n왔는지는 원천 쪽 추적에서만 볼 수 있었다."
       },
       "CalcClusterMembersOut": {
         "properties": {
@@ -38322,6 +38385,16 @@
               }
             ]
           },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "document": {
             "anyOf": [
               {
@@ -38383,6 +38456,53 @@
           "changed_by_label"
         ],
         "title": "HistoryOut"
+      },
+      "HistoryRunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": ""
+          },
+          "origin": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Origin"
+          },
+          "trace_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at"
+        ],
+        "title": "HistoryRunOut",
+        "description": "이 기록을 남긴 **묶음 판**과 그 원천(ADR 0087)."
       },
       "HomeMetricOut": {
         "properties": {
@@ -62258,6 +62378,11 @@
             "type": "string",
             "title": "Label",
             "default": ""
+          },
+          "origin": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Origin"
           },
           "counts": {
             "additionalProperties": true,

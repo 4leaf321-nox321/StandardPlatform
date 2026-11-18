@@ -1124,12 +1124,20 @@ async def ontology_import(
     ctx: Context,
     schema: dict[str, Any],
     apply: bool = False,
+    source: str = "",
 ) -> Any:
     """정의를 통째로 **한 트랜잭션으로** 적용한다.
 
     `apply=False`(기본)면 **아무것도 안 바꾸고** 계획만 돌려준다 — 무엇이 새로
     생기고, 무엇이 바뀌고, **무엇을 조용히 잃는지**(경고). 사람이 그 계획을 읽고
     판단할 자리다.
+
+    **원천이 관리하는 정의면 `source` 를 적는다**(원천 잠금 — `managed_by`). 원천 시스템(PLM ·
+    MES · datarelay 파이프라인 · 허브)이 데이터를 넣는 타입이면 `source="<원천 이름>"` — 그
+    원천이 적재할 때 쓰는 이름(묶음의 `source` · 데이터 소스의 출처 이름)과 같게. 그러면 그
+    타입은 화면 · 파일 · MCP 로 고칠 수 없고 그 원천만 고친다. **안 적으면 잠금이 없다** —
+    누구나 고치고, 원천이 다시 넣을 때 사람이 고친 값을 덮는다(계획의 경고가 그렇다고 말한다).
+    이 설치가 직접 관리할 정의면 비운다. 자세한 것은 `get_guide("schema")` 의 「원천 잠금」.
 
     더하고 고치기만 한다. **스키마에 없다고 지우지 않는다.** 여러 타입이 같은 개념이면
     `interfaces` 에 공통 속성을 적고 타입이 `interface_slugs` 로 구현한다 — 모양이 다른
@@ -1155,12 +1163,10 @@ async def ontology_import(
     키>"`(개정 칸 — 글자 · 고르기 · 숫자, 값 하나)가 바뀔 때만 파생물이 낡는다(없으면 수정
     시각으로 — 이름만 고쳐도 낡음). 개정 칸인 속성은 지우거나 종류를 못 바꾼다.
     자세한 것은 `get_guide("schema")`."""
-    return await _post(
-        ctx,
-        "/api/ontology/import",
-        schema,
-        params={"dry_run": "false" if apply else "true"},
-    )
+    params = {"dry_run": "false" if apply else "true"}
+    if source:
+        params["source"] = source
+    return await _post(ctx, "/api/ontology/import", schema, params=params)
 
 
 @tool()
@@ -2281,7 +2287,9 @@ async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
     """객체의 **변경 이력** — 최근 것이 앞. 언제·누가·어느 칸을 전→후, 관계를 맺고 끊은 것.
 
     값 기록에는 `snapshot`(그 시점의 값 전체)이 붙는다. 되돌리기는 `object_restore(entry_id)` —
-    **어느 시점으로 갈지는 사람이 정한다**(저장과 같은 검증을 거친다)."""
+    **어느 시점으로 갈지는 사람이 정한다**(저장과 같은 검증을 거친다). 묶음 가져오기로 남은
+    기록에는 `run`(그 묶음 판 · 관리 이름 · 원천의 실행 `origin` · 이 객체의 출처를 원천에서
+    보는 `trace_url`)이 붙는다 — 「어디서 왔나」 는 이것으로 답한다."""
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/history")
 
 
@@ -3366,6 +3374,13 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
     행은 `objects_import` · `relations_import` 와 같다. `objects` 는 **적은 차례대로**
     넣는다 — 참조하는 타입을 뒤에. 정의가 들면 시스템 관리자와 `ontology:write`
     범위가 필요하다.
+
+    **원천 잠금은 `"source": "<원천 이름>"`** — 이 묶음이 세우는 타입 · 관계 종류가 그 원천의
+    것으로 잠기고(`managed_by`), 그 뒤로 그 원천의 묶음만 고친다(화면 · 파일 · MCP 는 409).
+    원천이 데이터를 넣는 정의면 적고, 이 설치가 직접 관리할 정의면 비운다. **어디서 왔나는
+    `"origin"`** — `{"system": "datarelay", "pipeline": "<이름>", "run": "<실행 번호>",
+    "url": "<실행 화면>", "trace": "<…?type={type}&key={key}>"}`. 묶음 판과 그 판이 넣은
+    객체의 이력에 남고 원천의 추적으로 링크된다(잠금과 달리 기록일 뿐이다).
 
     **백필(한꺼번에 많이)** 이면 묶음에 칸 넷을 더 적는다 — 서버가 받는다.
     `preview: "plan"`(적용을 두 번 안 돈다) · `events: "summary"` · `audit: "summary"`

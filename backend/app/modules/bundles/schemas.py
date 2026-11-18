@@ -11,7 +11,7 @@ import uuid
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
 from app.modules.ontology.schemas import ImportPlanOut as SchemaPlanOut
@@ -73,6 +73,35 @@ class TombstonesIn(BaseModel):
     relations: list[RelationTombstoneIn] = Field(default_factory=list)
 
 
+class BundleOriginIn(BaseModel):
+    """**이 묶음이 어디서 왔나** — 원천 파이프라인의 실행(datarelay 등). 묶음 판에 남고, 그
+    판이 넣은 객체의 이력이 이것을 보이며 원천의 추적으로 링크한다(ADR 0087).
+
+    예전에는 객체 이력에 「시스템 관리자 · 일괄 가져오기」 만 남아, 어느 원천의 어느 실행에서
+    왔는지는 원천 쪽 추적에서만 볼 수 있었다."""
+
+    system: str = Field(min_length=1, max_length=100)
+    """원천을 돌린 시스템의 이름(`datarelay`)."""
+    pipeline: str = Field(default="", max_length=100)
+    """그 시스템의 파이프라인 · 작업 이름(`mes-parts`)."""
+    run: str = Field(default="", max_length=200)
+    """그 실행의 번호(`20261118T153000123456Z`)."""
+    url: str = Field(default="", max_length=500)
+    """그 실행 · 파이프라인을 보는 화면 주소(`http(s)://` 만)."""
+    trace: str = Field(default="", max_length=500)
+    """객체 하나의 출처를 거꾸로 보는 화면 주소의 **틀** — `{type}` · `{key}` 를 객체의 타입
+    slug · 식별자로 바꿔 링크한다(`http(s)://` 만)."""
+
+    @field_validator("url", "trace")
+    @classmethod
+    def _web(cls, value: str) -> str:
+        value = value.strip()
+        if value and not value.lower().startswith(("http://", "https://")):
+            # 화면이 링크로 그린다 — `javascript:` 같은 것이 들어오면 누르는 순간 실행된다.
+            raise ValueError("주소는 http:// 또는 https:// 로 시작해야 합니다")
+        return value
+
+
 class BundleIn(BaseModel):
     ontology: dict[str, Any] | None = None
     """`ontology/import` 와 같은 스키마. 없으면 정의는 안 건드린다."""
@@ -89,6 +118,10 @@ class BundleIn(BaseModel):
 
     적지 않으면(기본) 허브가 관리하는 것은 **막힌다** — 받는 쪽에서 고친 값은 다음 받기가
     덮어쓰고, 그 사실은 고친 사람에게 안 보이기 때문이다."""
+    origin: BundleOriginIn | None = None
+    """**어디서 왔나** — 원천 파이프라인의 실행(`BundleOriginIn`). 묶음 판과 그 판이 넣은
+    객체의 이력에 남는다. `source`(누가 관리하나 — 잠금)와 다르다: 이것은 기록이고 권한을
+    바꾸지 않는다."""
     apply: bool = False
     """거짓(기본)이면 아무것도 저장하지 않고 한 번에 미리 본다."""
     preview: Literal["full", "plan"] = "full"
