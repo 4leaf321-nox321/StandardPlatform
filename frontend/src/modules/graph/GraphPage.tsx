@@ -71,6 +71,7 @@ import type { MapSelection } from '@/modules/graph/MapView'
 import { prepareWhole } from '@/modules/graph/wholeData'
 import { WholeRefusal } from '@/modules/graph/WholeRefusal'
 import { objectApi } from '@/modules/objects/api'
+import { refNames } from '@/modules/objects/names'
 import type { LogCount, ObjectRow, RelatedObject } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -2230,7 +2231,7 @@ function NodeDetail({
       .map((def) => ({
         key: def.key,
         label: def.label,
-        text: propertyText(def, data.object.properties[def.key], data.object.ref_labels),
+        text: propertyText(def, data.object.properties[def.key], refNames(data.object)),
       }))
       .filter((one) => one.text !== '—')
       .slice(0, DETAIL_PROPERTIES)

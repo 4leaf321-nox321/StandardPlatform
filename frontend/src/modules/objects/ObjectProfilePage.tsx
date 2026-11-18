@@ -26,7 +26,7 @@ import { inLineage } from '@/modules/objects/lineage'
 import { UsedInSlides } from '@/modules/slides/UsedInSlides'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
-import { shownName } from '@/modules/objects/names'
+import { refNames, shownName } from '@/modules/objects/names'
 import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyValues } from '@/modules/objects/PropertyFields'
 import { ObjectDeleteDialog } from '@/modules/objects/ObjectDeleteDialog'
@@ -329,7 +329,7 @@ function ObjectProfile() {
               <ReadOnlyProperties
                 defs={valueDefs}
                 values={row.properties}
-                refLabels={row.ref_labels}
+                refLabels={refNames(row)}
                 note={row.description}
                 view={objectType?.detail_view}
               />
@@ -494,7 +494,7 @@ function ObjectProfile() {
                 valid_from_year: row.valid_from_year,
                 valid_to_year: row.valid_to_year,
               }}
-              refLabels={row.ref_labels}
+              refLabels={refNames(row)}
               canEdit={profile.data.can_edit}
               onRestored={profile.reload}
               reloadKey={profile.data}

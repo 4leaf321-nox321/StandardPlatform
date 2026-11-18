@@ -27,6 +27,10 @@ class ObjectOut(BaseModel):
     description: str
     properties: dict[str, Any]
     ref_labels: dict[str, str] = Field(default_factory=dict)
+    ref_display_labels: dict[str, str] = Field(default_factory=dict)
+    """참조 칸이 가리키는 것의 **보여 줄 이름**(앞머리 + 이름, ADR 0088) — `ref_labels` 와
+    **다른 것만**(앞머리를 쓰는 타입의 객체). 화면 · 사람에게 말할 때는 이것을 먼저, 없으면
+    `ref_labels`. 견주기 · 찾기는 `ref_labels`(이름 그대로)."""
     aliases: list[str] = Field(default_factory=list)
     """사람이 붙인 다른 이름. 찾기·참조 풀이·파일이 이것으로도 찾는다."""
     external_ids: dict[str, str] = Field(default_factory=dict)

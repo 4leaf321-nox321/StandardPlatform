@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-19a
+GUIDE_VERSION: 2026-11-19b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -301,9 +301,10 @@ GUIDE_VERSION: 2026-11-19a
   아래 차례는 `tree.sort: ["properties.section_no"]`, 이름 앞에 붙일 값(앞머리)은 타입의
   `"label_prefix": "properties.section_no"`. 이름은 「측정 방법」 만 — 이름으로 찾기 · 별칭이 번호에
   묶이지 않는다.
-- 그러면 목록 · 상세 · 참조 칸(`ref_labels`) · 관계 목록(`object_display_label`) · 검색 · 검토함 ·
-  트리의 응답에 **`display_label`**(「3.2 측정 방법」)이 온다. 사람에게는 그것으로 말하고, 찾기 ·
-  수정 · `object_resolve` 에는 `label`(「측정 방법」)을 쓴다.
+- 그러면 목록 · 상세 · 관계 목록(`object_display_label`) · 검색 · 검토함 · 트리의 응답에
+  **`display_label`**(「3.2 측정 방법」)이 오고, 참조 칸이 가리키는 것은 `ref_display_labels`(이름과 다른
+  것만 — `ref_labels` 는 이름 그대로)에 온다. 사람에게는 보여 줄 이름으로 말하고, 찾기 · 수정 ·
+  `object_resolve` 에는 이름(「측정 방법」)을 쓴다.
 
 ### 유효 기간 — 관계 종류의 `effectivity`(ADR 0039)
 

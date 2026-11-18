@@ -44928,6 +44928,13 @@
             "type": "object",
             "title": "Ref Labels"
           },
+          "ref_display_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ref Display Labels"
+          },
           "aliases": {
             "items": {
               "type": "string"

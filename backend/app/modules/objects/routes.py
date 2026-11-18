@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from fastapi import (
     APIRouter,
@@ -331,24 +331,36 @@ def _workspace_slugs(db: Session) -> dict[uuid.UUID, Workspace]:
     return {row.id: row for row in db.scalars(select(Workspace))}
 
 
+class _RefNames(NamedTuple):
+    """참조 칸이 가리키는 것의 이름 — `names` 는 이름 그대로(기계가 견주는 값), `shown` 은
+    보여 줄 이름(앞머리 + 이름, ADR 0088)이 **이름과 다른 것만**."""
+
+    names: dict[uuid.UUID, str]
+    shown: dict[uuid.UUID, str]
+
+
 def _ref_labels(
     db: Session, user: User, defs: list[PropertyDef], rows: list[ObjectInstance]
-) -> dict[uuid.UUID, str]:
+) -> _RefNames:
     """이 목록이 가리키는 객체들의 이름을 **한 번에** 읽는다.
 
     행마다 물으면 목록 한 쪽에 질의가 수십 개 붙는다. 어느 키가 참조인지는
     속성 정의가 알므로, 아무 문자열이나 uuid 로 넘겨짚지 않는다. 상대가 system
     타입이면 원 표에서 읽는다 — `system.ref_labels` 가 가른다. 보는 사람이 못 보는
     객체는 이름을 가린다(`system.HIDDEN_LABEL`).
+
+    **`ref_labels` 는 이름 그대로 둔다** — 바깥 시스템(datarelay 의 대조)이 원천의 이름과
+    견준다. 0.4.97 은 여기에 앞머리를 붙여 「측정 방법」 과 「3.2 측정 방법」 이 갈렸다. 화면이
+    쓸 보여 줄 이름은 따로(`ref_display_labels`) 싣는다.
     """
     found = system.ref_labels(db, defs, [row.properties or {} for row in rows], viewer=user)
-    # 참조 링크도 보여 줄 이름으로(ADR 0088) — 가린 것 · 지워진 것은 그대로 둔다.
+    # 가린 것 · 지워진 것은 앞머리를 붙이지 않는다.
     live = [
         one
         for one, label in found.items()
         if label != system.HIDDEN_LABEL and not label.endswith(" (지워짐)")
     ]
-    return {**found, **display.labels_for_ids(db, user, live)}
+    return _RefNames(found, display.labels_for_ids(db, user, live))
 
 
 def _own_ref_labels(
@@ -381,7 +393,7 @@ def _out(
     row: ObjectInstance,
     type_slug: str,
     workspaces: dict[uuid.UUID, Workspace],
-    ref_labels: dict[uuid.UUID, str] | None = None,
+    ref_labels: _RefNames | None = None,
     alias_rows: list[ObjectAlias] | None = None,
     *,
     shown: dict[uuid.UUID, str],
@@ -405,7 +417,8 @@ def _out(
         display_label=shown.get(row.id, row.label),
         description=row.description,
         properties=row.properties or {},
-        ref_labels=_own_ref_labels(row, ref_labels),
+        ref_labels=_own_ref_labels(row, ref_labels.names if ref_labels else None),
+        ref_display_labels=_own_ref_labels(row, ref_labels.shown if ref_labels else None),
         aliases=names,
         external_ids=external,
         status=row.status,

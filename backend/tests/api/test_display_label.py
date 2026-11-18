@@ -2,7 +2,8 @@
 
 - 타입의 `label_prefix`(칸 하나 — 속성 · 기본 칸, 파일 · 문서 칸과 이름 자신은 안 된다)로
   정한 칸의 값을 이름 앞에 붙인 `display_label` 이 목록 · 상세 · 참조 링크 · 관계 목록 · 검색 ·
-  검토함 · 트리에 실린다. 이름(`label`)은 그대로다.
+  검토함 · 트리에 실린다. 이름(`label`)은 그대로다. 참조 칸의 이름 표(`ref_labels`)도 이름
+  그대로고, 보여 줄 이름은 `ref_display_labels` 에 따로(0.4.98).
 - 옛 자리(`list_view.tree.prefix`, 0.4.95)로 보낸 앞머리는 타입의 앞머리로 옮겨 받는다.
 - 다른 설치로 보내는 정의는 비어 있는 앞머리를 싣지 않는다(옛 받는 쪽이 모르는 칸을 거절한다).
 - 속성을 지우면 앞머리에서 걷는다.
@@ -145,9 +146,18 @@ def test_참조_링크와_검토함도_보여_줄_이름이다(client: TestClien
         client, admin, doc, label="시험 절차서", properties={"main": first["id"]}
     )
     listed = client.get(f"/api/objects/{doc}", headers=admin.headers).json()["items"]
-    assert {one["id"]: one["ref_labels"] for one in listed}[paper["id"]] == {
-        first["id"]: "1.1 개요"
-    }
+    mine = next(one for one in listed if one["id"] == paper["id"])
+    # **이름 표는 이름 그대로** — 바깥 시스템(datarelay 의 대조)이 원천의 이름과 견준다.
+    # 보여 줄 이름은 따로, 이름과 다른 것만.
+    assert mine["ref_labels"] == {first["id"]: "개요"}
+    assert mine["ref_display_labels"] == {first["id"]: "1.1 개요"}
+    detail = client.get(f"/api/objects/{doc}/{paper['id']}", headers=admin.headers).json()
+    assert detail["object"]["ref_labels"] == {first["id"]: "개요"}
+    assert detail["object"]["ref_display_labels"] == {first["id"]: "1.1 개요"}
+    # 앞머리를 안 쓰는 상대면 보여 줄 이름 표가 빈다.
+    note = _make_object(client, admin, doc, label="메모")
+    other = _make_object(client, admin, doc, label="참고", properties={"main": None})
+    assert other["ref_display_labels"] == {} and note["ref_display_labels"] == {}
 
     # 병합 후보 — 이름이 같아 모인 두 절을 앞머리가 가른다.
     page = client.get(

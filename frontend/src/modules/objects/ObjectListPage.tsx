@@ -17,7 +17,7 @@ import type { OntologySchema } from '@/modules/ontology/api'
 import { workspaceApi } from '@/modules/workspaces/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
-import { shownName } from '@/modules/objects/names'
+import { refNames, shownName } from '@/modules/objects/names'
 import type {
   Condition,
   FileCell,
@@ -135,7 +135,7 @@ function buildColumns(type: ObjectType, defs: PropertyDef[]): Column[] {
         return {
           id,
           label: def.label,
-          render: (row) => propertyText(def, row.properties[key], row.ref_labels),
+          render: (row) => propertyText(def, row.properties[key], refNames(row)),
         }
       }
       return null
@@ -416,7 +416,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   /** 참조 조건의 값을 이름으로 보여 주려고 — 목록에 실린 것들의 ref_labels 를 모은다. */
   const refLabelsOfList = useMemo(() => {
     const out: Record<string, string> = {}
-    for (const row of list.data?.items ?? []) Object.assign(out, row.ref_labels)
+    for (const row of list.data?.items ?? []) Object.assign(out, refNames(row))
     return out
   }, [list.data])
 

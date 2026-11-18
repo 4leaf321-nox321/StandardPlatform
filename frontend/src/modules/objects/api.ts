@@ -21,6 +21,11 @@ export interface ObjectRow {
   properties: Record<string, unknown>
   /** `object_ref` 가 가리키는 객체의 이름 (id -> 이름). **서버가 한 번에 모아 준다.** */
   ref_labels: Record<string, string>
+  /**
+   * 참조 칸이 가리키는 것의 보여 줄 이름(앞머리 + 이름, ADR 0088) — `ref_labels` 와 다른 것만. 그릴 때는
+   * `refNames(row)`. 시험 자료에는 없을 수 있다.
+   */
+  ref_display_labels?: Record<string, string>
   /** 사람이 붙인 다른 이름. 검색·참조 풀이·파일이 이것으로도 찾는다. 시험 자료에는 없을 수 있다. */
   aliases?: string[]
   /** {데이터 소스 slug: 그쪽 식별자}. 동기화가 남긴다 — 보기만. */

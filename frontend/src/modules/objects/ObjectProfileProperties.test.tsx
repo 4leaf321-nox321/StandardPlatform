@@ -152,4 +152,20 @@ describe('상세의 기본 정보', () => {
       '/o/svc_case/p1',
     )
   })
+
+  it('참조 칸 링크는 보여 줄 이름(ref_display_labels)을 먼저 쓴다', async () => {
+    const shown = profileWith({ sku: 's1' }, [
+      def('sku', '판매 모델', { data_type: 'object_ref', ref_type_slug: 'sku' }),
+    ])
+    objectApi.profile.mockResolvedValue({
+      ...shown,
+      object: { ...shown.object, ref_display_labels: { s1: '1.1 SM-N100K (N10 · 국내)' } },
+    })
+    await mount()
+
+    expect(screen.getByRole('link', { name: '1.1 SM-N100K (N10 · 국내)' })).toHaveAttribute(
+      'href',
+      '/o/sku/s1',
+    )
+  })
 })

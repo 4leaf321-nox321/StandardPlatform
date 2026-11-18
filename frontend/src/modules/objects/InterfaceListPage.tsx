@@ -14,7 +14,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BarChart3 } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
-import { shownName } from '@/modules/objects/names'
+import { refNames, shownName } from '@/modules/objects/names'
 import type { Condition, LinkedField, ObjectQuery, ObjectRow } from '@/modules/objects/api'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { propertyText } from '@/modules/objects/PropertyFields'
@@ -90,7 +90,7 @@ function columnsOf(
         return {
           id,
           label: def.label,
-          render: (row) => propertyText(def, row.properties[def.key], row.ref_labels),
+          render: (row) => propertyText(def, row.properties[def.key], refNames(row)),
         }
       }
       return null
@@ -166,7 +166,7 @@ export function InterfaceListPage({
   )
   const refLabelsOfList = useMemo(() => {
     const out: Record<string, string> = {}
-    for (const row of list.data?.items ?? []) Object.assign(out, row.ref_labels)
+    for (const row of list.data?.items ?? []) Object.assign(out, refNames(row))
     return out
   }, [list.data])
   const narrowed =
