@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, aliased
@@ -90,28 +90,9 @@ def export_group(
             code("BUNDLES", 21),
             f"{', '.join(one.label for one in groups)} 묶음에 내보낼 타입이 없습니다.",
         )
-    slugs = {one.slug for one in types}
-    defs_of = {
-        one.slug: [d for d in properties_of(db, one.id) if d.data_type not in DETACHED_KINDS]
-        for one in types
-    }
-    # **타입이 구현한 인터페이스를 함께 싣는다**(상위 인터페이스까지) — 안 실으면 받는 쪽에서
-    # 「없는 인터페이스를 구현한다」 로 묶음 전체가 거절된다.
-    carried = set(
-        interfaces.closure(
-            {name for one in types for name in one.interface_slugs or []},
-            interfaces.load(db).extends_of(),
-        )
-    )
-    #: 묶음 안 — 타입과 함께 실리는 인터페이스. 참조 대상 · 관계 끝이 이 안이면 받는 쪽에서
-    #: 풀린다.
-    inside = slugs | carried
-    outside = sorted(
-        f"{one.slug}.{d.key} → {d.ref_type_slug}"
-        for one in types
-        for d in defs_of[one.slug]
-        if d.data_type == "object_ref" and d.ref_type_slug not in inside
-    )
+    found = definitions_of(db, types, set(wanted))
+    defs_of, outside, ontology = found.defs_of, found.outside, found.ontology
+    relation_types = ontology["relation_types"]
     if outside and not allow_outside_refs:
         # 받는 쪽에 그 타입이 없으면 참조가 안 풀려 묶음 전체가 막힌다 — 보내기 전에 말한다.
         raise Conflict(
@@ -121,23 +102,6 @@ def export_group(
             + ". 묶음을 함께 고르거나, 받는 쪽이 그 타입을 이미 가졌으면 "
             "「밖을 가리키는 참조 허용」 으로 보내세요.",
         )
-
-    schema = importer.capture(db)
-    # 관계 종류는 **양끝이 다 실릴 때만** — 끝에 적힌 인터페이스도 함께 실리면 된다.
-    relation_types = [
-        one
-        for one in schema["relation_types"]
-        if one.get("src_type_slugs")
-        and one.get("dst_type_slugs")
-        and set(one["src_type_slugs"]) <= inside
-        and set(one["dst_type_slugs"]) <= inside
-    ]
-    ontology = {
-        "groups": [one for one in schema["groups"] if one["slug"] in set(wanted)],
-        "interfaces": [one for one in schema["interfaces"] if one["slug"] in carried],
-        "types": [one for one in schema["types"] if one["slug"] in slugs],
-        "relation_types": relation_types,
-    }
 
     kind_slugs = [one["slug"] for one in relation_types]
     if definitions_only:
@@ -464,6 +428,64 @@ def _name(raw: Any, names: dict[uuid.UUID, str]) -> str:
         return names.get(uuid.UUID(str(raw)), str(raw))
     except ValueError:
         return str(raw)
+
+
+class Definitions(NamedTuple):
+    ontology: dict[str, Any]
+    """가져오기(`ontology/import`)와 같은 모양 — groups · interfaces · types ·
+    relation_types."""
+    outside: list[str]
+    """실린 것 밖을 가리키는 참조 칸 — `<타입>.<키> → <대상>`."""
+    defs_of: dict[str, list[PropertyDef]]
+    """타입마다 실리는 속성(파일 칸 제외)."""
+
+
+def definitions_of(db: Session, types: list[ObjectType], group_slugs: set[str]) -> Definitions:
+    """타입들의 정의 한 덩어리 — 묶음 내보내기와 코어의 정의 창구(`coreapi.definitions`,
+    ADR 0085)가 **같은 규칙으로** 싣는다. 둘이 따로 고르면 같은 허브에서 받은 정의가 길마다
+    달라진다.
+
+    - 타입이 구현한 인터페이스를 함께 싣는다(상위 인터페이스까지) — 안 실으면 받는 쪽에서
+      「없는 인터페이스를 구현한다」 로 전체가 거절된다.
+    - 관계 종류는 **양끝이 다 실릴 때만** — 끝에 적힌 인터페이스도 함께 실리면 된다.
+    - 묶음은 `group_slugs` 에 든 것만.
+    """
+    slugs = {one.slug for one in types}
+    defs_of = {
+        one.slug: [d for d in properties_of(db, one.id) if d.data_type not in DETACHED_KINDS]
+        for one in types
+    }
+    carried = set(
+        interfaces.closure(
+            {name for one in types for name in one.interface_slugs or []},
+            interfaces.load(db).extends_of(),
+        )
+    )
+    #: 실리는 것 — 타입과 함께 실리는 인터페이스. 참조 대상 · 관계 끝이 이 안이면 받는 쪽에서
+    #: 풀린다.
+    inside = slugs | carried
+    outside = sorted(
+        f"{one.slug}.{d.key} → {d.ref_type_slug}"
+        for one in types
+        for d in defs_of[one.slug]
+        if d.data_type == "object_ref" and d.ref_type_slug not in inside
+    )
+    schema = importer.capture(db)
+    relation_types = [
+        one
+        for one in schema["relation_types"]
+        if one.get("src_type_slugs")
+        and one.get("dst_type_slugs")
+        and set(one["src_type_slugs"]) <= inside
+        and set(one["dst_type_slugs"]) <= inside
+    ]
+    ontology = {
+        "groups": [one for one in schema["groups"] if one["slug"] in group_slugs],
+        "interfaces": [one for one in schema["interfaces"] if one["slug"] in carried],
+        "types": [one for one in schema["types"] if one["slug"] in slugs],
+        "relation_types": relation_types,
+    }
+    return Definitions(ontology, outside, defs_of)
 
 
 def groups_of(db: Session, wanted: list[str]) -> list[NavGroup]:

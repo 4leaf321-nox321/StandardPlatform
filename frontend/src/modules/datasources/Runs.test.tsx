@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 const datasourceApi = vi.hoisted(() => ({
   list: vi.fn(),
+  coreSubscriptions: vi.fn(async () => []),
   runs: vi.fn(),
   sync: vi.fn(),
 }))

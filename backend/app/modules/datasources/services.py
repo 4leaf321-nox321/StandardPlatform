@@ -36,7 +36,7 @@ from app.modules.audit.models import AuditEntry
 from app.modules.bundles import tombstones as graves
 from app.modules.bundles.schemas import RelationTombstoneIn, TombstonesIn
 from app.modules.datasources import drift, fetchers, odata, ra_reports, retry
-from app.modules.datasources.models import DataSource, DataSourceRun
+from app.modules.datasources.models import CoreSubscription, DataSource, DataSourceRun
 from app.modules.datasources.schemas import (
     CoreSuggestOut,
     CoreSuggestProperty,
@@ -1428,6 +1428,25 @@ def public_options(options: dict[str, Any] | None) -> dict[str, Any]:
 def internal_options(options: dict[str, Any] | None) -> dict[str, Any]:
     """동기화가 적어 두는 칸 — 정의를 고쳐도 지킨다(화면은 이것을 모른다)."""
     return {key: value for key, value in (options or {}).items() if key.startswith("_")}
+
+
+def restart(row: DataSource, *, edges_only: bool = False) -> None:
+    """**처음부터 다시 받게** — 받은 자리와 끊은 자리를 비운다(다음 동기화가 전량을 받는다).
+
+    점의 시계를 비우면 **선의 시계도 함께 비운다** — 하나만 처음부터 받으면 점과 선이 어긋난다.
+    기다리던 선도 — 전량이 다시 온다. 끊어 둔 자리도 버린다(옛 시계에서 시작한 것이다).
+    `edges_only` 는 선만(코어 구독이 받는 관계 종류가 늘었을 때 — ADR 0085)."""
+    row.relations_since_mark = ""
+    row.relations_waiting = []
+    if edges_only:
+        row.options = {
+            key: value for key, value in (row.options or {}).items() if key != RESUME_EDGES
+        }
+        return
+    row.since_mark = ""
+    row.options = public_options(row.options)
+    # RA 보고서는 처음부터 = 본문까지 전량, 그리고 대조.
+    row.reconciled_at = None
 
 
 def _earlier(floor: Any, as_of: str) -> str:
@@ -2983,62 +3002,32 @@ def subscribe(
             )
             continue
         item.count = int(found.get("count") or 0)
-        item.relations = bool(found.get("relations_endpoint") and found.get("relations"))
+        item.relations = opens_edges(found)
         if (object_type.id, object_type.slug) in taken:
             item.action = "exists"
             item.reason = "이 주소 · 타입의 형제 코어 소스가 이미 있습니다."
             continue
-        mapping, _, notes = core_mapping(db, found, object_type)
-        # **식별자도 그대로 잇는다** — 기준정보는 허브의 식별자가 곧 이쪽 식별자다. 참조 칸 ·
-        # 선의 끝점이 그 식별자로 풀리고, 식별자가 필수인 타입은 안 이으면 한 행도 안 들어간다.
-        # (대응 제안은 잇지 않는다 — 이쪽에 다른 식별자 체계가 있을 수 있다.)
-        if not any(one.get("target") == "key" for one in mapping["columns"]):
-            mapping["columns"].insert(0, {"source": "key", "target": "key"})
+        _, notes = sibling_mapping(db, found, object_type)
         item.notes = notes
         if not payload.apply:
             continue
-        slug = _free_slug(db, f"{object_type.slug}_core")
-        row = DataSource(
-            slug=slug,
-            name=f"{found.get('label') or object_type.label} ({system})",
-            kind="sp_core",
+        row = core_source(
+            db,
+            user,
             base_url=base_url,
-            entity_set=object_type.slug,
-            options={"relations": item.relations, "shape": "sp"},
-            filter="",
-            select="",
             auth={
                 "kind": payload.auth_kind,
                 "user": payload.auth_user.strip(),
                 "secret": payload.auth_secret,
             },
-            page_size=SUBSCRIBE_PAGE,
-            type_id=object_type.id,
-            workspace_id=None,
-            mapping=mapping,
+            object_type=object_type,
+            found=found,
+            system=system,
             source_name=item.source_name,
-            deprecate_missing=False,
             interval_minutes=payload.interval_minutes,
-            is_active=True,
-            created_by_id=user.id,
+            via="subscribe",
         )
-        db.add(row)
-        db.flush()
-        audit.record(
-            db,
-            action="datasource.create",
-            actor=user,
-            target_table="data_sources",
-            target_id=row.id,
-            target_label=slug,
-            changes={
-                "base_url": base_url,
-                "entity_set": object_type.slug,
-                "type": object_type.slug,
-                "via": "subscribe",
-            },
-        )
-        item.source_slug = slug
+        item.source_slug = row.slug
         created += 1
     if payload.apply:
         db.commit()
@@ -3048,6 +3037,84 @@ def subscribe(
         items=items,
         created=created,
     )
+
+
+def sibling_mapping(
+    db: Session, found: dict[str, Any], object_type: ObjectType
+) -> tuple[dict[str, Any], list[str]]:
+    """형제 코어 소스의 칸 대응 — 대응 제안과 같은 규칙에 **식별자 key → key** 를 더한다.
+
+    기준정보는 허브의 식별자가 곧 이쪽 식별자다. 참조 칸 · 선의 끝점이 그 식별자로 풀리고,
+    식별자가 필수인 타입은 안 이으면 한 행도 안 들어간다. (대응 제안은 잇지 않는다 — 이쪽에
+    다른 식별자 체계가 있을 수 있다.)"""
+    mapping, _, notes = core_mapping(db, found, object_type)
+    if not any(one.get("target") == "key" for one in mapping["columns"]):
+        mapping["columns"].insert(0, {"source": "key", "target": "key"})
+    return mapping, notes
+
+
+def opens_edges(found: dict[str, Any]) -> bool:
+    """상대가 그 타입에서 나가는 선을 열어 줬나(카탈로그의 한 타입)."""
+    return bool(found.get("relations_endpoint") and found.get("relations"))
+
+
+def core_source(
+    db: Session,
+    user: User | None,
+    *,
+    base_url: str,
+    auth: dict[str, Any],
+    object_type: ObjectType,
+    found: dict[str, Any],
+    system: str,
+    source_name: str,
+    interval_minutes: int,
+    via: str,
+    subscription_id: uuid.UUID | None = None,
+) -> DataSource:
+    """형제 코어 소스 하나(`shape=sp`, 쪽 2,000) — 묶음 구독과 코어 구독(ADR 0085)이 같은
+    모양으로 만든다. 출처 이름은 그 타입을 관리하는 이름이어야 한다 — 다르면 허브 관리 타입에
+    아무것도 안 들어간다."""
+    mapping, _ = sibling_mapping(db, found, object_type)
+    slug = _free_slug(db, f"{object_type.slug}_core")
+    row = DataSource(
+        slug=slug,
+        name=f"{found.get('label') or object_type.label} ({system})",
+        kind="sp_core",
+        base_url=base_url,
+        entity_set=object_type.slug,
+        options={"relations": opens_edges(found), "shape": "sp"},
+        filter="",
+        select="",
+        auth=dict(auth),
+        page_size=SUBSCRIBE_PAGE,
+        type_id=object_type.id,
+        workspace_id=None,
+        mapping=mapping,
+        source_name=source_name,
+        deprecate_missing=False,
+        interval_minutes=interval_minutes,
+        is_active=True,
+        created_by_id=user.id if user is not None else None,
+        subscription_id=subscription_id,
+    )
+    db.add(row)
+    db.flush()
+    audit.record(
+        db,
+        action="datasource.create",
+        actor=user,
+        target_table="data_sources",
+        target_id=row.id,
+        target_label=slug,
+        changes={
+            "base_url": base_url,
+            "entity_set": object_type.slug,
+            "type": object_type.slug,
+            "via": via,
+        },
+    )
+    return row
 
 
 def _free_slug(db: Session, wanted: str) -> str:
@@ -3115,9 +3182,14 @@ def due(db: Session, now: datetime | None = None) -> list[DataSource]:
     (`connect_retry_after`)."""
     now = now or datetime.now(UTC)
     out: list[DataSource] = []
+    # **코어 구독의 소스는 여기서 안 고른다**(ADR 0085) — 구독이 차례가 될 때 구독을 확인한 뒤
+    # 함께 돈다(`subscriptions.due` · 차례 작업). 따로 돌면 허브에 새 칸이 생긴 직후 소스가
+    # 먼저 받고, 나중에 구독이 그 칸을 이을 때 이미 받은 행을 처음부터 다시 받게 된다.
     for source in db.scalars(
         select(DataSource).where(
-            DataSource.is_active.is_(True), DataSource.interval_minutes > 0
+            DataSource.is_active.is_(True),
+            DataSource.interval_minutes > 0,
+            DataSource.subscription_id.is_(None),
         )
     ):
         every = timedelta(minutes=source.interval_minutes)
@@ -3395,6 +3467,9 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
         )
         if is_stale(one, now)
     ]
+    subscriptions = list(
+        db.scalars(select(CoreSubscription).where(CoreSubscription.is_active.is_(True)))
+    )
     return [
         extensions.MaintenanceItem(
             key="datasource_failed",
@@ -3409,6 +3484,22 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
             key="datasource_stale",
             label="수집 지연 데이터 소스",
             count=len(stale),
+            link="/admin/datasources",
+            severity="warning",
+        ),
+        # 코어 구독(ADR 0085) — 검토 대기는 받기를 막지 않아 아무도 모르는 채 쌓인다. 허브가
+        # 바꾼 정의가 이 설치에 안 들어온 채로 남아 있다는 뜻이다.
+        extensions.MaintenanceItem(
+            key="core_subscription_held",
+            label="정의 검토 대기 코어 구독",
+            count=sum(1 for one in subscriptions if one.held),
+            link="/admin/datasources",
+            severity="warning",
+        ),
+        extensions.MaintenanceItem(
+            key="core_subscription_failed",
+            label="확인 실패 코어 구독",
+            count=sum(1 for one in subscriptions if one.last_status == "failed"),
             link="/admin/datasources",
             severity="warning",
         ),

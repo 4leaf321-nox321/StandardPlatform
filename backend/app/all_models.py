@@ -31,7 +31,7 @@ from app.modules.audit.models import AccessLog, AuditEntry, CutQuestion, Request
 from app.modules.auth.models import PersonalAccessToken, PortalLaunchJti, RefreshToken
 from app.modules.board.models import BoardComment, BoardPost
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
-from app.modules.datasources.models import DataSource, DataSourceRun
+from app.modules.datasources.models import CoreSubscription, DataSource, DataSourceRun
 from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.graph.models import (
     GraphCalcCluster,
@@ -108,6 +108,7 @@ __all__ = [
     "CaeDtPair",
     "CaeDtSetting",
     "CaeDtStaff",
+    "CoreSubscription",
     "CutQuestion",
     "DataSource",
     "DataSourceRun",

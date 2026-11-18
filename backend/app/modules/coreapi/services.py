@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import uuid
 import zipfile
@@ -60,6 +61,8 @@ from app.modules.coreapi.schemas import (
     CoreAliasOut,
     CoreCatalogOut,
     CoreConsumerOut,
+    CoreDefinitionsOut,
+    CoreGroupOut,
     CorePageOut,
     CorePeriodOut,
     CorePropertyOut,
@@ -86,7 +89,13 @@ from app.modules.objects.models import (
 )
 from app.modules.objects.services import properties_of
 from app.modules.ontology.interfaces import Ends, load_ends
-from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import (
+    DETACHED_KINDS,
+    NavGroup,
+    ObjectType,
+    PropertyDef,
+    RelationType,
+)
 from app.modules.workspaces.models import WorkspaceMember
 from app.shared import audit
 from app.shared.errors import NotFound, code
@@ -364,6 +373,78 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
         revision=revision_of(marks),
         as_of=_stamp(datetime.now(UTC)) or "",
         types=out,
+    )
+
+
+def definitions(
+    db: Session, *, groups: list[str] | None = None, known: str = ""
+) -> CoreDefinitionsOut:
+    """**공개 타입의 정의** — 형제 SP 의 코어 구독이 제 정의를 맞추는 자리(ADR 0085).
+
+    정의 묶음과 같은 규칙으로 싣는다(`bundles/export.definitions_of`) — 길이 둘이면 같은 허브의
+    정의가 길마다 달라진다. 다른 것은 셋: 타입을 사이드바 묶음이 아니라 **공개 여부**로 고르고
+    (`groups` 를 주면 그 묶음 · 하위 묶음 안의 것만), 묶음은 공개 타입이 든 것과 그 상위를
+    싣고, 밖을 가리키는 참조 칸은 막지 않고 알린다(`outside` — 그 값은 어차피 코어로 안
+    나간다).
+
+    `known` 이 지금 지문과 같으면 본문 없이 답한다 — 받는 쪽은 동기화 간격마다 묻는다.
+    """
+    from app.modules.bundles import export as bundle_export
+
+    rows = list(db.scalars(select(NavGroup)))
+    by_id = {one.id: one for one in rows}
+    types = core_types(db)
+    if groups:
+        wanted = {one.strip() for one in groups if one.strip()}
+        unknown = sorted(wanted - {group.slug for group in rows})
+        if unknown:
+            raise NotFound(
+                code("CORE", 4),
+                f"이 설치에 없는 사이드바 묶음입니다: {', '.join(unknown)}",
+            )
+        inside = {group.id for group in rows if group.slug in wanted}
+        # 하위 묶음까지 — 두 단계 사이드바에서 위 묶음을 고르면 그 아래 타입도 든다.
+        grew = True
+        while grew:
+            grew = False
+            for group in rows:
+                if group.parent_id in inside and group.id not in inside:
+                    inside.add(group.id)
+                    grew = True
+        types = [one for one in types if one.nav_group_id in inside]
+
+    # 공개 타입이 든 묶음과 그 상위 — 상위가 없으면 받는 쪽이 하위 묶음을 못 세운다.
+    carried: dict[uuid.UUID, NavGroup] = {}
+    for one in types:
+        at = by_id.get(one.nav_group_id) if one.nav_group_id else None
+        while at is not None and at.id not in carried:
+            carried[at.id] = at
+            at = by_id.get(at.parent_id) if at.parent_id else None
+    found = bundle_export.definitions_of(db, types, {one.slug for one in carried.values()})
+    added = {
+        f"{one.slug}.{d.key}": _stamp(d.created_at) or ""
+        for one in types
+        for d in found.defs_of[one.slug]
+    }
+    mark = hashlib.sha256(
+        json.dumps(found.ontology, sort_keys=True, ensure_ascii=False, default=str).encode()
+    ).hexdigest()[:32]
+    changed = known != mark
+    return CoreDefinitionsOut(
+        system=get_settings().app_slug,
+        mark=mark,
+        changed=changed,
+        ontology=found.ontology if changed else None,
+        added=added if changed else {},
+        outside=found.outside,
+        groups=[
+            CoreGroupOut(
+                slug=one.slug,
+                label=one.label,
+                parent_slug=by_id[one.parent_id].slug if one.parent_id in by_id else None,
+            )
+            for one in sorted(carried.values(), key=lambda one: (one.sort_order, one.slug))
+        ],
     )
 
 

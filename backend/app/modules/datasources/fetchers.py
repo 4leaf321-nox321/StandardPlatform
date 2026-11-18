@@ -428,6 +428,48 @@ def core_catalog(
     return body
 
 
+def _said_code(response: httpx.Response) -> str:
+    """상대 오류 봉투의 코드(`APP-CORE-0004`) — 못 읽으면 빈 값. 접두사는 설치마다 다르다."""
+    try:
+        return str((response.json().get("error") or {}).get("code") or "")
+    except (ValueError, AttributeError):
+        return ""
+
+
+def core_definitions(
+    *,
+    base_url: str,
+    auth: Auth,
+    transport: httpx.BaseTransport | None,
+    groups: list[str],
+    known: str,
+) -> dict[str, Any] | None:
+    """상대의 **공개 타입 정의**(`/api/core/sp-definitions`, ADR 0085). 그 창구가 없는 설치
+    (0.4.90 까지)는 None — 404 를 「코어 타입이 아님」 으로 답한다(그 주소를 타입으로 읽는다).
+    상대에 없는 사이드바 묶음을 적은 404 는 그대로 오류다(상대의 말을 옮긴다)."""
+    params: dict[str, str] = {"known": known}
+    if groups:
+        params["groups"] = ",".join(groups)
+    try:
+        with _core_client(auth, transport) as client:
+            response = client.get(f"{base_url.rstrip('/')}/core/sp-definitions", params=params)
+            if response.status_code == 404 and not _said_code(response).endswith("-CORE-0004"):
+                return None
+            _raise_for_core(response)
+            body = _core_body(response, "/api/core/sp-definitions")
+    except httpx.HTTPError as caught:
+        raise AppError(
+            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
+        ) from caught
+    if not isinstance(body, dict) or "mark" not in body:
+        raise AppError(
+            code("DATASOURCES", 37),
+            "상대의 정의 응답을 읽지 못했습니다 — 주소가 그 설치의 `/api` 인지 확인하세요.",
+            status=502,
+        )
+    return body
+
+
 # --- REST -----------------------------------------------------------------------
 
 #: 쪽 넘김 방식.

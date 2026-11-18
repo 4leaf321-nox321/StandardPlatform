@@ -156,6 +156,15 @@ const VERDICT: Record<string, { label: string; tone: Tone }> = {
   held: { label: '판정 유보', tone: 'warn' },
 }
 
+/** 코어 구독의 마지막 확인(ADR 0085) — 비면 「확인 전」. */
+const SUBSCRIPTION: Record<string, { label: string; tone: Tone }> = {
+  ok: { label: '정상', tone: 'good' },
+  // **검토 대기는 주의다** — 받기는 이어지고, 저장값을 잃을 수 있는 정의 변경만 사람을 기다린다.
+  held: { label: '정의 검토 대기', tone: 'warn' },
+  failed: { label: '확인 실패', tone: 'bad' },
+  '': { label: '확인 전', tone: 'neutral' },
+}
+
 const TABLES = {
   account: ACCOUNT,
   delegation: DELEGATION,
@@ -170,6 +179,7 @@ const TABLES = {
   proposal_result: PROPOSAL_RESULT,
   rollup: ROLLUP,
   sheet: SHEET,
+  subscription: SUBSCRIPTION,
   token: TOKEN,
   verdict: VERDICT,
   workspace: WORKSPACE,

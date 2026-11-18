@@ -58,6 +58,9 @@ class DataSourceOut(BaseModel):
     옮긴다. 비면 아직 한 번도 성공하지 않았다."""
     created_at: datetime
     reconciled_at: datetime | None = None
+    subscription_id: uuid.UUID | None = None
+    """이 소스를 맞추는 **코어 구독**(ADR 0085). 있으면 토큰 · 간격은 확인마다 구독의 값으로
+    맞추고, 칸 대응은 허브에 생긴 칸을 더하고 빠진 칸을 뺀다(사람이 이어 둔 칸은 그대로)."""
     """`ra_reports` — 마지막으로 전량을 받아 대조한 때(ADR 0018)."""
 
 
@@ -251,3 +254,132 @@ class SubscribeOut(BaseModel):
     applied: bool
     items: list[SubscribeItemOut]
     created: int
+
+
+#: 코어 구독(ADR 0085)의 간격 상한 — 데이터 소스와 같다(30일).
+INTERVAL_MAX = 60 * 24 * 30
+
+
+class CoreSubscriptionRequest(BaseModel):
+    """**코어 구독**(ADR 0085) — 형제 SP 의 코어를 통째로 받는 등록.
+
+    묶음 구독은 그 순간의 타입마다 소스를 한 번 만들고 끝났다. 구독은 동기화마다 허브의 정의를
+    맞추고(저장값을 잃지 않는 변경만 자동 — 나머지는 정의 검토 대기), 공개 타입마다 소스를 두고
+    칸 대응을 맞추고, 공개가 해제된 타입은 수신 중지한다(받은 자료는 남는다)."""
+
+    base_url: str = Field(min_length=1, max_length=500)
+    """허브의 API 주소(`https://hub.example/api` — `/core` 의 앞)."""
+    auth_kind: str = "bearer"
+    auth_user: str = ""
+    auth_secret: str = ""
+    """허브가 낸 액세스 토큰 — `core:read` 면 된다. 구독의 소스들이 함께 쓴다."""
+    source_name: str = Field(default="hub", pattern=SOURCE_NAME_RE, min_length=1)
+    """받는 정의 · 객체의 관리 이름(`managed_by`) — 정의 묶음을 받을 때 적은 `source` 와 같게.
+    이 이름이 관리하지 않는 같은 slug 의 정의(이 설치가 만든 것)는 건드리지 않는다."""
+    groups: list[str] = Field(default_factory=list)
+    """허브의 사이드바 묶음 slug — 그 묶음 · 하위 묶음의 공개 타입만. 비우면 공개 타입 전부."""
+    interval_minutes: int = Field(default=60, ge=0, le=INTERVAL_MAX)
+    """확인 · 동기화 간격(분). 0 이면 손으로만(「동기화」)."""
+    apply: bool = False
+    """거짓이면 **무엇을 할지만** 보인다(허브의 카탈로그 · 정의를 읽어 맞춰 본다)."""
+
+
+class CoreSubscriptionPatchRequest(BaseModel):
+    """안 보낸 칸은 그대로 — 관리 이름 · 주소는 바꾸지 않는다(바꾸면 받은 정의가 남의 것이
+    된다)."""
+
+    auth_kind: str | None = None
+    auth_user: str | None = None
+    auth_secret: str | None = None
+    """보내면 구독의 소스들의 토큰도 함께 바뀐다."""
+    groups: list[str] | None = None
+    interval_minutes: int | None = Field(default=None, ge=0, le=INTERVAL_MAX)
+    is_active: bool | None = None
+    """비활성이면 확인하지 않고, 구독의 소스들도 타이머가 돌리지 않는다."""
+
+
+class CoreHeldOut(BaseModel):
+    """정의 검토 대기 — 자동으로 적용하지 않고 남긴 허브의 정의 변경."""
+
+    mark: str
+    """그때 허브 정의의 지문 — 적용할 때 돌려보낸다(그 사이 허브가 바뀌었으면 거절)."""
+    lines: list[str]
+    """무엇이 바뀌고 무엇을 잃을 수 있는지 — 가져오기 미리 보기의 경고 · 오류 그대로."""
+
+
+class CoreSubscriptionSourceOut(BaseModel):
+    slug: str
+    name: str
+    type_slug: str
+    is_active: bool
+    paused: bool
+    """구독이 수신 중지했나 — 허브가 코어 공개를 해제했거나 범위에서 빠졌다. 다시 공개되면
+    구독이 다시 활성화한다(사람이 비활성화한 소스는 안 건드린다)."""
+    last_status: str | None
+    last_success_at: datetime | None
+
+
+class CoreSubscriptionOut(BaseModel):
+    id: uuid.UUID
+    base_url: str
+    system: str
+    source_name: str
+    groups: list[str]
+    interval_minutes: int
+    is_active: bool
+    auth_kind: str
+    auth_user: str
+    has_secret: bool
+    checked_at: datetime | None
+    last_status: str | None
+    """`ok` · `held`(정의 검토 대기가 있다) · `failed`(`last_error`). 비면 아직 확인 전."""
+    last_error: str
+    held: CoreHeldOut | None
+    notes: list[str]
+    """마지막 확인에서 알아 둘 것 — 건너뛴 타입과 까닭, 처음부터 다시 받은 소스, 빼고 세운
+    칸."""
+    sources: list[CoreSubscriptionSourceOut]
+    created_at: datetime
+
+
+class CoreSubscriptionTypeOut(BaseModel):
+    """미리 보기의 한 줄 — 허브의 공개 타입 하나를 이 구독이 어떻게 받나."""
+
+    type_slug: str
+    type_label: str
+    action: str
+    """`define`(정의를 세우고 소스를 만든다) · `create`(정의가 있어 소스를 만든다) ·
+    `adopt`(이미 있는 형제 코어 소스를 구독이 맡는다) · `skip`(받지 않는다 — `reason`)."""
+    reason: str = ""
+    source_slug: str = ""
+    count: int = 0
+    """허브에 있는 수."""
+
+
+class CoreGroupChoiceOut(BaseModel):
+    slug: str
+    label: str
+    parent_slug: str | None = None
+
+
+class CoreSubscriptionPlanOut(BaseModel):
+    system: str
+    """허브의 이름."""
+    applied: bool
+    definitions: bool
+    """허브가 정의 창구를 주나 — 아니면(0.4.90 까지) 정의는 「정의만」 묶음으로 받고, 이 설치에
+    정의가 있는 타입만 받는다."""
+    groups: list[CoreGroupChoiceOut]
+    """허브의 사이드바 묶음 중 공개 타입이 든 것 — 범위를 고르는 자리."""
+    types: list[CoreSubscriptionTypeOut]
+    held: list[str]
+    """자동으로 적용하지 않고 정의 검토 대기로 남길 것."""
+    notes: list[str]
+    subscription: CoreSubscriptionOut | None = None
+    job_id: uuid.UUID | None = None
+    """생성했으면 첫 동기화 작업 — 정의를 세우고 행을 끝까지 받는다."""
+
+
+class CoreHeldApplyRequest(BaseModel):
+    mark: str = Field(min_length=1)
+    """검토한 정의의 지문(`held.mark`)."""

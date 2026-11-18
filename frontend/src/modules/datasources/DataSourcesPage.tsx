@@ -11,7 +11,7 @@ import { useState } from 'react'
 import { Eye, Link2, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
 
 import { datasourceApi } from '@/modules/datasources/api'
-import { SubscribeDialog } from '@/modules/datasources/SubscribeDialog'
+import { CoreSubscribeDialog, CoreSubscriptions } from '@/modules/datasources/CoreSubscriptions'
 import {
   RA_FEED,
   RA_PHASE_DEFAULT,
@@ -86,6 +86,8 @@ export default function DataSourcesPage() {
   const workspaces = useResource(() => workspaceApi.list(true), [])
   const [editing, setEditing] = useState<DataSource | 'new' | null>(null)
   const [subscribing, setSubscribing] = useState(false)
+  /** 코어 구독을 만들 때마다 하나씩 — 구독 목록이 다시 읽는다. */
+  const [subscriptionsVersion, setSubscriptionsVersion] = useState(0)
   const [removing, setRemoving] = useState<DataSource | null>(null)
   const [opened, setOpened] = useState<string | null>(null)
   const [syncing, setSyncing] = useState<{ source: DataSource; result: SyncResult } | null>(null)
@@ -120,11 +122,11 @@ export default function DataSourcesPage() {
             <Button
               size="sm"
               variant="outline"
-              title="형제 Standard Platform 의 코어에서 사이드바 묶음의 타입마다 소스를 한 번에 생성합니다"
+              title="형제 Standard Platform 의 코어를 통째로 받습니다 — 공개 타입 · 칸이 늘어도 토큰을 다시 등록하지 않습니다"
               onClick={() => setSubscribing(true)}
             >
               <Link2 className="mr-1 size-4" />
-              묶음 구독
+              코어 구독
             </Button>
             <Button size="sm" onClick={() => setEditing('new')}>
               <Plus className="mr-1 size-4" />
@@ -135,12 +137,16 @@ export default function DataSourcesPage() {
       />
 
       {subscribing && (
-        <SubscribeDialog
-          groups={schema.data?.groups ?? []}
+        <CoreSubscribeDialog
           onClose={() => setSubscribing(false)}
-          onCreated={list.reload}
+          onCreated={() => {
+            setSubscriptionsVersion((before) => before + 1)
+            list.reload()
+          }}
         />
       )}
+
+      <CoreSubscriptions version={subscriptionsVersion} onChanged={list.reload} />
 
       {list.error && <ErrorNotice error={list.error} />}
       {error && <ErrorNotice error={error} />}
@@ -163,6 +169,14 @@ export default function DataSourcesPage() {
                   {source.name}
                 </button>
                 <code className="text-muted-foreground text-xs">{source.slug}</code>
+                {source.subscription_id && (
+                  <span
+                    className="text-muted-foreground text-xs"
+                    title="코어 구독이 토큰 · 간격 · 칸 대응을 맞춥니다"
+                  >
+                    코어 구독
+                  </span>
+                )}
                 {!source.is_active && <span className="text-muted-foreground text-xs">비활성</span>}
                 {source.last_status && (
                   <span
@@ -260,7 +274,11 @@ export default function DataSourcesPage() {
       <ConfirmDialog
         open={removing !== null}
         title={`「${removing?.name}」 을 삭제합니다`}
-        description="가져온 객체는 남습니다. 그 객체에 남긴 바깥 식별자도 남아서, 같은 slug 로 다시 만들면 이어서 찾습니다."
+        description={
+          removing?.subscription_id
+            ? '코어 구독의 소스입니다 — 삭제해도 다음 확인이 다시 만듭니다. 이 타입을 받지 않으려면 비활성화하거나 구독의 범위를 수정하세요. 가져온 객체는 남습니다.'
+            : '가져온 객체는 남습니다. 그 객체에 남긴 바깥 식별자도 남아서, 같은 slug 로 다시 만들면 이어서 찾습니다.'
+        }
         confirmLabel="삭제"
         destructive
         onConfirm={async () => {

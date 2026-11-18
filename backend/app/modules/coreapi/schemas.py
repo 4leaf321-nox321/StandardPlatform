@@ -115,6 +115,41 @@ class CoreCatalogOut(BaseModel):
     모양, ADR 0055). 0.4.77 까지의 설치는 이 칸이 없다 — `sp` 를 청해도 기본 모양이 온다."""
 
 
+class CoreGroupOut(BaseModel):
+    slug: str
+    label: str
+    parent_slug: str | None = None
+
+
+class CoreDefinitionsOut(BaseModel):
+    """**공개 타입의 정의** — 형제 SP 의 코어 구독이 제 정의를 맞추는 데 쓴다(ADR 0085).
+
+    정의 묶음(「정의만」)과 같은 모양이다(`bundles/export.definitions_of`). 묶음 내보내기는
+    시스템 관리자 토큰만 받지만 이것은 `core:read` 로 읽는다 — 공개 타입의 칸은 카탈로그가 이미
+    말하고, 여기는 그 정의를 받는 쪽이 그대로 세울 만큼 더 싣는다(고를 값 · 화면 모양 · 관계
+    종류 · 인터페이스). 객체는 싣지 않는다."""
+
+    system: str
+    mark: str
+    """정의의 지문 — **표시 문구까지** 같으면 같은 값. 카탈로그의 `revision` 은 구조만 보므로
+    이름 · 설명을 바꿔도 그대로다. 받는 쪽은 이것을 `known` 으로 돌려보내 같으면 본문 없이
+    받는다."""
+    changed: bool
+    """`known` 이 지금 지문과 다르면(또는 안 보냈으면) 참 — 거짓이면 `ontology` 가 비어
+    온다."""
+    ontology: dict[str, Any] | None = None
+    """가져오기(`POST /api/ontology/import` · 묶음의 `ontology`)와 같은 모양."""
+    added: dict[str, str] = Field(default_factory=dict)
+    """타입 속성마다 **이 설치에서 생긴 때**(`<타입>.<키>` → 시각) — 받는 쪽이 새로 잇는 칸을
+    처음부터 다시 받아야 하는지 가른다(이미 받은 행에도 그 칸의 값이 있을 수 있는가)."""
+    outside: list[str] = Field(default_factory=list)
+    """공개 타입 밖을 가리키는 참조 칸(`<타입>.<키> → <대상>`) — 그 값은 코어로 나가지 않는다
+    (`withheld_references`). 받는 쪽은 제게 그 대상이 없으면 그 칸을 빼고 세운다."""
+    groups: list[CoreGroupOut] = Field(default_factory=list)
+    """이 설치의 사이드바 묶음 중 공개 타입이 든 것(상위 묶음까지) — 구독의 범위를 고르는
+    자리."""
+
+
 class CoreConsumerOut(BaseModel):
     """이 창구를 쓰는 자격 하나 — **누가 무엇을 가져가는지 사람이 볼 자리.**
 

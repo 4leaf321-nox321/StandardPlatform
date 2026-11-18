@@ -7,6 +7,7 @@
     GET /api/core                        무엇이 열려 있나 — 처음 붙는 쪽은 이것만 읽는다
     GET /api/core/{type}                 지난번 이후 바뀐 것(+ 사라진 것)
     GET /api/core/{type}/relations       그 타입에서 출발하는 선(+ 끊긴 선)
+    GET /api/core/sp-definitions         공개 타입의 정의 — 형제 SP 의 코어 구독이 읽는다
 
 읽기다. 좁은 범위(`core:read`)로도 열리므로, 바깥에 주는 토큰에 사내 전부를 읽는 `read` 를
 줄 필요가 없다.
@@ -23,7 +24,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.coreapi import services
-from app.modules.coreapi.schemas import CoreCatalogOut, CorePageOut, CoreRelationPageOut
+from app.modules.coreapi.schemas import (
+    CoreCatalogOut,
+    CoreDefinitionsOut,
+    CorePageOut,
+    CoreRelationPageOut,
+)
 from app.shared.auth import current_user
 from app.shared.errors import AppError, code
 
@@ -75,6 +81,33 @@ def _moment(since: str | None) -> datetime | None:
             status=422,
         ) from None
     return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+
+
+@router.get("/sp-definitions", response_model=CoreDefinitionsOut)
+def core_definitions(
+    groups: str = Query(
+        default="",
+        description="이 설치의 사이드바 묶음 slug(쉼표로) — 그 묶음 · 하위 묶음 안의 공개 "
+        "타입만. 비우면 공개 타입 전부",
+    ),
+    known: str = Query(
+        default="", description="지난 응답의 `mark` — 같으면 정의 없이 `changed: false`"
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CoreDefinitionsOut:
+    """**공개 타입의 정의** — 형제 Standard Platform 의 코어 구독이 제 정의를 맞춘다(ADR 0085).
+
+    정의 묶음(「정의만」)과 같은 모양이다. 묶음 내보내기는 시스템 관리자 토큰을 요구하지만
+    이것은 좁은 토큰(`core:read`)으로 읽는다 — 공개한 타입의 정의만 싣고 객체는 없다.
+
+    주소에 하이픈을 둔 까닭: 타입 slug 에는 하이픈이 못 들어가므로(`SLUG_RE`) 어떤 타입의
+    주소(`/api/core/{type}`)와도 겹치지 않는다.
+    """
+    del user  # 읽기 범위는 미들웨어가 본다 — 정의는 부서를 가리지 않는다.
+    return services.definitions(
+        db, groups=[one for one in groups.split(",") if one.strip()], known=known.strip()
+    )
 
 
 @router.get("/{type_slug}/relations", response_model=CoreRelationPageOut)

@@ -112,6 +112,8 @@ export interface DataSource {
   relations_waiting?: number
   /** RA 보고서: 마지막 전량 대조 — 하루가 지나면 다음 동기화가 전량으로 받아 대조한다. */
   reconciled_at?: string | null
+  /** 이 소스를 맞추는 코어 구독(ADR 0085) — 토큰 · 간격 · 칸 대응을 구독이 맞춘다. */
+  subscription_id?: string | null
   interval_minutes: number
   is_active: boolean
   last_run_at: string | null
@@ -207,42 +209,132 @@ export interface Preview {
   mapping_error: string | null
 }
 
-/** 묶음 구독(ADR 0055) — 형제 SP 의 코어에서 사이드바 묶음의 타입마다 소스 하나. */
-export interface SubscribeRequest {
+/**
+ * 코어 구독(ADR 0085) — 형제 SP 의 코어를 **통째로** 받는 등록. 서버의 `CoreSubscriptionOut` 등과
+ * 같은 모양(생성 타입을 안 쓰는 까닭은 `objects/api.ts` 의 `FillPriority`).
+ *
+ * 확인마다 허브의 정의를 맞추고(저장값을 잃지 않는 변경만 자동 — 나머지는 정의 검토 대기), 공개
+ * 타입마다 소스를 두고 칸 대응을 맞추고, 공개가 해제된 타입은 수신 중지한다(받은 자료는 남는다).
+ */
+export interface CoreSubscriptionRequest {
   base_url: string
   auth_kind: AuthKind
   auth_user?: string
   auth_secret: string
+  /** 받는 정의 · 객체의 관리 이름 — 정의 묶음을 받을 때 적은 `source` 와 같게(기본 `hub`). */
+  source_name: string
+  /** 허브의 사이드바 묶음 — 비우면 공개 타입 전부. */
   groups: string[]
   interval_minutes: number
-  /** 거짓이면 무엇을 만들지만 본다. */
+  /** 거짓이면 무엇을 할지만 본다. */
   apply: boolean
 }
 
-export interface SubscribeItem {
-  type_slug: string
-  type_label: string
-  /** 만든다(만들었다) · 이미 있다 · 못 만든다(`reason`). */
-  action: 'create' | 'exists' | 'skip'
-  reason: string
-  source_slug: string
-  relations: boolean
-  source_name: string
-  count: number
-  notes: string[]
+export interface CoreHeld {
+  /** 그때 허브 정의의 지문 — 적용할 때 돌려보낸다. */
+  mark: string
+  lines: string[]
 }
 
-export interface SubscribeResult {
+export interface CoreSubscriptionSource {
+  slug: string
+  name: string
+  type_slug: string
+  is_active: boolean
+  /** 구독이 수신 중지했나 — 허브가 코어 공개를 해제했거나 범위에서 빠졌다. */
+  paused: boolean
+  last_status: string | null
+  last_success_at: string | null
+}
+
+export interface CoreSubscription {
+  id: string
+  base_url: string
+  system: string
+  source_name: string
+  groups: string[]
+  interval_minutes: number
+  is_active: boolean
+  auth_kind: AuthKind
+  auth_user: string
+  has_secret: boolean
+  checked_at: string | null
+  /** `ok` · `held`(정의 검토 대기) · `failed`. 비면 확인 전. */
+  last_status: 'ok' | 'held' | 'failed' | null
+  last_error: string
+  held: CoreHeld | null
+  notes: string[]
+  sources: CoreSubscriptionSource[]
+  created_at: string
+}
+
+export interface CoreSubscriptionType {
+  type_slug: string
+  type_label: string
+  /** 정의를 세우고 소스 생성 · 소스 생성 · 있는 소스를 맡음 · 받지 않음(`reason`). */
+  action: 'define' | 'create' | 'adopt' | 'skip'
+  reason: string
+  source_slug: string
+  count: number
+}
+
+export interface CoreGroupChoice {
+  slug: string
+  label: string
+  parent_slug: string | null
+}
+
+export interface CoreSubscriptionPlan {
   system: string
   applied: boolean
-  items: SubscribeItem[]
-  created: number
+  /** 허브가 정의 창구를 주나 — 아니면 이 설치에 정의가 있는 타입만 받는다. */
+  definitions: boolean
+  groups: CoreGroupChoice[]
+  types: CoreSubscriptionType[]
+  /** 자동으로 적용하지 않고 정의 검토 대기로 남길 것. */
+  held: string[]
+  notes: string[]
+  subscription: CoreSubscription | null
+  job_id: string | null
+}
+
+export interface CoreSubscriptionPatch {
+  auth_kind?: AuthKind
+  auth_user?: string
+  auth_secret?: string
+  groups?: string[]
+  interval_minutes?: number
+  is_active?: boolean
+}
+
+/** 작업이 끝날 때까지 — 실패면 그 이유로 던진다. */
+async function finished(id: string): Promise<Job> {
+  const done = await jobsApi.waitFor(id)
+  if (done.status !== 'done') {
+    throw new Error(
+      done.error ?? (done.status === 'cancelled' ? '취소됐습니다.' : '작업이 끝나지 않았습니다.'),
+    )
+  }
+  return done
 }
 
 export const datasourceApi = {
-  /** 묶음 구독 — `apply` 가 거짓이면 상대의 카탈로그만 읽고 무엇을 만들지 보인다. */
-  subscribe: (body: SubscribeRequest) =>
-    api.post<SubscribeResult>('/datasources/subscriptions', body),
+  coreSubscriptions: () => api.get<CoreSubscription[]>('/datasources/core-subscriptions'),
+  /** 코어 구독 — `apply` 가 거짓이면 허브의 카탈로그 · 정의를 읽고 무엇을 할지만 보인다. */
+  coreSubscribe: (body: CoreSubscriptionRequest) =>
+    api.post<CoreSubscriptionPlan>('/datasources/core-subscriptions', body),
+  coreSubscriptionUpdate: (id: string, body: CoreSubscriptionPatch) =>
+    api.patch<CoreSubscription>(`/datasources/core-subscriptions/${id}`, body),
+  coreSubscriptionRemove: (id: string) =>
+    api.delete<void>(`/datasources/core-subscriptions/${id}`),
+  /** 지금 확인 — 정의 · 소스를 맞추고 그 구독의 소스를 끝까지 받는다(작업을 기다린다). */
+  coreSubscriptionSync: async (id: string): Promise<Job> =>
+    finished((await api.post<Job>(`/datasources/core-subscriptions/${id}/sync`)).id),
+  /** 정의 검토 대기를 적용 — 검토한 지문으로(그 사이 허브가 바뀌었으면 거절). */
+  coreHeldApply: async (id: string, mark: string): Promise<Job> =>
+    finished(
+      (await api.post<Job>(`/datasources/core-subscriptions/${id}/held/apply`, { mark })).id,
+    ),
   list: () => api.get<DataSource[]>('/datasources'),
   create: (body: DataSourceWrite) => api.post<DataSource>('/datasources', body),
   update: (slug: string, body: Partial<DataSourceWrite>) =>

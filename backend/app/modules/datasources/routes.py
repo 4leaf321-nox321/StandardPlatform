@@ -10,14 +10,20 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.datasources import ra_reports, services
+from app.modules.datasources import ra_reports, services, subscriptions
 from app.modules.datasources.models import (
     AUTH_KINDS,
     SOURCE_KINDS,
+    CoreSubscription,
     DataSource,
     DataSourceRun,
 )
 from app.modules.datasources.schemas import (
+    CoreHeldApplyRequest,
+    CoreSubscriptionOut,
+    CoreSubscriptionPatchRequest,
+    CoreSubscriptionPlanOut,
+    CoreSubscriptionRequest,
     CoreSuggestOut,
     DataSourceOut,
     DataSourcePatchRequest,
@@ -32,6 +38,7 @@ from app.modules.datasources.schemas import (
 )
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
+from app.modules.jobs.models import Job
 from app.modules.jobs.schemas import JobOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType
@@ -80,6 +87,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         last_success_at=row.last_success_at,
         created_at=row.created_at,
         reconciled_at=row.reconciled_at,
+        subscription_id=row.subscription_id,
     )
 
 
@@ -262,6 +270,201 @@ def subscribe(
     )
 
 
+# --- 코어 구독(ADR 0085) ---------------------------------------------------------------
+# `/{slug}` 보다 앞에 둔다 — 뒤에 두면 `core-subscriptions` 를 소스 slug 로 읽는다(소스 slug
+# 에는 하이픈이 못 들어가므로 실제 소스와는 안 겹친다).
+
+
+@router.get("/core-subscriptions", response_model=list[CoreSubscriptionOut])
+def list_core_subscriptions(
+    _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> list[CoreSubscriptionOut]:
+    """코어 구독 — 허브마다 하나. 마지막 확인 · 정의 검토 대기 · 그 구독의 소스."""
+    rows = db.scalars(select(CoreSubscription).order_by(CoreSubscription.created_at))
+    return [subscriptions.out_of(db, row) for row in rows]
+
+
+@router.post("/core-subscriptions", response_model=CoreSubscriptionPlanOut)
+def create_core_subscription(
+    payload: CoreSubscriptionRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> CoreSubscriptionPlanOut:
+    """**코어 구독**(ADR 0085) — 형제 SP 의 코어를 통째로 받는 등록. `apply=false` 면 허브의
+    카탈로그 · 정의를 읽어 무엇을 할지만 보인다(아무것도 저장하지 않는다).
+
+    생성하면 첫 동기화를 작업으로 넣는다(`job_id`) — 정의를 세우고, 공개 타입마다 소스를 두고,
+    행을 끝까지 받는다. 그 뒤로는 타이머가 간격마다 확인한다: 허브에 공개 타입 · 칸이 늘면 다음
+    확인이 정의를 세우고 소스 · 칸 대응을 맞춘다(토큰을 다시 넣지 않는다). 같은 허브를 가리키는
+    형제 코어 소스가 이미 있으면 구독이 맡는다(다시 만들지 않는다)."""
+    base_url = _require_url(payload.base_url, kind="sp_core")
+    out = subscriptions.plan(db, user, payload, base_url=base_url)
+    if not payload.apply:
+        db.rollback()  # 계획은 아무것도 남기지 않는다
+        return out
+    row = subscriptions.create(db, user, payload, base_url=base_url)
+    job = job_services.enqueue(
+        db,
+        kind="core_subscription_sync",
+        params={"id": str(row.id)},
+        user=user,
+        workspace_id=None,
+    )
+    db.commit()
+    out.applied = True
+    out.subscription = subscriptions.out_of(db, row)
+    out.job_id = job.id
+    return out
+
+
+@router.patch("/core-subscriptions/{subscription_id}", response_model=CoreSubscriptionOut)
+def update_core_subscription(
+    subscription_id: str,
+    payload: CoreSubscriptionPatchRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> CoreSubscriptionOut:
+    """토큰 · 범위 · 간격 · 활성. **토큰은 구독의 소스들에도 함께** — 소스마다 고치지 않는다.
+    범위를 바꾸면 다음 확인이 정의를 다시 받는다(범위 밖이 된 타입은 수신 중지)."""
+    row = subscriptions.find(db, subscription_id)
+    sent = payload.model_fields_set
+    before = {
+        "groups": list(row.groups or []),
+        "interval_minutes": row.interval_minutes,
+        "is_active": row.is_active,
+        "auth_kind": (row.auth or {}).get("kind"),
+    }
+    auth = dict(row.auth or {})
+    if "auth_kind" in sent and payload.auth_kind is not None:
+        auth["kind"] = require_choice(payload.auth_kind, AUTH_KINDS, what="인증 방식")
+    if "auth_user" in sent and payload.auth_user is not None:
+        auth["user"] = payload.auth_user.strip()
+    if "auth_secret" in sent and payload.auth_secret is not None:
+        auth["secret"] = payload.auth_secret
+    row.auth = auth
+    if "groups" in sent and payload.groups is not None:
+        groups = [one.strip() for one in payload.groups if one.strip()]
+        if groups != list(row.groups or []):
+            row.groups = groups
+            row.definitions_mark = ""  # 범위가 바뀌면 정의를 다시 받는다
+    if "interval_minutes" in sent and payload.interval_minutes is not None:
+        row.interval_minutes = payload.interval_minutes
+    if "is_active" in sent and payload.is_active is not None:
+        row.is_active = payload.is_active
+    for source in db.scalars(select(DataSource).where(DataSource.subscription_id == row.id)):
+        source.auth = dict(auth)
+        source.interval_minutes = row.interval_minutes
+    audit.record(
+        db,
+        action="core_subscription.update",
+        actor=user,
+        target_table="core_subscriptions",
+        target_id=row.id,
+        target_label=row.base_url,
+        changes=audit.diff(
+            before,
+            {
+                "groups": list(row.groups or []),
+                "interval_minutes": row.interval_minutes,
+                "is_active": row.is_active,
+                "auth_kind": auth.get("kind"),
+            },
+        )
+        | ({"auth_secret": "변경"} if "auth_secret" in sent else {}),
+    )
+    db.commit()
+    db.refresh(row)
+    return subscriptions.out_of(db, row)
+
+
+@router.delete("/core-subscriptions/{subscription_id}", status_code=204)
+def delete_core_subscription(
+    subscription_id: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """구독만 삭제한다 — **소스와 받은 자료는 남는다**(소스는 하던 대로 받는다, 정의 · 칸
+    대응은 더 맞추지 않는다). 받기까지 멈추려면 소스를 비활성화하거나 삭제한다."""
+    row = subscriptions.find(db, subscription_id)
+    for source in db.scalars(select(DataSource).where(DataSource.subscription_id == row.id)):
+        source.subscription_id = None
+    audit.record(
+        db,
+        action="core_subscription.delete",
+        actor=user,
+        target_table="core_subscriptions",
+        target_id=row.id,
+        target_label=row.base_url,
+    )
+    db.delete(row)
+    db.commit()
+
+
+@router.post(
+    "/core-subscriptions/{subscription_id}/sync", response_model=JobOut, status_code=202
+)
+def sync_core_subscription(
+    subscription_id: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """지금 확인 — 허브의 정의 · 공개 타입에 맞추고 그 구독의 소스를 끝까지 받는다(작업)."""
+    row = subscriptions.find(db, subscription_id)
+    return _enqueue_check(db, user, row, approve="")
+
+
+@router.post(
+    "/core-subscriptions/{subscription_id}/held/apply", response_model=JobOut, status_code=202
+)
+def apply_core_held(
+    subscription_id: str,
+    payload: CoreHeldApplyRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """**정의 검토 대기를 적용** — 검토한 지문(`held.mark`)을 돌려보낸다. 허브의 정의를 통째로
+    가져오기와 같은 길로 넣고(스냅샷 · 묶음 기록 — 되돌릴 수 있다), 소스를 맞춰 받는다. 그 사이
+    허브가 다시 바뀌었으면 작업이 거절한다."""
+    row = subscriptions.find(db, subscription_id)
+    if (row.held or {}).get("mark") != payload.mark:
+        raise Conflict(
+            code("DATASOURCES", 62),
+            "검토한 정의가 지금 검토 대기와 다릅니다 — 화면을 새로 읽고 다시 보세요.",
+        )
+    return _enqueue_check(db, user, row, approve=payload.mark)
+
+
+def _enqueue_check(db: Session, user: User, row: CoreSubscription, *, approve: str) -> JobOut:
+    """확인 작업을 넣는다 — **같은 구독을 겹쳐 넣지 않는다.** 같은 확인이 이미 줄에 있으면
+    그것을 돌려주고, 타이머의 차례가 이 구독을 곧 확인하면 그렇다고 말한다(적용은 따로 넣어야
+    하므로 기다리게 한다)."""
+    busy = job_services.pending_for(db, "core_subscription_sync", id=str(row.id))
+    if busy is not None and not approve and not (busy.params or {}).get("approve"):
+        return jobs_routes._out(db, busy)
+    rounds = db.scalars(
+        select(Job).where(
+            Job.kind == "datasource_sync_round", Job.status.in_(("queued", "running"))
+        )
+    )
+    if busy is not None or any(
+        str(row.id) in ((one.params or {}).get("subscriptions") or []) for one in rounds
+    ):
+        raise Conflict(
+            code("DATASOURCES", 65),
+            "이 구독을 확인하는 작업이 이미 줄에 있습니다 — 그 작업이 끝난 뒤에 다시 하세요.",
+        )
+    job = job_services.enqueue(
+        db,
+        kind="core_subscription_sync",
+        params={"id": str(row.id), "approve": approve},
+        user=user,
+        workspace_id=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
+
+
 @router.get("/{slug}", response_model=DataSourceOut)
 def get_source(
     slug: str, _: User = Depends(require_system_admin), db: Session = Depends(get_db)
@@ -361,14 +564,7 @@ def update_source(
                 "받은 자리(since)는 손으로 정하지 않습니다 — 비우면 처음부터 다시 받습니다.",
                 status=422,
             )
-        row.since_mark = ""
-        # **선의 시계도 함께 비운다** — 하나만 처음부터 받으면 점과 선이 어긋난다. 기다리던
-        # 선도 — 전량이 다시 온다. 끊어 둔 자리도 버린다(옛 시계에서 시작한 것이다).
-        row.relations_since_mark = ""
-        row.relations_waiting = []
-        row.options = services.public_options(row.options)
-        # RA 보고서는 처음부터 = 본문까지 전량, 그리고 대조.
-        row.reconciled_at = None
+        services.restart(row)
     if "interval_minutes" in sent and payload.interval_minutes is not None:
         row.interval_minutes = payload.interval_minutes
     if "is_active" in sent and payload.is_active is not None:

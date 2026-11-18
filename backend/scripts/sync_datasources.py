@@ -11,9 +11,10 @@ systemd 타이머(`<slug>-sync.timer`, deploy.sh 가 설치)가 몇 분마다 �
 (`<slug>-worker`)가 돌린다. 그래야 「지금 뭐가 돌고 있나」 가 「작업」 화면 한 곳에 모이고,
 진행 · 실패 이유 · 취소가 다른 작업과 같은 모양이 된다(`docs/작업-워커-설계.md`).
 
-**`--due` · `--all` 은 작업 하나(`datasource_sync_round`)로 넣는다** — 그 작업이 소스들을
-**가리키는 쪽부터 한 줄로** 돌린다(`services.sync_order`). 소스마다 따로 넣으면 순서가 없어,
-「고장 모드」 가 「메커니즘」 보다 먼저 돌면 그 선이 끝점을 못 찾았다. `--slug` 는 하나라 따로.
+**`--due` · `--all` 은 작업 하나(`datasource_sync_round`)로 넣는다** — 그 작업이 차례가 된
+코어 구독을 먼저 확인하고(ADR 0085 — 허브의 정의 · 공개 타입에 맞춘다), 소스들을 **가리키는
+쪽부터 한 줄로** 돌린다(`services.sync_order`). 소스마다 따로 넣으면 순서가 없어, 「고장 모드」
+가 「메커니즘」 보다 먼저 돌면 그 선이 끝점을 못 찾았다. `--slug` 는 하나라 따로.
 
 **두 서버의 타이머가 같은 시각에 돈다.** 잠금을 못 잡은 쪽은 물러나고, 잡은 쪽도 아직 안 끝난
 같은 작업이 있으면 또 넣지 않는다 — 같은 원천이 두 번 들어가는 것보다 한 번 건너뛰는 것이
@@ -36,8 +37,8 @@ from sqlalchemy.orm import Session
 
 import app.all_models
 import app.main  # noqa: F401  (레지스트리 조립 — 웹훅·원 표)
-from app.modules.datasources import services
-from app.modules.datasources.models import DataSource
+from app.modules.datasources import services, subscriptions
+from app.modules.datasources.models import CoreSubscription, DataSource
 from app.modules.jobs import services as job_services
 from app.shared import singleton
 from app.shared.errors import AppError
@@ -74,15 +75,29 @@ def _sources(db: Session, args: argparse.Namespace) -> list[DataSource] | None:
     return services.due(db)
 
 
+def _subscriptions(db: Session, args: argparse.Namespace) -> list[CoreSubscription]:
+    """확인할 코어 구독 — `--due` 는 차례가 된 것, `--all` 은 켜진 것 전부, `--slug` 는
+    없음."""
+    if args.slug:
+        return []
+    if args.all:
+        return list(
+            db.scalars(select(CoreSubscription).where(CoreSubscription.is_active.is_(True)))
+        )
+    return subscriptions.due(db)
+
+
 def _enqueue(db: Session, args: argparse.Namespace) -> int:
     sources = _sources(db, args)
     if sources is None:
         return 1
+    if not args.slug:
+        return _enqueue_round(
+            db, sources, apply=not args.plan, checks=_subscriptions(db, args)
+        )
     if not sources:
         print("돌릴 것이 없습니다.")
         return 0
-    if not args.slug:
-        return _enqueue_round(db, sources, apply=not args.plan)
     for source in sources:
         # 따로 넣은 것도, 이 소스가 든 차례도 — 둘이 함께 돌면 같은 새 행을 둘 다 만든다.
         waiting = services.pending_job(db, source)
@@ -104,10 +119,18 @@ def _enqueue(db: Session, args: argparse.Namespace) -> int:
     return 0
 
 
-def _enqueue_round(db: Session, sources: list[DataSource], *, apply: bool) -> int:
-    """차례 하나 — 작업 하나가 가리키는 쪽부터 한 줄로 돌린다. 앞 차례가 아직 안 끝났으면 안
-    넣는다(같은 원천이 두 번 들어가는 것보다 한 번 건너뛰는 것이 낫다). 소스 하나만 따로 넣은
-    작업(화면의 「동기화」)이 아직 돌고 있으면 그 소스는 이번 차례에서 뺀다."""
+def _enqueue_round(
+    db: Session,
+    sources: list[DataSource],
+    *,
+    apply: bool,
+    checks: list[CoreSubscription],
+) -> int:
+    """차례 하나 — 작업 하나가 구독을 확인하고 가리키는 쪽부터 한 줄로 돌린다. 앞 차례가 아직
+    안 끝났으면 안 넣는다(같은 원천이 두 번 들어가는 것보다 한 번 건너뛰는 것이 낫다). 소스
+    하나만 따로 넣은 작업(화면의 「동기화」)이 아직 돌고 있으면 그 소스는 이번 차례에서 뺀다 —
+    구독도 같다(화면의 구독 「동기화」). 계획만 보는 차례는 구독을 확인하지 않는다(확인은
+    정의를 적용한다)."""
     waiting = job_services.pending_for(db, "datasource_sync_round")
     if waiting is not None:
         print(f"앞 차례가 아직 안 끝났습니다({waiting.status}) — 이번 차례는 건너뜁니다.")
@@ -121,18 +144,26 @@ def _enqueue_round(db: Session, sources: list[DataSource], *, apply: bool) -> in
             )
             continue
         slugs.append(source.slug)
-    if not slugs:
+    ids: list[str] = []
+    for row in checks if apply else []:
+        alone = job_services.pending_for(db, "core_subscription_sync", id=str(row.id))
+        if alone is not None:
+            print(f"코어 구독 {row.base_url}: 따로 넣은 작업이 아직 안 끝났습니다 — 뺍니다.")
+            continue
+        ids.append(str(row.id))
+    if not slugs and not ids:
         print("돌릴 것이 없습니다.")
         return 0
     job = job_services.enqueue(
         db,
         kind="datasource_sync_round",
-        params={"slugs": slugs, "apply": apply},
+        params={"slugs": slugs, "apply": apply, "subscriptions": ids},
         user=None,
         workspace_id=None,
     )
     db.commit()
-    print(f"작업 {job.id} 넣음 — 이 순서로 돕니다: {' → '.join(slugs)}")
+    checked = f"코어 구독 {len(ids)}개를 확인한 뒤 " if ids else ""
+    print(f"작업 {job.id} 넣음 — {checked}이 순서로 돕니다: {' → '.join(slugs) or '(없음)'}")
     return 0
 
 

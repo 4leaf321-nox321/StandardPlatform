@@ -3719,6 +3719,255 @@
         }
       }
     },
+    "/api/datasources/core-subscriptions": {
+      "get": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "List Core Subscriptions",
+        "description": "코어 구독 — 허브마다 하나. 마지막 확인 · 정의 검토 대기 · 그 구독의 소스.",
+        "operationId": "list_core_subscriptions_api_datasources_core_subscriptions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CoreSubscriptionOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Core Subscriptions Api Datasources Core Subscriptions Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Create Core Subscription",
+        "description": "**코어 구독**(ADR 0085) — 형제 SP 의 코어를 통째로 받는 등록. `apply=false` 면 허브의\n카탈로그 · 정의를 읽어 무엇을 할지만 보인다(아무것도 저장하지 않는다).\n\n생성하면 첫 동기화를 작업으로 넣는다(`job_id`) — 정의를 세우고, 공개 타입마다 소스를 두고,\n행을 끝까지 받는다. 그 뒤로는 타이머가 간격마다 확인한다: 허브에 공개 타입 · 칸이 늘면 다음\n확인이 정의를 세우고 소스 · 칸 대응을 맞춘다(토큰을 다시 넣지 않는다). 같은 허브를 가리키는\n형제 코어 소스가 이미 있으면 구독이 맡는다(다시 만들지 않는다).",
+        "operationId": "create_core_subscription_api_datasources_core_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoreSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreSubscriptionPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/datasources/core-subscriptions/{subscription_id}": {
+      "patch": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Update Core Subscription",
+        "description": "토큰 · 범위 · 간격 · 활성. **토큰은 구독의 소스들에도 함께** — 소스마다 고치지 않는다.\n범위를 바꾸면 다음 확인이 정의를 다시 받는다(범위 밖이 된 타입은 수신 중지).",
+        "operationId": "update_core_subscription_api_datasources_core_subscriptions__subscription_id__patch",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subscription Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoreSubscriptionPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreSubscriptionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Delete Core Subscription",
+        "description": "구독만 삭제한다 — **소스와 받은 자료는 남는다**(소스는 하던 대로 받는다, 정의 · 칸\n대응은 더 맞추지 않는다). 받기까지 멈추려면 소스를 비활성화하거나 삭제한다.",
+        "operationId": "delete_core_subscription_api_datasources_core_subscriptions__subscription_id__delete",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subscription Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/datasources/core-subscriptions/{subscription_id}/sync": {
+      "post": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Sync Core Subscription",
+        "description": "지금 확인 — 허브의 정의 · 공개 타입에 맞추고 그 구독의 소스를 끝까지 받는다(작업).",
+        "operationId": "sync_core_subscription_api_datasources_core_subscriptions__subscription_id__sync_post",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subscription Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/datasources/core-subscriptions/{subscription_id}/held/apply": {
+      "post": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Apply Core Held",
+        "description": "**정의 검토 대기를 적용** — 검토한 지문(`held.mark`)을 돌려보낸다. 허브의 정의를 통째로\n가져오기와 같은 길로 넣고(스냅샷 · 묶음 기록 — 되돌릴 수 있다), 소스를 맞춰 받는다. 그 사이\n허브가 다시 바뀌었으면 작업이 거절한다.",
+        "operationId": "apply_core_held_api_datasources_core_subscriptions__subscription_id__held_apply_post",
+        "parameters": [
+          {
+            "name": "subscription_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subscription Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoreHeldApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/datasources/{slug}": {
       "get": {
         "tags": [
@@ -5223,6 +5472,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CoreCatalogOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/core/sp-definitions": {
+      "get": {
+        "tags": [
+          "core"
+        ],
+        "summary": "Core Definitions",
+        "description": "**공개 타입의 정의** — 형제 Standard Platform 의 코어 구독이 제 정의를 맞춘다(ADR 0085).\n\n정의 묶음(「정의만」)과 같은 모양이다. 묶음 내보내기는 시스템 관리자 토큰을 요구하지만\n이것은 좁은 토큰(`core:read`)으로 읽는다 — 공개한 타입의 정의만 싣고 객체는 없다.\n\n주소에 하이픈을 둔 까닭: 타입 slug 에는 하이픈이 못 들어가므로(`SLUG_RE`) 어떤 타입의\n주소(`/api/core/{type}`)와도 겹치지 않는다.",
+        "operationId": "core_definitions_api_core_sp_definitions_get",
+        "parameters": [
+          {
+            "name": "groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "이 설치의 사이드바 묶음 slug(쉼표로) — 그 묶음 · 하위 묶음 안의 공개 타입만. 비우면 공개 타입 전부",
+              "default": "",
+              "title": "Groups"
+            },
+            "description": "이 설치의 사이드바 묶음 slug(쉼표로) — 그 묶음 · 하위 묶음 안의 공개 타입만. 비우면 공개 타입 전부"
+          },
+          {
+            "name": "known",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "지난 응답의 `mark` — 같으면 정의 없이 `changed: false`",
+              "default": "",
+              "title": "Known"
+            },
+            "description": "지난 응답의 `mark` — 같으면 정의 없이 `changed: false`"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreDefinitionsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -30981,6 +31288,157 @@
         "title": "CoreConsumerOut",
         "description": "이 창구를 쓰는 자격 하나 — **누가 무엇을 가져가는지 사람이 볼 자리.**\n\n바깥에 연 이름은 남의 코드에 박힌다. 그것을 지우거나 바꾸려 할 때 「누가 쓰는가」 가\n화면에 없으면, 사람은 아무도 안 쓴다고 여기고 누른다."
       },
+      "CoreDefinitionsOut": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "title": "System"
+          },
+          "mark": {
+            "type": "string",
+            "title": "Mark"
+          },
+          "changed": {
+            "type": "boolean",
+            "title": "Changed"
+          },
+          "ontology": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ontology"
+          },
+          "added": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Added"
+          },
+          "outside": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Outside"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CoreGroupOut"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system",
+          "mark",
+          "changed"
+        ],
+        "title": "CoreDefinitionsOut",
+        "description": "**공개 타입의 정의** — 형제 SP 의 코어 구독이 제 정의를 맞추는 데 쓴다(ADR 0085).\n\n정의 묶음(「정의만」)과 같은 모양이다(`bundles/export.definitions_of`). 묶음 내보내기는\n시스템 관리자 토큰만 받지만 이것은 `core:read` 로 읽는다 — 공개 타입의 칸은 카탈로그가 이미\n말하고, 여기는 그 정의를 받는 쪽이 그대로 세울 만큼 더 싣는다(고를 값 · 화면 모양 · 관계\n종류 · 인터페이스). 객체는 싣지 않는다."
+      },
+      "CoreGroupChoiceOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label"
+        ],
+        "title": "CoreGroupChoiceOut"
+      },
+      "CoreGroupOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label"
+        ],
+        "title": "CoreGroupOut"
+      },
+      "CoreHeldApplyRequest": {
+        "properties": {
+          "mark": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Mark"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mark"
+        ],
+        "title": "CoreHeldApplyRequest"
+      },
+      "CoreHeldOut": {
+        "properties": {
+          "mark": {
+            "type": "string",
+            "title": "Mark"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mark",
+          "lines"
+        ],
+        "title": "CoreHeldOut",
+        "description": "정의 검토 대기 — 자동으로 적용하지 않고 남긴 허브의 정의 변경."
+      },
       "CorePageOut": {
         "properties": {
           "type_slug": {
@@ -31622,6 +32080,440 @@
         ],
         "title": "CoreStatusOut",
         "description": "**무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나** — 한 화면.\n\n셋이 흩어져 있으면(타입 목록 · 토큰 목록 · 감사 기록) 「지금 바깥에 뭐가 나가고 있지」 를\n아무도 한눈에 답할 수 없고, 그러면 열어 둔 것을 잊는다."
+      },
+      "CoreSubscriptionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "system": {
+            "type": "string",
+            "title": "System"
+          },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "title": "Interval Minutes"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "auth_kind": {
+            "type": "string",
+            "title": "Auth Kind"
+          },
+          "auth_user": {
+            "type": "string",
+            "title": "Auth User"
+          },
+          "has_secret": {
+            "type": "boolean",
+            "title": "Has Secret"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "last_error": {
+            "type": "string",
+            "title": "Last Error"
+          },
+          "held": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoreHeldOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/CoreSubscriptionSourceOut"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "base_url",
+          "system",
+          "source_name",
+          "groups",
+          "interval_minutes",
+          "is_active",
+          "auth_kind",
+          "auth_user",
+          "has_secret",
+          "checked_at",
+          "last_status",
+          "last_error",
+          "held",
+          "notes",
+          "sources",
+          "created_at"
+        ],
+        "title": "CoreSubscriptionOut"
+      },
+      "CoreSubscriptionPatchRequest": {
+        "properties": {
+          "auth_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Kind"
+          },
+          "auth_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth User"
+          },
+          "auth_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Secret"
+          },
+          "groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groups"
+          },
+          "interval_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 43200.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Minutes"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "CoreSubscriptionPatchRequest",
+        "description": "안 보낸 칸은 그대로 — 관리 이름 · 주소는 바꾸지 않는다(바꾸면 받은 정의가 남의 것이\n된다)."
+      },
+      "CoreSubscriptionPlanOut": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "title": "System"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "definitions": {
+            "type": "boolean",
+            "title": "Definitions"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CoreGroupChoiceOut"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/CoreSubscriptionTypeOut"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "held": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Held"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "subscription": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoreSubscriptionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system",
+          "applied",
+          "definitions",
+          "groups",
+          "types",
+          "held",
+          "notes"
+        ],
+        "title": "CoreSubscriptionPlanOut"
+      },
+      "CoreSubscriptionRequest": {
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Base Url"
+          },
+          "auth_kind": {
+            "type": "string",
+            "title": "Auth Kind",
+            "default": "bearer"
+          },
+          "auth_user": {
+            "type": "string",
+            "title": "Auth User",
+            "default": ""
+          },
+          "auth_secret": {
+            "type": "string",
+            "title": "Auth Secret",
+            "default": ""
+          },
+          "source_name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^([a-z][a-z0-9_-]{0,39})?$",
+            "title": "Source Name",
+            "default": "hub"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "maximum": 43200.0,
+            "minimum": 0.0,
+            "title": "Interval Minutes",
+            "default": 60
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_url"
+        ],
+        "title": "CoreSubscriptionRequest",
+        "description": "**코어 구독**(ADR 0085) — 형제 SP 의 코어를 통째로 받는 등록.\n\n묶음 구독은 그 순간의 타입마다 소스를 한 번 만들고 끝났다. 구독은 동기화마다 허브의 정의를\n맞추고(저장값을 잃지 않는 변경만 자동 — 나머지는 정의 검토 대기), 공개 타입마다 소스를 두고\n칸 대응을 맞추고, 공개가 해제된 타입은 수신 중지한다(받은 자료는 남는다)."
+      },
+      "CoreSubscriptionSourceOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "type_slug",
+          "is_active",
+          "paused",
+          "last_status",
+          "last_success_at"
+        ],
+        "title": "CoreSubscriptionSourceOut"
+      },
+      "CoreSubscriptionTypeOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          },
+          "source_slug": {
+            "type": "string",
+            "title": "Source Slug",
+            "default": ""
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "action"
+        ],
+        "title": "CoreSubscriptionTypeOut",
+        "description": "미리 보기의 한 줄 — 허브의 공개 타입 하나를 이 구독이 어떻게 받나."
       },
       "CoreSuggestOut": {
         "properties": {
@@ -33323,6 +34215,18 @@
               }
             ],
             "title": "Reconciled At"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
           }
         },
         "type": "object",

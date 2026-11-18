@@ -44,6 +44,70 @@ SOURCE_KINDS = ("odata", "rest", "file", "sp_core", "ra_reports")
 RUN_STATUSES = ("planned", "ok", "failed")
 
 
+#: 코어 구독의 마지막 확인 결과.
+#:   ok      정의 · 소스를 다 맞췄다
+#:   held    맞췄지만 저장값을 잃을 수 있는 정의 변경을 남겨 두었다(정의 검토 대기)
+#:   failed  허브에 닿지 못했거나 정의를 세우지 못했다(`last_error`)
+SUBSCRIPTION_STATUSES = ("ok", "held", "failed")
+
+
+class CoreSubscription(Base):
+    """**코어 구독**(ADR 0085) — 형제 Standard Platform 의 코어를 통째로 받는 등록 하나.
+
+    묶음 구독(ADR 0055)은 그 순간 있던 타입마다 소스를 한 번 만들고 끝났다 — 허브에 공개 타입이
+    하나 늘면 받는 쪽은 정의 묶음을 다시 받고, 토큰을 다시 넣어 구독을 다시 했다. 칸이 하나
+    늘면 정의를 다시 받고 그 소스의 칸 대응을 다시 맞춰야 했고, 안 하면 **새 칸의 값이 오류
+    없이 빠졌다.** 구독은 그 일을 동기화마다 한다: 허브의 정의를 맞추고(저장값을 잃지 않는
+    변경만 자동), 공개 타입마다 소스를 두고 칸 대응을 맞추고, 공개가 해제된 타입은 받기만
+    멈춘다.
+    """
+
+    __tablename__ = "core_subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    base_url: Mapped[str] = mapped_column(String(500), unique=True)
+    """허브의 API 주소(`https://hub.example/api` — `/core` 의 앞). 한 허브에 구독 하나."""
+    system: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    """허브가 카탈로그에서 말한 제 이름(`system`) — 화면이 보인다."""
+    auth: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """{kind, user, secret} — 데이터 소스와 같다. 구독의 소스들이 **같은 토큰을 쓴다**(바꾸면
+    함께). **화면에 다시 보여 주지 않는다.**"""
+    source_name: Mapped[str] = mapped_column(String(40))
+    """받는 정의 · 객체의 **관리 이름**(`managed_by`) — 묶음 가져오기의 `source` 와 같다. 이
+    이름이 관리하지 않는, 이 설치가 만든 같은 slug 의 정의는 건드리지 않는다. 만든 뒤 바꾸지
+    않는다(바꾸면 이미 받은 정의가 남의 것이 된다)."""
+    groups: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    """허브의 사이드바 묶음 slug — 그 묶음 · 하위 묶음의 공개 타입만 받는다. 비우면 전부."""
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=60, server_default="60")
+    """확인 간격 — 구독의 소스들도 이 간격으로 받는다. 0 이면 손으로만(「동기화」)."""
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    definitions_mark: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """마지막으로 맞춘 허브 정의의 지문(`sp-definitions` 의 `mark`) — 같으면 정의를 다시 받지
+    않는다."""
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    held: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """**정의 검토 대기** — {mark, lines, ontology}. 저장값을 잃을 수 있는 변경(속성 종류 ·
+    고를 값 제외 · 필수 · 유일 …)은 자동으로 적용하지 않고 여기 남긴다. 시스템 관리자가 줄을
+    읽고 적용한다. 비면 남긴 것이 없다."""
+    state: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """구독이 기억해 두는 것 — `paused`(구독이 수신 중지한 소스 slug — 다시 공개되면 이것만
+    다시 활성화한다, 사람이 비활성화한 것은 안 건드린다) · `kinds`(타입마다 받던 관계 종류 —
+    늘면 선을 처음부터 다시 받는다) · `notes`(마지막 확인에서 사람이 알아 둘 것)."""
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class DataSource(Base):
     __tablename__ = "data_sources"
 
@@ -134,6 +198,14 @@ class DataSource(Base):
     interval_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     """0 이면 손으로만. 그 밖이면 타이머(`scripts/sync_datasources.py --due`)가 이 간격으로."""
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("core_subscriptions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    """이 소스를 만들고 맞추는 **코어 구독**(ADR 0085) — 있으면 칸 대응 · 선 받기 · 토큰 · 간격
+    · 활성을 구독이 정한다. 구독을 삭제하면 비고, 소스는 그대로 남아 하던 대로 받는다."""
 
     last_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
