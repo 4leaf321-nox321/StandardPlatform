@@ -251,6 +251,9 @@ class TreeNodeOut(BaseModel):
     child_count: int
     """**자식 수를 미리 준다.** 없는데 펼침 화살표가 보이면 눌러 보고서야 빈 것을
     안다 — 그 한 번이 매 노드마다 반복된다."""
+    prefix: str | None = None
+    """**앞머리** — 타입의 `list_view.tree.prefix` 로 정한 칸의 값(문서의 절이면 절 번호
+    「3.2」). 이름 앞에 붙여 보인다. 정하지 않았거나 값이 없으면 null."""
 
 
 class TreeOut(BaseModel):

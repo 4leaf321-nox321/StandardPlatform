@@ -180,7 +180,7 @@ function Node({
         {node.child_count > 0 ? (
           <button
             type="button"
-            aria-label={`${node.label} 확장`}
+            aria-label={`${shownName(node)} 확장`}
             aria-expanded={open}
             className="text-muted-foreground hover:text-foreground p-0.5"
             style={{ marginLeft: depth * 12 }}
@@ -219,6 +219,11 @@ function Node({
   )
 }
 
+/** 앞머리를 붙인 이름 — 「3.2 측정 방법」. 앞머리가 없으면 이름 그대로. */
+function shownName(node: TreeNode): string {
+  return node.prefix ? `${node.prefix} ${node.label}` : node.label
+}
+
 function NodeButton({
   node,
   depth,
@@ -240,8 +245,12 @@ function NodeButton({
         active ? 'bg-accent text-accent-foreground font-medium' : 'hover:bg-accent/50',
         node.status === 'deprecated' && 'text-muted-foreground',
       )}
-      title={node.key ? `${node.label} · ${node.key}` : node.label}
+      title={node.key ? `${shownName(node)} · ${node.key}` : shownName(node)}
     >
+      {/* **앞머리**(타입의 `tree.prefix` — 문서의 절 번호)는 이름에 넣지 않고 앞에 흐리게 붙인다. */}
+      {node.prefix && (
+        <span className="text-muted-foreground mr-1 tabular-nums">{node.prefix}</span>
+      )}
       {node.label}
       {node.child_count > 0 && (
         <span className="text-muted-foreground ml-1 text-xs tabular-nums">{node.child_count}</span>

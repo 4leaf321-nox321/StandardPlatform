@@ -28,6 +28,7 @@ import type {
   RelationType,
   RollupFn,
   RollupSpec,
+  TreeSpec,
 } from '@/modules/ontology/api'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
@@ -59,6 +60,8 @@ const NOT_A_GOOD_COLUMN = new Set(['text_long', 'document'])
 
 /** 「트리 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NO_TREE = '__none__'
+/** 「앞머리 없음」 — 같은 까닭. */
+const NO_PREFIX = '__none__'
 
 /** 열을 안 골랐을 때 목록이 떨어지는 기본. `ObjectListPage` 와 같아야 한다. */
 const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
@@ -354,6 +357,7 @@ export function ListViewEditor({
       {/* --- 트리 · 롤업 — 타입만 ------------------------------------- */}
       {owner === 'type' && (
         <TreeSection
+          defs={defs}
           relationTypes={relationTypes}
           interfaces={interfaces}
           typeSlug={typeSlug}
@@ -438,12 +442,14 @@ function Toggles({
  * 종류라서」 인지 말해 주지 못한다.
  */
 function TreeSection({
+  defs,
   relationTypes,
   interfaces,
   typeSlug,
   value,
   onChange,
 }: {
+  defs: PropertyDef[]
   relationTypes: RelationType[]
   interfaces: ObjectInterface[]
   typeSlug: string
@@ -477,7 +483,8 @@ function TreeSection({
             onValueChange={(next) =>
               onChange({
                 ...value,
-                tree: next === NO_TREE ? undefined : { relation: next, parent },
+                // 차례 · 앞머리는 타입의 칸이라 관계를 바꿔도 그대로 둔다.
+                tree: next === NO_TREE ? undefined : { ...value.tree, relation: next, parent },
               })
             }
           >
@@ -501,7 +508,7 @@ function TreeSection({
                 onValueChange={(next) =>
                   onChange({
                     ...value,
-                    tree: { relation: kind.slug, parent: next as 'src' | 'dst' },
+                    tree: { ...value.tree, relation: kind.slug, parent: next as 'src' | 'dst' },
                   })
                 }
               >
@@ -521,10 +528,167 @@ function TreeSection({
                 <b>방향을 잘못 선택하면 트리가 뒤집힌 채 그려지고</b>, 화면은 그것을 말해 주지
                 못합니다. 이은 뒤 목록에서 한번 확인하세요.
               </p>
+              <TreeOrder
+                defs={defs}
+                tree={{ ...value.tree, relation: kind.slug, parent }}
+                onChange={(tree) => onChange({ ...value, tree })}
+              />
             </>
           )}
         </>
       )}
+    </div>
+  )
+}
+
+/** 트리의 차례 · 앞머리로 고를 수 있는 칸 — 파일 · 문서 칸은 값이 따로 있어 뺀다(서버가 거절한다). */
+function treeFields(defs: PropertyDef[]): { id: string; label: string }[] {
+  return [
+    ...BUILT_IN,
+    ...defs
+      .filter((def) => def.data_type !== 'file' && def.data_type !== 'document')
+      .map((def) => ({ id: `properties.${def.key}`, label: def.label })),
+  ]
+}
+
+/** `key` 를 뺀 사본 — 비운 설정은 키째 빼고 보낸다(정의 파일이 짧게 남는다). */
+function without<K extends keyof TreeSpec>(tree: TreeSpec, key: K): TreeSpec {
+  const copy = { ...tree }
+  delete copy[key]
+  return copy
+}
+
+/**
+ * 트리의 **차례**(같은 부모 아래 — 칸 이름의 목록, 앞의 칸부터)와 **앞머리**(이름 앞에 붙일 값).
+ *
+ * 문서의 절을 객체로 넣을 때 번호를 이름에 넣으면 이름으로 찾기 · 별칭이 번호에 묶인다(절 하나가 끼면
+ * 뒤의 이름이 다 바뀐다). 번호는 칸에 두고 여기서 차례 · 앞머리로 건다 — 트리는 「3.2 측정 방법」 처럼
+ * 보이고 이름은 「측정 방법」 그대로다.
+ */
+function TreeOrder({
+  defs,
+  tree,
+  onChange,
+}: {
+  defs: PropertyDef[]
+  tree: TreeSpec
+  onChange: (next: TreeSpec) => void
+}) {
+  const fields = treeFields(defs)
+  const order = tree.sort ?? []
+  const rest = fields.filter((one) => !order.includes(one.id))
+
+  function labelOf(id: string): string {
+    return fields.find((one) => one.id === id)?.label ?? id
+  }
+
+  function setOrder(next: string[]) {
+    onChange(next.length > 0 ? { ...tree, sort: next } : without(tree, 'sort'))
+  }
+
+  function move(index: number, by: number) {
+    const next = [...order]
+    const target = index + by
+    if (target < 0 || target >= next.length) return
+    ;[next[index], next[target]] = [next[target], next[index]]
+    setOrder(next)
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div className="space-y-2">
+        <Label>같은 부모 아래 차례</Label>
+        {order.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            선택하지 않으면 <b>이름순</b>입니다.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {order.map((id, index) => (
+              <li key={id} className="flex items-center gap-2 rounded-md border px-2 py-1">
+                <span className="text-muted-foreground w-5 text-xs tabular-nums">{index + 1}</span>
+                <span className="flex-1 text-sm">{labelOf(id)}</span>
+                <span className="text-muted-foreground font-mono text-xs">{id}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`차례 ${labelOf(id)} 위로`}
+                  disabled={index === 0}
+                  onClick={() => move(index, -1)}
+                >
+                  <ArrowUp className="size-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`차례 ${labelOf(id)} 아래로`}
+                  disabled={index === order.length - 1}
+                  onClick={() => move(index, 1)}
+                >
+                  <ArrowDown className="size-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`차례 ${labelOf(id)} 빼기`}
+                  onClick={() => setOrder(order.filter((one) => one !== id))}
+                >
+                  <X className="size-3.5" />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {rest.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {rest.map((one) => (
+              <Button
+                key={one.id}
+                type="button"
+                variant="outline"
+                size="sm"
+                aria-label={`차례에 ${one.label} 추가`}
+                onClick={() => setOrder([...order, one.id])}
+              >
+                <Plus className="mr-1 size-3.5" />
+                {one.label}
+              </Button>
+            ))}
+          </div>
+        )}
+        <p className="text-muted-foreground text-xs">
+          앞의 칸부터 세웁니다. 숫자와 번호 모양의 글자(3.2 · 3.10)는 숫자로, 참조 칸은 상대의
+          이름으로 — 값이 같으면 이름순입니다.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="tree-prefix">이름 앞에 붙일 값(앞머리)</Label>
+        <Select
+          value={tree.prefix ?? NO_PREFIX}
+          onValueChange={(id) =>
+            onChange(id === NO_PREFIX ? without(tree, 'prefix') : { ...tree, prefix: id })
+          }
+        >
+          <SelectTrigger id="tree-prefix">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_PREFIX}>없음</SelectItem>
+            {fields.map((one) => (
+              <SelectItem key={one.id} value={one.id}>
+                {one.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-muted-foreground text-xs">
+          트리에서 이름 앞에 흐리게 붙습니다 — 문서의 절 번호는 이름에 넣지 말고 이 칸으로 두세요.
+        </p>
+      </div>
     </div>
   )
 }

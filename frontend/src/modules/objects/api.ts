@@ -278,6 +278,8 @@ export interface TreeNode {
   status: string
   /** **자식 수를 미리 준다** — 없는데 펼침 화살표가 보이면 눌러 보고서야 안다. */
   child_count: number
+  /** 앞머리 — 타입의 `tree.prefix` 칸의 값(문서의 절 번호). 이름 앞에 붙여 보인다. */
+  prefix?: string | null
 }
 
 export interface TreeOut {

@@ -65,6 +65,7 @@ from app.modules.objects import (
     similar,
     sublists,
     system,
+    treeview,
     typecounts,
     watches,
 )
@@ -1520,7 +1521,9 @@ def object_tree(
     if not ids:
         return TreeOut(nodes=[], orphan_count=orphan_count, as_of=day)
 
-    # **볼 수 있는 것만 준다.** 남의 부서 것은 트리에도 안 나온다.
+    # **볼 수 있는 것만 준다.** 남의 부서 것은 트리에도 안 나온다. 차례는 타입의 `tree.sort` —
+    # 뿌리와 하위가 이 한 질의를 같이 쓴다(없으면 이름순, 끝에 이름 · id).
+    order, prefix_field = treeview.spec(object_type.list_view)
     rows = list(
         db.scalars(
             select(ObjectInstance)
@@ -1529,9 +1532,10 @@ def object_tree(
                 ObjectInstance.deleted_at.is_(None),
                 visible_owner_clause(user, ObjectInstance.owner_workspace_id),
             )
-            .order_by(ObjectInstance.label)
+            .order_by(*treeview.order_by(db, object_type, order))
         )
     )
+    prefixes = treeview.prefixes(db, user, object_type, prefix_field, rows)
     counts = graph.child_counts(
         db,
         relation=relation,
@@ -1548,6 +1552,7 @@ def object_tree(
                 key=row.key,
                 status=row.status,
                 child_count=counts.get(row.id, 0),
+                prefix=prefixes.get(row.id),
             )
             for row in rows
         ],

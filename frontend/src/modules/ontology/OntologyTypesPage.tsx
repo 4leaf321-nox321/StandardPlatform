@@ -3,10 +3,13 @@
  *
  * 행을 누르면 타입 자체의 설정을 고치고, 「속성」 을 누르면 그 타입이 담는 값의
  * 모양을 고친다. **한 창에 섞지 않는다** — 섞으면 둘이 같은 것처럼 읽힌다.
+ *
+ * 「속성」 · 「객체」 는 **창으로 뜬다.** 예전에는 표 아래에 붙어, 타입이 많으면 누른 뒤 화면을 한참
+ * 내려야 보였고 어느 타입의 것인지 표와 멀어졌다.
  */
 
 import { useState } from 'react'
-import { ChevronDown, Eye, Settings2 } from 'lucide-react'
+import { Eye, Settings2 } from 'lucide-react'
 
 import { PropertyEditor } from '@/modules/ontology/PropertyEditor'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
@@ -17,6 +20,13 @@ import { EmptyState } from '@/shared/components/EmptyState'
 import { IconPickerButton } from '@/shared/components/IconPicker'
 import { TypeIcon } from '@/shared/components/TypeIcon'
 import { Button } from '@/shared/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/shared/components/ui/dialog'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 import {
@@ -34,7 +44,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
-import { cn } from '@/shared/lib/utils'
 
 const KIND_LABELS: Record<string, string> = {
   reference: '어휘',
@@ -46,7 +55,7 @@ export default function OntologyTypesPage() {
   const { schema, reload, setError } = useOntology()
   const [editing, setEditing] = useState<string | null>(null)
   const [openProperties, setOpenProperties] = useState<string | null>(null)
-  // 「객체 N」 을 누르면 그 타입의 예시가 아래에 선다 — 정의만으로는 칸의 뜻이 안 잡힌다.
+  // 「객체 N」 을 누르면 그 타입의 예시가 창으로 뜬다 — 정의만으로는 칸의 뜻이 안 잡힌다.
   const [openExamples, setOpenExamples] = useState<string | null>(null)
 
   const types = schema?.types ?? []
@@ -146,11 +155,11 @@ export default function OntologyTypesPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        aria-expanded={row.slug === openExamples}
+                        aria-haspopup="dialog"
                         title="이 타입의 예시 객체"
                         onClick={(event) => {
                           event.stopPropagation()
-                          setOpenExamples(row.slug === openExamples ? null : row.slug)
+                          setOpenExamples(row.slug)
                         }}
                       >
                         <Eye className="mr-1 size-3.5" />
@@ -164,20 +173,14 @@ export default function OntologyTypesPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        aria-expanded={row.slug === openProperties}
+                        aria-haspopup="dialog"
                         onClick={(event) => {
                           event.stopPropagation()
-                          setOpenProperties(row.slug === openProperties ? null : row.slug)
+                          setOpenProperties(row.slug)
                         }}
                       >
                         <Settings2 className="mr-1 size-3.5" />
                         속성 {row.properties.length}
-                        <ChevronDown
-                          className={cn(
-                            'ml-1 size-3.5 transition-transform',
-                            row.slug === openProperties && 'rotate-180',
-                          )}
-                        />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -188,36 +191,54 @@ export default function OntologyTypesPage() {
           <p className="text-muted-foreground text-xs">
             <b>행</b>을 클릭하면 묶음·분류·식별자 정책을 수정하거나 삭제합니다. <b>「객체」 수</b>를
             클릭하면 그 타입의 예시 객체가, <b>「속성 정의」 단추</b>를 클릭하면 그 타입이 포함하는
-            값의 모양이 아래에 열립니다.
+            값의 모양이 창으로 열립니다.
           </p>
         </>
       )}
 
       {exampleTarget && (
-        <section className="space-y-3 rounded-md border p-4">
-          <h2 className="text-base font-semibold">
-            <TypeIcon name={exampleTarget.icon} className="mr-2 inline align-text-bottom" />
-            {exampleTarget.label} 의 예시
-          </h2>
-          {/* 타입마다 새로 — 다시 쓰면 B 의 제목 아래 A 의 예시가 서고, 그 링크는 /o/B/<A 의 id>(404). */}
-          <TypeExamples key={exampleTarget.slug} type={exampleTarget} />
-        </section>
+        <Dialog open onOpenChange={(open) => !open && setOpenExamples(null)}>
+          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>
+                <TypeIcon name={exampleTarget.icon} className="mr-2 inline align-text-bottom" />
+                {exampleTarget.label} 의 예시
+              </DialogTitle>
+              <DialogDescription>
+                이 타입의 객체 {exampleTarget.object_count}개 중 최근 것 몇 개 — 정의만으로는
+                잡히지 않는 칸의 뜻을 값으로 봅니다.
+              </DialogDescription>
+            </DialogHeader>
+            {/* 타입마다 새로 — 다시 쓰면 B 의 제목 아래 A 의 예시가 서고, 그 링크는 /o/B/<A 의 id>(404). */}
+            <TypeExamples key={exampleTarget.slug} type={exampleTarget} />
+          </DialogContent>
+        </Dialog>
       )}
 
       {propertyTarget && (
-        <section className="space-y-3">
-          <h2 className="text-base font-semibold">{propertyTarget.label} 의 속성</h2>
-          {/* 오류는 이 창 안에 선다 — 화면 맨 위로 올리면 아래를 보고 있던
-              사람 눈에 안 들어온다. */}
-          <PropertyEditor
-            owner={{ kind: 'type', row: propertyTarget }}
-            properties={propertyTarget.properties}
-            types={types}
-            interfaces={schema?.interfaces ?? []}
-            onChanged={reload}
-            readOnly={Boolean(propertyTarget.managed_by)}
-          />
-        </section>
+        <Dialog open onOpenChange={(open) => !open && setOpenProperties(null)}>
+          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-5xl">
+            <DialogHeader>
+              <DialogTitle>{propertyTarget.label} 의 속성</DialogTitle>
+              <DialogDescription>
+                {propertyTarget.managed_by
+                  ? `${propertyTarget.managed_by} 가 관리하는 타입이라 여기서는 볼 수만 있습니다.`
+                  : '이 타입이 담는 값의 모양 — 속성을 추가 · 수정 · 삭제합니다.'}
+              </DialogDescription>
+            </DialogHeader>
+            {/* 오류는 이 창 안에 선다 — 화면 맨 위로 올리면 창을 보고 있던 사람 눈에 안
+                들어온다. */}
+            <PropertyEditor
+              key={propertyTarget.slug}
+              owner={{ kind: 'type', row: propertyTarget }}
+              properties={propertyTarget.properties}
+              types={types}
+              interfaces={schema?.interfaces ?? []}
+              onChanged={reload}
+              readOnly={Boolean(propertyTarget.managed_by)}
+            />
+          </DialogContent>
+        </Dialog>
       )}
 
       {target && (

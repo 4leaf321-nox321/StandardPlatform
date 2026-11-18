@@ -10,6 +10,13 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ListView, PropertyDef, RelationType } from '@/modules/ontology/api'
 
 const WEIGHT = { key: 'weight', label: '무게', data_type: 'number', multi: false } as PropertyDef
+const SECTION_NO = {
+  key: 'section_no',
+  label: '절 번호',
+  data_type: 'text',
+  multi: false,
+} as PropertyDef
+const PICTURE = { key: 'pic', label: '그림', data_type: 'file', multi: false } as PropertyDef
 
 function kind(extra: Partial<RelationType> = {}): RelationType {
   return {
@@ -29,7 +36,7 @@ async function mount(value: ListView, relation = kind()) {
   const onChange = vi.fn()
   render(
     <ListViewEditor
-      defs={[WEIGHT]}
+      defs={[WEIGHT, SECTION_NO, PICTURE]}
       relationTypes={[relation]}
       typeSlug="part"
       value={value}
@@ -83,5 +90,74 @@ describe('롤업 줄의 수량 반영 · 말단만 · 곱', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/곱은 총수량만큼 거듭제곱\(직렬 신뢰도\)/)).toBeInTheDocument()
     expect(screen.getByText(/「구성」 에 수량 칸이 없어/)).toBeInTheDocument()
+  })
+})
+
+describe('트리의 차례와 앞머리', () => {
+  it('차례에 칸을 더하고 앞머리를 고른다 — 파일 칸은 고를 수 없다', async () => {
+    const onChange = await mount({ tree: { relation: 'bom_of', parent: 'dst' } })
+    await userEvent.click(screen.getByRole('button', { name: '차례에 절 번호 추가' }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      tree: { relation: 'bom_of', parent: 'dst', sort: ['properties.section_no'] },
+    })
+    expect(screen.queryByRole('button', { name: '차례에 그림 추가' })).toBeNull()
+  })
+
+  it('차례를 옮기고 빼며, 다 빼면 키째 뺀다', async () => {
+    const onChange = await mount({
+      tree: {
+        relation: 'bom_of',
+        parent: 'dst',
+        sort: ['properties.section_no', 'label'],
+        prefix: 'properties.section_no',
+      },
+    })
+    await userEvent.click(screen.getByRole('button', { name: '차례 이름 위로' }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      tree: {
+        relation: 'bom_of',
+        parent: 'dst',
+        sort: ['label', 'properties.section_no'],
+        prefix: 'properties.section_no',
+      },
+    })
+    onChange.mockClear()
+    const { ListViewEditor } = await import('@/modules/ontology/ListViewEditor')
+    const one = vi.fn()
+    render(
+      <ListViewEditor
+        defs={[SECTION_NO]}
+        relationTypes={[kind()]}
+        typeSlug="part"
+        value={{ tree: { relation: 'bom_of', parent: 'dst', sort: ['label'] } }}
+        onChange={one}
+      />,
+    )
+    await userEvent.click(screen.getAllByRole('button', { name: '차례 이름 빼기' }).at(-1)!)
+    expect(one).toHaveBeenLastCalledWith({ tree: { relation: 'bom_of', parent: 'dst' } })
+  })
+
+  it('관계 방향을 바꿔도 차례 · 앞머리는 그대로 둔다', async () => {
+    const onChange = await mount({
+      tree: {
+        relation: 'bom_of',
+        parent: 'dst',
+        sort: ['properties.section_no'],
+        prefix: 'properties.section_no',
+      },
+    })
+    const direction = screen
+      .getAllByRole('combobox')
+      .find((one) => one.textContent?.includes('자식이 부모를 가리킨다'))
+    await userEvent.click(direction!)
+    await userEvent.click(await screen.findByRole('option', { name: /부모가 자식을 가리킨다/ }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      tree: {
+        relation: 'bom_of',
+        parent: 'src',
+        sort: ['properties.section_no'],
+        prefix: 'properties.section_no',
+      },
+    })
   })
 })

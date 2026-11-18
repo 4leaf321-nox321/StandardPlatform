@@ -1139,7 +1139,11 @@ async def ontology_import(
     **계층(트리)** 은 타입의 `list_view.tree` 다 — `{"relation": "part_of", "parent": "dst"}`
     (`dst` 면 자식이 부모를 가리키는 관계, 기본), 참조 칸으로 이으면 `"relation":
     "ref:<타입>.<칸>"`. 트리가 있어야 「하위 전체」(`under`) 조건 · 계층 축(`…@0`) ·
-    `object_tree` · 롤업이 된다.
+    `object_tree` · 롤업이 된다. 같은 부모 아래의 차례는 `"sort": ["properties.<칸>", …]`
+    (앞의 칸부터, 숫자 · 번호 모양 글자 「3.2」 · 「3.10」 은 숫자로, 참조 칸은 상대의
+    이름으로, 없으면 이름순), 노드 이름 앞에 붙일 값은 `"prefix": "properties.<칸>"`. **문서의
+    절 번호는 이름에 넣지 않는다** — `section_no` 같은 칸에 두고 `sort` · `prefix` 로 건다
+    (이름은 「측정 방법」 만).
     **유효 기간** — 관계 종류에 `"effectivity": true` 면 그 선이 기간(`valid_from` ·
     `valid_to`)을 받는다(BOM 의 적용 기간). 끄려면 기간이 든 선이 없어야 한다.
     **수량 칸** — 관계 종류의 `"quantity_key": "<관계 속성 키>"` 가 관계마다 「부모 하나에 자식
@@ -2456,7 +2460,8 @@ async def object_tree(
     **기준일(`as_of`, `YYYY-MM-DD`)의 트리다** — 비우면 오늘. 관계 종류가 유효 기간을 받으면
     그날 유효한 선만 따라간다(「3월 1일부터 A1 이 A2 로 바뀜」 이면 2월 기준에는 A1, 4월
     기준에는 A2). 응답의 `as_of` 가 그 날이다 — 사람에게 「○월 ○일 기준」 이라고 함께
-    말한다."""
+    말한다. 노드의 `prefix` 는 타입이 정한 앞머리(문서의 절 번호 「3.2」 등)다 — 사람에게는
+    이름 앞에 붙여 말한다(「3.2 측정 방법」). 노드는 타입의 `tree.sort` 차례로 온다."""
     params: list[tuple[str, Any]] = [("orphans", "true" if orphans else "false")]
     if parent:
         params.append(("parent", parent))

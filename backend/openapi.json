@@ -60508,6 +60508,17 @@
           "child_count": {
             "type": "integer",
             "title": "Child Count"
+          },
+          "prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefix"
           }
         },
         "type": "object",

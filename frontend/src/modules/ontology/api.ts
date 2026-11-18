@@ -83,6 +83,17 @@ export interface RollupSpec {
   leaves_only?: boolean
 }
 
+/**
+ * 목록 왼쪽 트리 — 관계 · 부모 쪽, 같은 부모 아래의 차례(`sort` — 칸 이름의 목록, 앞의 칸부터)와
+ * 이름 앞에 붙일 앞머리(`prefix` — 칸 하나, 문서의 절 번호처럼 이름에 넣지 않고 보이는 값).
+ */
+export interface TreeSpec {
+  relation: string
+  parent?: 'src' | 'dst'
+  sort?: string[]
+  prefix?: string
+}
+
 export interface ListView {
   columns?: string[]
   /**
@@ -92,7 +103,7 @@ export interface ListView {
    * 골라 그리면 그 트리는 무엇을 보여 주는지 말할 수 없다. `parent` 는 **부모가
    * 어느 끝인가** — `part_of`(자식→부모)면 `dst`, `contains`(부모→자식)면 `src`.
    */
-  tree?: { relation: string; parent?: 'src' | 'dst' }
+  tree?: TreeSpec
   /**
    * 「아래 전부」 의 숫자를 트리 관계로 모은 것 — 상세에 뜬다. 저장하지 않고 볼 때마다
    * 센다. 트리가 있어야 하고, 숫자 속성만 된다.

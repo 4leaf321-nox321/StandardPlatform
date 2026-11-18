@@ -33,7 +33,12 @@ INTERFACE_LIST_KEYS = {"columns", "sort", "filters", "search"}
 #: 인터페이스 목록에만 있는 자리 — 그 줄이 어느 타입의 객체인가.
 INTERFACE_FIELDS = frozenset({"type"})
 SORT_KEYS = {"field", "dir"}
-TREE_KEYS = {"relation", "parent"}
+TREE_KEYS = {"relation", "parent", "sort", "prefix"}
+"""트리 — 관계 · 부모 쪽 끝, 그리고 같은 부모 아래의 **차례**(`sort` — 칸 이름의 목록, 앞의
+칸부터)와 노드 이름 앞에 붙일 **앞머리**(`prefix` — 칸 하나, 문서의 절 번호처럼 이름에 넣지
+않고 보이는 값). 둘 다 비면 지금처럼 이름순 · 앞머리 없음이다."""
+#: 트리 정렬 · 앞머리로 못 쓰는 속성 종류 — 값이 `properties` 에 없다(첨부 표 · 문서 표).
+_NO_VALUE_KINDS = frozenset({"file", "document"})
 ROLLUP_KEYS = {"property", "fn", "label", "weighted", "leaves_only"}
 #: 롤업이 하는 셈. 「아래 전부」 의 숫자 속성을 트리 관계로 모은다. `product`(곱)는 신뢰도처럼
 #: 곱해 모으는 값 — 「수량 반영」 이면 총수량만큼 거듭제곱한다(직렬 신뢰도, ADR 0040).
@@ -109,6 +114,19 @@ def _require_field(
     )
 
 
+def _require_value(field: str, kinds: dict[str, str], *, what: str) -> None:
+    """값이 `properties` 에 있는 칸인가 — 파일 · 문서 칸은 값이 따로 산다(정렬할 것도 앞에 붙일
+    것도 없다)."""
+    if (
+        field.startswith("properties.")
+        and kinds.get(field.split(".", 1)[1]) in _NO_VALUE_KINDS
+    ):
+        raise InvalidValue(
+            code("ONTOLOGY", 101),
+            f"{what}: 파일 · 문서 칸은 값이 따로 있어 쓸 수 없습니다: {field}",
+        )
+
+
 def validate_list_view(
     spec: dict[str, Any],
     defs: Sequence[FieldDef],
@@ -158,6 +176,21 @@ def validate_list_view(
             raise InvalidValue(
                 code("ONTOLOGY", 56), "트리의 부모 쪽은 src 나 dst 여야 합니다."
             )
+        kinds = {d.key: d.data_type for d in defs}
+        order = tree.get("sort")
+        if order is not None:
+            # 목록의 기본 정렬과 같은 검사 — 그 타입에 실제로 있는 속성이나 기본 칸.
+            _require_shape(order, list, what="트리 정렬")
+            for field in order:
+                _require_field(field, keys, what="트리 정렬")
+                _require_value(field, kinds, what="트리 정렬")
+            if len(set(order)) != len(order):
+                raise InvalidValue(
+                    code("ONTOLOGY", 100), "트리 정렬에 같은 칸이 두 번 있습니다."
+                )
+        if tree.get("prefix") is not None:
+            _require_field(tree["prefix"], keys, what="트리 앞머리")
+            _require_value(tree["prefix"], kinds, what="트리 앞머리")
 
     # 롤업 — 트리가 있어야 뜻이 있고, 숫자 칸만 모은다. 글자를 더하면 그 수는 아무 뜻도 없다.
     rollups = spec.get("rollups") or []
@@ -260,6 +293,19 @@ def prune_field(spec: dict[str, Any], key: str) -> dict[str, Any]:
     sort = out.get("sort")
     if isinstance(sort, dict) and sort.get("field") == field:
         out.pop("sort")
+    tree = out.get("tree")
+    if isinstance(tree, dict) and (
+        field in (tree.get("sort") or []) or tree.get("prefix") == field
+    ):
+        tree = dict(tree)
+        order = [one for one in tree.get("sort") or [] if one != field]
+        if order:
+            tree["sort"] = order
+        else:
+            tree.pop("sort", None)
+        if tree.get("prefix") == field:
+            tree.pop("prefix")
+        out["tree"] = tree
     return out
 
 
