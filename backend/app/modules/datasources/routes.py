@@ -302,7 +302,9 @@ def create_core_subscription(
     if not payload.apply:
         db.rollback()  # 계획은 아무것도 남기지 않는다
         return out
-    row = subscriptions.create(db, user, payload, base_url=base_url)
+    row = subscriptions.create(
+        db, user, payload, base_url=base_url, source_name=out.source_name
+    )
     job = job_services.enqueue(
         db,
         kind="core_subscription_sync",

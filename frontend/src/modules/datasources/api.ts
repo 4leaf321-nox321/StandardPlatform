@@ -286,6 +286,8 @@ export interface CoreGroupChoice {
 
 export interface CoreSubscriptionPlan {
   system: string
+  /** 받을 정의의 관리 이름 — 이 설치의 허브 타입이 허브의 이름으로 관리되면 그 이름. */
+  source_name?: string
   applied: boolean
   /** 허브가 정의 창구를 주나 — 아니면 이 설치에 정의가 있는 타입만 받는다. */
   definitions: boolean

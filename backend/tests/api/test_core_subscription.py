@@ -721,3 +721,124 @@ def test_다른_주소의_형제_코어_소스가_받는_타입은_건너뛰고_
     assert again["adopted"] == [other], again
     assert again["created"] == []
     assert _sources(made["id"])[twin["part"]].auth.get("secret") == "hub-token"
+
+
+def _twin_as(client: TestClient, admin: Signed, tag: str, source: str) -> dict[str, str]:
+    """쌍둥이 — 허브의 정의를 **관리 이름 `source`** 로 받아 둔다(`_twin` 은 `hub`)."""
+    hub = _names(tag, "hub")
+    started = client.post(
+        "/api/bundles/export",
+        json={"group": hub["group"], "definitions_only": True},
+        headers=admin.headers,
+    )
+    assert started.status_code == 202, started.text
+    done = finish_job(client, admin, started.json())
+    exported = client.get(f"/api/jobs/{done['id']}/download", headers=admin.headers).json()
+    body = json.loads(
+        json.dumps(exported, ensure_ascii=False).replace(f"hub{tag}", f"twin{tag}")
+    )
+    got = bundle_import(
+        client, admin, {"ontology": body["ontology"], "source": source, "apply": True}
+    )
+    assert got["applied"] is True, got
+    return _names(tag, "twin")
+
+
+def _old_sources(client: TestClient, admin: Signed, tag: str, group: str) -> dict[str, str]:
+    """옛 길 — 같은 허브 주소의 묶음 구독 소스(타입 → 소스 slug). 소스의 출처 이름은 그 타입의
+    관리 이름을 따른다."""
+    old = client.post(
+        "/api/datasources/subscriptions",
+        json={
+            "base_url": _base(tag),
+            "auth_kind": "bearer",
+            "auth_secret": "old-token",
+            "groups": [group],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert old.status_code == 200, old.text
+    return {
+        one["type_slug"]: one["source_slug"]
+        for one in old.json()["items"]
+        if one["source_slug"]
+    }
+
+
+def test_허브_이름으로_관리되는_공개_타입은_허브_것으로_넘겨받는다(
+    client: TestClient, admin: Signed, world: tuple[str, Hub]
+) -> None:
+    """정의를 허브의 이름(카탈로그의 `system`)으로 받아 둔 설치 — 구독의 기본 관리
+    이름(`hub`)으로 보면 전부 「이 설치가 만든 타입」 이 되어 하나도 못 받았다(운영 37개,
+    2026-11-18)."""
+    from app.config import get_settings
+
+    tag, _ = world
+    system = get_settings().app_slug
+    twin = _twin_as(client, admin, tag, system)
+    old = _old_sources(client, admin, tag, twin["group"])
+    assert set(old) == {twin["material"], twin["part"]}
+
+    plan = _create(client, admin, twin["group"], apply=False).json()
+    assert plan["source_name"] == system
+    assert {one["type_slug"]: one["action"] for one in plan["types"]} == {
+        twin["material"]: "adopt",
+        twin["part"]: "adopt",
+    }
+    assert any("허브의 이름" in one for one in plan["notes"])
+
+    made = _subscribed(client, admin, twin["group"])
+    assert sorted(made["result"]["adopted"]) == sorted(old.values())
+    assert made["result"]["paused"] == [] and made["result"]["created"] == []
+    sources = _sources(made["id"])
+    assert all(one.is_active for one in sources.values())
+    assert _one(client, admin, made["id"])["source_name"] == system
+    assert _count(twin["part"]) == 3
+
+
+def test_넘겨받지_못하는_타입의_옛_소스는_끄지_않고_꺼_둔_것은_되살린다(
+    client: TestClient, admin: Signed, world: tuple[str, Hub]
+) -> None:
+    """거절한 타입의 옛 소스까지 끄면 옛 길도 새 길도 안 도는 타입이 생긴다(운영 37개를 다
+    껐다)."""
+    tag, _ = world
+    twin = _twin_as(client, admin, tag, "plmx")  # 허브 이름도 구독 이름도 아닌 관리 이름
+    old = _old_sources(client, admin, tag, twin["group"])
+
+    plan = _create(client, admin, twin["group"], apply=False).json()
+    assert {one["action"] for one in plan["types"]} == {"skip"}
+    assert all("하던 대로" in one["reason"] for one in plan["types"])
+
+    made = _subscribed(client, admin, twin["group"])
+    assert made["result"]["paused"] == [] and made["result"]["adopted"] == []
+    with SessionLocal() as db:
+        rows = list(
+            db.scalars(select(DataSource).where(DataSource.slug.in_(list(old.values()))))
+        )
+        assert rows and all(one.is_active and one.subscription_id is None for one in rows)
+        # 고치기 전의 판이 꺼 둔 상태를 되살린다 — 구독이 맡아 수신 중지해 둔 옛 소스.
+        sub = db.get(CoreSubscription, uuid.UUID(made["id"]))
+        assert sub is not None
+        for one in rows:
+            one.is_active = False
+            one.subscription_id = sub.id
+        sub.state = {**(sub.state or {}), "paused": sorted(old.values())}
+        db.commit()
+    again = _check(client, admin, made["id"])
+    assert sorted(again["resumed"]) == sorted(old.values()), again
+    with SessionLocal() as db:
+        rows = list(
+            db.scalars(select(DataSource).where(DataSource.slug.in_(list(old.values()))))
+        )
+        assert all(one.is_active and one.subscription_id is None for one in rows)
+
+
+def test_알림은_넘치면_외_N건으로_끝을_표시한다() -> None:
+    from app.modules.datasources import subscriptions
+
+    lines = [f"줄 {index}" for index in range(subscriptions.NOTES_MAX + 5)]
+    shown = subscriptions.capped(lines)
+    assert len(shown) == subscriptions.NOTES_MAX + 1
+    assert shown[-1] == "… 외 5건"
+    assert subscriptions.capped(lines[:3]) == lines[:3]

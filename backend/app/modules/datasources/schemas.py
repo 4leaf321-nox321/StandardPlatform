@@ -365,6 +365,9 @@ class CoreGroupChoiceOut(BaseModel):
 class CoreSubscriptionPlanOut(BaseModel):
     system: str
     """허브의 이름."""
+    source_name: str = ""
+    """받을 정의의 관리 이름 — 이 설치의 허브 타입이 이미 허브의 이름으로 관리되고 있으면 적은
+    이름 대신 그 이름이다(`subscriptions.managed_name`)."""
     applied: bool
     definitions: bool
     """허브가 정의 창구를 주나 — 아니면(0.4.90 까지) 정의는 「정의만」 묶음으로 받고, 이 설치에

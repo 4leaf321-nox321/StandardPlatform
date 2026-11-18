@@ -69,8 +69,38 @@ NO_DEFINITIONS = (
     "허브에 정의 창구가 없습니다(0.4.90 까지) — 정의는 「정의만」 묶음으로 받고, 이 설치에 "
     "정의가 있는 타입만 받습니다."
 )
-#: 알림 줄의 상한 — 수천 줄을 화면에 내면 아무도 안 읽는다.
-NOTES_MAX = 60
+#: 알림 줄의 상한 — 수천 줄을 화면에 내면 아무도 안 읽는다. **넘치면 끝에 「외 N건」 을
+#: 적는다** — 말없이 자르면 사람은 그것이 전부인 줄 안다(60줄에서 잘린 운영 화면, 2026-11-18).
+#: 정의 검토 대기의 줄은 자르지 않는다 — 적용하는 사람이 무엇이 바뀌는지 전부 봐야 한다.
+NOTES_MAX = 200
+
+
+def capped(lines: list[str], limit: int = NOTES_MAX) -> list[str]:
+    """`limit` 줄까지 — 넘치면 마지막 줄에 「… 외 N건」."""
+    if len(lines) <= limit:
+        return list(lines)
+    return [*lines[:limit], f"… 외 {len(lines) - limit}건"]
+
+
+def managed_name(db: Session, wanted: str, system: str, slugs: set[str]) -> str:
+    """구독이 받는 정의의 **관리 이름** — 적은 이름, 또는 이 설치의 허브 정의가 이미 허브의
+    이름(카탈로그의 `system`)으로 관리되고 있으면 그 이름.
+
+    허브의 정의를 「정의만」 묶음 · 파이프라인으로 받을 때 `source` 를 허브의 이름으로 적은
+    설치가 있다. 구독이 기본 관리 이름(`hub`)으로 그 타입들을 보면 전부 「이 설치가 만든 같은
+    이름 타입」 이 되어 하나도 못 받았다(운영 37개, 2026-11-18). **공개 타입(`core`)이고 관리
+    이름이 허브의 이름이면 허브의 것이다** — 적은 이름이 관리하는 허브 타입이 하나도 없을 때 그
+    이름으로 받는다 (둘이 섞여 있으면 적은 이름 그대로 — 한 구독은 관리 이름 하나로 넣는다)."""
+    if not system or system == wanted or not slugs:
+        return wanted
+    rows = list(db.scalars(select(ObjectType).where(ObjectType.slug.in_(sorted(slugs)))))
+    if any(managed.owner_of(one) == wanted for one in rows):
+        return wanted
+    if any(managed.owner_of(one) == system and one.core for one in rows):
+        return system
+    return wanted
+
+
 #: 자동으로는 바꾸지 않는 속성의 칸 — 바꾸면 저장값을 변환하거나(종류) 못 읽게 된다(참조 대상 ·
 #: 여러 값). 정의 검토 대기로 남는다.
 _FIELDS_HELD_AS_LOCAL = ("data_type", "ref_type_slug", "multi")
@@ -510,7 +540,7 @@ class Reconciled:
             "resumed": self.resumed,
             "paused": self.paused,
             "restarted": self.restarted,
-            "notes": self.notes[:NOTES_MAX],
+            "notes": capped(self.notes),
         }
 
 
@@ -560,10 +590,12 @@ def _sources(
     system = row.system or "형제 SP"
 
     for slug, found in remote.items():
+        source = by_entity.get(slug)
         if slug in skipped:
             out.notes.append(f"{slug}: {skipped[slug]}")
+            if source is not None:
+                _release(source, paused, out)
             continue
-        source = by_entity.get(slug)
         if source is None:
             object_type = db.scalar(select(ObjectType).where(ObjectType.slug == slug))
             if object_type is None:
@@ -602,6 +634,15 @@ def _sources(
 
         target = db.get(ObjectType, source.type_id)
         if target is None:
+            continue
+        if managed.owner_of(target) != row.source_name:
+            # **넘겨받지 못하는 타입의 소스는 건드리지 않는다** — 하던 대로 받게 둔다.
+            owner = managed.owner_of(target) or "이 설치"
+            out.notes.append(
+                f"{slug}: 기존 소스 {source.slug} 의 타입은 {owner} 가 관리해 넘겨받지 "
+                f"않습니다(구독의 관리 이름 {row.source_name}) — 그 소스는 하던 대로 받습니다."
+            )
+            _release(source, paused, out)
             continue
         if source.subscription_id != row.id:
             source.subscription_id = row.id
@@ -656,11 +697,11 @@ def _sources(
 
     for source in mine:
         slug = source.entity_set.strip()
-        if slug in remote and slug not in skipped:
+        # **넘겨받은 소스만 끈다.** 공개 타입(받는 것) · 받지 않는 타입(건너뛴 것)은 위에서
+        # 다뤘고, 구독이 맡은 적 없는 옛 소스는 그대로 둔다 — 거절한 타입의 옛 소스까지 끄면 옛
+        # 길도 새 길도 안 도는 타입이 생긴다(운영 37개, 2026-11-18).
+        if slug in remote or slug in skipped or source.subscription_id != row.id:
             continue
-        if source.subscription_id != row.id:
-            source.subscription_id = row.id
-            out.adopted.append(source.slug)
         if source.is_active:
             source.is_active = False
             paused.add(source.slug)
@@ -672,6 +713,26 @@ def _sources(
     state["paused"] = sorted(paused)
     state["kinds"] = kinds_seen
     row.state = state
+
+
+def _release(source: DataSource, paused: set[str], out: Reconciled) -> None:
+    """구독이 맡지 않는 소스로 돌린다 — 구독이 수신 중지해 둔 것이면 다시 활성화한다(옛 길이
+    하던 대로 받게)."""
+    if source.slug in paused:
+        source.is_active = True
+        paused.discard(source.slug)
+        out.resumed.append(source.slug)
+        out.notes.append(
+            f"{source.slug}: 구독이 맡지 않는 타입이라 수신 중지를 풀었습니다 — 하던 대로 "
+            "받습니다."
+        )
+    source.subscription_id = None
+
+
+def _slugs(catalog: dict[str, Any]) -> set[str]:
+    return {
+        str(one.get("slug")) for one in catalog.get("types") or [] if isinstance(one, dict)
+    }
 
 
 def reconcile(
@@ -714,6 +775,14 @@ def _reconcile(
         auth = auth_of(row)
         catalog = _catalog(row.base_url, auth)
         row.system = str(catalog.get("system") or row.system)[:100]
+        effective = managed_name(db, row.source_name, row.system, _slugs(catalog))
+        if effective != row.source_name:
+            out.notes.append(
+                f"관리 이름을 「{row.source_name}」 에서 허브의 이름 「{effective}」 로 "
+                "맞췄습니다 — 이 설치의 허브 타입이 그 이름으로 관리되고 있습니다."
+            )
+            row.source_name = effective
+            row.definitions_mark = ""  # 정의를 다시 받아 그 이름으로 다시 맞춘다
         known = "" if approve else row.definitions_mark
         if approve and (row.held or {}).get("mark") != approve:
             raise Conflict(
@@ -749,11 +818,7 @@ def _reconcile(
                 out.applied = settled.applied
                 out.held = settled.held
             row.definitions_mark = str(definitions.get("mark") or "")
-            row.held = (
-                {"mark": row.definitions_mark, "lines": out.held[:NOTES_MAX]}
-                if out.held
-                else {}
-            )
+            row.held = {"mark": row.definitions_mark, "lines": out.held} if out.held else {}
         else:
             out.held = list((row.held or {}).get("lines") or [])
         state = dict(row.state or {})
@@ -780,7 +845,7 @@ def _reconcile(
         mark_failed(db, row, caught.message)
         raise
     state = dict(row.state or {})
-    state["notes"] = out.notes[:NOTES_MAX]
+    state["notes"] = capped(out.notes)
     row.state = state
     row.checked_at = datetime.now(UTC)
     row.last_status = "held" if row.held else "ok"
@@ -900,8 +965,11 @@ def plan(
     catalog = _catalog(base_url, auth)
     groups = [one.strip() for one in payload.groups if one.strip()]
     definitions = _definitions(base_url, auth, groups, "")
+    system = str(catalog.get("system") or "")
+    name = managed_name(db, payload.source_name, system, _slugs(catalog))
     out = CoreSubscriptionPlanOut(
-        system=str(catalog.get("system") or ""),
+        system=system,
+        source_name=name,
         applied=False,
         definitions=definitions is not None,
         groups=[
@@ -916,13 +984,16 @@ def plan(
         held=[],
         notes=[],
     )
+    if name != payload.source_name:
+        out.notes.append(
+            f"관리 이름을 「{payload.source_name}」 대신 허브의 이름 「{name}」 로 씁니다 — "
+            "이 설치의 허브 타입이 그 이름으로 관리되고 있어 그대로 넘겨받습니다."
+        )
     prepared: Prepared | None = None
     if definitions is not None:
-        prepared = prepare(db, definitions.get("ontology") or {}, payload.source_name)
+        prepared = prepare(db, definitions.get("ontology") or {}, name)
         out.notes.extend(prepared.notes)
-        settled = settle(
-            db, source_services._actor(db, user), prepared, payload.source_name, apply=False
-        )
+        settled = settle(db, source_services._actor(db, user), prepared, name, apply=False)
         out.held = settled.held
         scope: set[str] | None = {
             str(one.get("slug"))
@@ -954,8 +1025,8 @@ def plan(
     outside = sorted(one.slug for slug, one in taken.items() if slug not in shown)
     if outside:
         out.notes.append(
-            "이 허브를 가리키는 소스 중 공개되지 않았거나 범위 밖인 것은 수신을 중지합니다"
-            "(받은 자료는 남습니다): " + ", ".join(outside)
+            "이 허브를 가리키는 소스 중 공개되지 않았거나 범위 밖인 것은 구독이 맡지 않고 "
+            "그대로 둡니다(하던 대로 받습니다): " + ", ".join(outside)
         )
     for one in catalog.get("types") or []:
         if not isinstance(one, dict):
@@ -971,22 +1042,36 @@ def plan(
         )
         out.types.append(item)
         local = db.scalar(select(ObjectType).where(ObjectType.slug == slug))
-        if slug in taken:
-            item.action = "adopt"
-            item.source_slug = taken[slug].slug
-        elif prepared is not None and slug in prepared.skipped:
+        existing = taken.get(slug)
+        target = db.get(ObjectType, existing.type_id) if existing is not None else local
+        if prepared is not None and slug in prepared.skipped:
             item.action = "skip"
-            item.reason = prepared.skipped[slug]
+            item.reason = prepared.skipped[slug] + (
+                f" 기존 소스 {existing.slug} 는 하던 대로 받습니다." if existing else ""
+            )
+        elif existing is not None and target is not None:
+            if managed.owner_of(target) == name:
+                item.action = "adopt"
+            else:
+                item.action = "skip"
+                owner = managed.owner_of(target) or "이 설치"
+                item.reason = (
+                    f"이 설치의 같은 이름 타입은 {owner} 가 관리합니다(구독의 관리 이름 "
+                    f"{name}) — 기존 소스는 하던 대로 받습니다."
+                )
+            item.source_slug = existing.slug
         elif local is None:
             if prepared is None:
                 item.action = "skip"
                 item.reason = "이 설치에 정의가 없습니다 — 「정의만」 묶음으로 먼저 받으세요."
             else:
                 item.action = "define"
-        elif managed.owner_of(local) != payload.source_name:
+        elif managed.owner_of(local) != name:
             item.action = "skip"
             owner = managed.owner_of(local) or "이 설치"
-            item.reason = f"이 설치의 같은 이름 타입은 {owner} 가 관리합니다."
+            item.reason = (
+                f"이 설치의 같은 이름 타입은 {owner} 가 관리합니다(구독의 관리 이름 {name})."
+            )
         elif (other := rival(db, local, base_url)) is not None:
             item.action = "skip"
             item.reason = rival_reason(other)
@@ -995,8 +1080,14 @@ def plan(
 
 
 def create(
-    db: Session, user: User, payload: CoreSubscriptionRequest, *, base_url: str
+    db: Session,
+    user: User,
+    payload: CoreSubscriptionRequest,
+    *,
+    base_url: str,
+    source_name: str | None = None,
 ) -> CoreSubscription:
+    """`source_name` — 미리 본 관리 이름(`plan` 이 허브의 이름으로 맞췄을 수 있다)."""
     row = CoreSubscription(
         base_url=base_url,
         auth={
@@ -1004,7 +1095,7 @@ def create(
             "user": payload.auth_user.strip(),
             "secret": payload.auth_secret,
         },
-        source_name=payload.source_name,
+        source_name=source_name or payload.source_name,
         groups=[one.strip() for one in payload.groups if one.strip()],
         interval_minutes=payload.interval_minutes,
         is_active=True,
