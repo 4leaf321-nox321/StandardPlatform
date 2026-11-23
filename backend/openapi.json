@@ -34224,6 +34224,11 @@
             "title": "Relations Waiting",
             "default": 0
           },
+          "refs_waiting": {
+            "type": "integer",
+            "title": "Refs Waiting",
+            "default": 0
+          },
           "interval_minutes": {
             "type": "integer",
             "title": "Interval Minutes"

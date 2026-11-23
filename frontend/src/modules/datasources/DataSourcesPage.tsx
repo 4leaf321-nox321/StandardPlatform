@@ -378,6 +378,25 @@ const COUNT_LABEL: Record<string, string> = {
   relations_unlink: '선 끊음',
   // 끝점이 아직 없어 다음 동기화에서 다시 넣을 선.
   relations_waiting: '선 기다림',
+  // 미리 보기 — 이 동기화에 함께 들어오는 객체를 이어 적용하면 설 선(ADR 0089).
+  relations_same_sync: '함께 들어오는 선',
+  // 참조 칸(ADR 0089) — 같은 동기화에서 함께 온 행으로 푼 것 · 기다리던 것을 푼 것 · 대기 · 오류.
+  refs_same_sync: '같은 동기화에서 푼 참조',
+  refs_resolved: '대기에서 푼 참조',
+  refs_waiting: '참조 대기',
+  refs_error: '참조 오류',
+}
+
+/**
+ * 칸 대응에 새로 더한 칸 — 넣을 자리(바깥 칸 이름이 바뀐 것도 새로 받는다). 서버의
+ * `gained_columns` 와 같은 규칙이다.
+ */
+function gainedTargets(before: MappingColumn[], after: MappingColumn[]): string[] {
+  const had = new Set(before.map((one) => `${one.source}→${one.target}`))
+  const out = after
+    .filter((one) => one.source.trim() && one.target && !had.has(`${one.source}→${one.target}`))
+    .map((one) => one.target)
+  return [...new Set(out)]
 }
 
 /** 실행의 수 — 0 은 빼고. `full_read` 는 수가 아니라 「이번엔 전량으로 받았다」 는 표시다. */
@@ -411,6 +430,14 @@ function SyncDialog({
   const ok =
     result.run.status === 'planned' && (ra ? !result.truncated : (result.counts.error ?? 0) === 0)
   const problems = result.rows.filter((row) => row.action === 'error')
+  /**
+   * 기록의 말이 **막는 오류인가 안내인가** — 적용할 수 있는 계획 · 잘 끝난 적용이면 안내다(선 ·
+   * 참조 대기, 함께 들어오는 선, 처음부터 다시 받음). 행 오류가 0 인데 그 말을 빨갛게 그리면
+   * 적용할 수 없는 것처럼 읽혔다(ADR 0089).
+   */
+  const notice = result.applied ? result.run.status === 'ok' : ok
+  const waiting =
+    (result.counts.relations_waiting ?? 0) + (result.counts.refs_waiting ?? 0) > 0
 
   async function apply() {
     setBusy(true)
@@ -434,6 +461,10 @@ function SyncDialog({
           <DialogDescription>
             외부에서 {result.run.rows_seen}행을 조회했습니다. {countsText(result.counts)}
             {!result.applied && !ok && ' — 오류가 있어 아무것도 추가하지 않습니다.'}
+            {!result.applied &&
+              ok &&
+              waiting &&
+              ' — 적용할 수 있습니다. 기다리는 선 · 참조는 나머지를 넣은 뒤 다음 동기화에서 다시 잇습니다.'}
           </DialogDescription>
         </DialogHeader>
         {error && <ErrorNotice error={error} />}
@@ -449,7 +480,10 @@ function SyncDialog({
             </p>
           )}
         {result.errors.length > 0 && (
-          <ul className="text-destructive space-y-1 text-sm">
+          <ul
+            aria-label={notice ? '안내' : '오류'}
+            className={notice ? 'text-muted-foreground space-y-1 text-sm' : 'text-destructive space-y-1 text-sm'}
+          >
             {result.errors.map((one, index) => (
               <li key={index}>{one}</li>
             ))}
@@ -534,6 +568,12 @@ function EditDialog({
   const [workspace, setWorkspace] = useState(source?.workspace_slug ?? NONE)
   const [externalKey, setExternalKey] = useState(source?.mapping.external_key ?? '')
   const [columns, setColumns] = useState<MappingColumn[]>(source?.mapping.columns ?? [])
+  /**
+   * 칸 대응에 **새로 더한 칸**(넣을 자리) — 저장하면 받은 시점을 비워 다음 동기화가 처음부터 다시
+   * 받는다(ADR 0089). 이어 받기는 바뀐 행만 와서, 안 그러면 이미 받은 행에는 새 칸의 값이 영영 안
+   * 들어온다. 저장하기 전에 그렇다고 말한다.
+   */
+  const gained = gainedTargets(source?.mapping.columns ?? [], columns)
   /**
    * **이 소스가 무엇을 가져오나** — 객체인가 선인가. 둘을 섞지 않는다: 한 소스가 둘 다 만들면
    * 계획이 두 겹이 되어 「무엇이 몇 건인가」 를 한 표로 못 읽는다.
@@ -1354,8 +1394,9 @@ function EditDialog({
                   )}
                   <p className="text-muted-foreground text-xs">
                     값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 선택할 값이
-                    오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류
-                    행입니다.
+                    오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀립니다 — 같은 동기화에
+                    함께 온 행도 찾고, 끝내 못 찾으면 그 칸만 비워 넣은 뒤 참조 대기로 다음
+                    동기화에서 다시 찾습니다(3번 연속 못 찾으면 오류).
                   </p>
                 </div>
 
@@ -1391,6 +1432,13 @@ function EditDialog({
                   </div>
                 </div>
               </>
+            )}
+
+            {gained.length > 0 && source?.since_mark && (
+              <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                칸 {gained.join(' · ')} 을(를) 더했습니다 — 저장하면 받은 시점을 비워 다음 동기화가
+                처음부터 다시 받습니다(이미 받은 행에도 새 칸의 값이 있을 수 있습니다).
+              </p>
             )}
 
             {preview && preview.mapped.length > 0 && (

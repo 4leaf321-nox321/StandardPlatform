@@ -143,7 +143,8 @@ class RowPlan:
     message: str = ""
     skipped: bool = False
     """`skip_missing` 로 **끝점을 못 찾아 건너뛴** 관계 줄 — `action` 은 `unchanged` 다. 부르는
-    쪽이 그 줄을 모아 다음에 다시 넣는다(데이터 소스의 「기다리는 선」)."""
+    쪽이 그 줄을 모아 다음에 다시 넣는다(데이터 소스의 「기다리는 선」). 객체 줄이면 **필수
+    참조를 못 찾아 건너뛴 줄**이다(`blank_missing` — 데이터 소스가 줄째 기다린다)."""
 
 
 @dataclass
@@ -154,6 +155,12 @@ class Plan:
     index: Any = None
     """계획이 미리 읽은 것(`_Index`) — **적용이 그대로 쓴다.** 밖으로는 안 나간다
     (API 는 `rows` · `errors` · `counts` 만 본다)."""
+    deferred: dict[int, list[tuple[str, Any]]] = field(default_factory=dict)
+    """줄 → (속성 키, 칸 값) — **이 묶음이 만들 객체**를 가리켜 계획에서 뺀 칸(`pending`).
+    부르는 쪽이 객체를 다 넣은 뒤 채운다(데이터 소스의 같은 동기화 참조, ADR 0089)."""
+    missed: dict[int, list[tuple[str, Any]]] = field(default_factory=dict)
+    """줄 → (속성 키, 칸 값) — 가리키는 것을 **못 찾아 비운** 칸(`blank_missing`). 필수 칸이라
+    줄째 건너뛴 것도 여기 있다(`RowPlan.skipped`)."""
 
     @property
     def counts(self) -> dict[str, int]:
@@ -287,6 +294,10 @@ class Refs:
         """줄에 적을 말 — **별칭으로 풀렸는데 그 글자가 다른 객체의 이름이기도** 할 때.
         부르는 쪽이 줄마다 비우고 읽는다(`_plan_row`)."""
         self.blanked_required: list[tuple[str, str]] = []
+        self.deferred: list[tuple[str, Any]] = []
+        """(속성 키, 칸 값) — 이 묶음이 만들 객체를 가리켜 뺀 칸. 줄마다 비우고 읽는다."""
+        self.missed: list[tuple[str, Any]] = []
+        """(속성 키, 칸 값) — 못 찾아 비운 칸(필수 칸 포함). 줄마다 비우고 읽는다."""
         """**필수 참조 칸**인데 가리키는 것을 못 찾았다 — (속성 키, 사람이 읽는 말).
 
         빈 값으로 둘 수 없는 칸이라(「값이 필요합니다」) 비우기로는 안 풀린다. 부르는 쪽이
@@ -824,12 +835,15 @@ def _patch_of(
             patch[prop_key] = cell_to_value(by_key[prop_key], raw, refs)
         except PendingRef as later:
             # **이 묶음이 만들 것**을 가리킨다 — 계획만 볼 때는 오류가 아니다. 그 칸은
-            # 여기서 빼고(값을 지어내지 않는다) 줄에 적는다.
+            # 여기서 빼고(값을 지어내지 않는다) 줄에 적는다. 부르는 쪽이 객체를 다 넣은 뒤
+            # 채울 수 있게 칸 값을 함께 든다(`Plan.deferred`).
+            refs.deferred.append((prop_key, raw))
             refs.notes.append(
                 f"{by_key[prop_key].label}: 「{later.text}」 은 이 묶음이 만드는 "
                 "객체입니다 — 적용할 때 풀립니다"
             )
         except MissingRef as gone:
+            refs.missed.append((prop_key, raw))
             if by_key[prop_key].required:
                 # **필수 칸은 비울 수 없다.** 비우면 그 줄이 「값이 필요합니다」 오류가 되고,
                 # 오류 한 줄이 묶음 전체를 막는다 — `missing_refs=blank` 는 바로 그것을
@@ -1287,12 +1301,18 @@ def plan_objects(
     for number, row in enumerate(rows, start=1):
         refs.notes.clear()
         refs.blanked_required.clear()
+        refs.deferred.clear()
+        refs.missed.clear()
         try:
             patches.append(_patch_of(row, mapping, by_key, refs))
         except AppError as caught:
             patches.append(caught)
         if refs.notes or refs.blanked_required:
             notes[number] = (list(refs.notes), list(refs.blanked_required))
+        if refs.deferred:
+            plan.deferred[number] = list(refs.deferred)
+        if refs.missed:
+            plan.missed[number] = list(refs.missed)
     index_data = _read_index(
         db, user, object_type, rows, defs, patches, owner_workspace_id=owner_workspace_id
     )
@@ -1485,6 +1505,7 @@ def _plan_row(
                     + " · ".join(text for _key, text in refs.blanked_required),
                     *refs.notes,
                 ),
+                skipped=True,
             )
         properties = validate_properties(
             defs, {k: v for k, v in patch.items() if v is not None}, apply_defaults=True
@@ -1550,6 +1571,7 @@ def _plan_row(
                     "필수 참조를 찾지 못해 이 줄을 건너뜁니다 — " + " · ".join(empty),
                     *refs.notes,
                 ),
+                skipped=True,
             )
         refs.notes.append(
             "찾지 못한 필수 참조는 그대로 둡니다 — "
@@ -1767,12 +1789,18 @@ def apply_objects(
     source: str = "",
     aliases_mode: str = "add",
     blank_missing: bool = False,
+    pending: dict[str, set[str]] | None = None,
     human_edits: str = "keep",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
+    commit: bool = True,
 ) -> Plan:
     """계획을 다시 세우고, 오류가 없을 때만 **한 트랜잭션으로** 넣는다.
+
+    `pending` 을 주면 이 묶음이 만들 객체를 가리키는 칸은 빼고 넣는다(`Plan.deferred` — 부르는
+    쪽이 다 넣은 뒤 채운다). `commit` 이 거짓이면 끝에서 커밋하지 않고 보내기만 한다(`flush`)
+    — 부르는 쪽이 여러 조각과 그 뒤의 일을 한 트랜잭션으로 묶는다(데이터 소스, ADR 0089).
 
     계획을 다시 세우는 이유: 미리 보기와 적용 사이에 다른 사람이 무엇을 바꿨을 수
     있다. 그때 옛 계획대로 넣으면 그 사람의 변경이 조용히 덮인다. `before_apply` 는
@@ -1787,6 +1815,7 @@ def apply_objects(
         owner_workspace_id=owner_workspace_id,
         source=source,
         aliases_mode=aliases_mode,
+        pending=pending,
         blank_missing=blank_missing,
         human_edits=human_edits,
         max_rows=max_rows,
@@ -2000,7 +2029,10 @@ def apply_objects(
         workspace_id=owner_workspace_id,
         changes={"rows": len(rows), **counts},
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return plan
 
 

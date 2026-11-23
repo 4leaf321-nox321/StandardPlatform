@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-19b
+GUIDE_VERSION: 2026-11-23a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -91,7 +91,7 @@ GUIDE_VERSION: 2026-11-19b
 | 기계가 붙인 별칭 검수 | `aliases_pending` → 사람 확인 → `aliases_review` | **스스로 승인하지 않는다** |
 | 뒤에서 도는 작업이 어디까지 됐나 | `job_status(job_id)` · `jobs_list(status=, kind=, mine=)` | 워커가 없으면 영영 대기 — `jobs_list` 의 `workers` 로 안다. 「어젯밤 동기화 실패?」 는 `kind="datasource_sync", status="failed"` |
 | 잘못 넣은 작업 멈추기 | `job_cancel(job_id)` · 여럿은 `job_ids` | **사용자가 멈추라고 한 것만.** 그때까지 커밋한 것은 남는다 |
-| 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 오류 행이 있으면 아무것도 안 넣음. 지난 결과 · 실패 이유는 `datasource_runs`, 칸 대응 확인은 `datasource_preview` |
+| 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 오류 행이 있으면 아무것도 안 넣음. 못 찾은 참조는 그 칸만 비우고 넣고 다음 동기화에서 다시 찾음(`refs_waiting`, 3번 연속이면 오류) — 대기만 있으면 적용할 수 있다. 지난 결과 · 실패 이유는 `datasource_runs`, 칸 대응 확인은 `datasource_preview` |
 | 데이터 소스 만들기 · 고치기 | `datasources_list(slug, suggest=True)`(대응 초안) → `datasource_save(apply=false)` → `apply=true` | **인증 비밀은 받지 않는다** — 저장한 뒤 사람이 화면에서 넣는다. 지우기는 `config_delete(kind="datasource")`(객체는 남는다) |
 | **운영 · 설정** — 코어 공개 현황 · 부서 · 저장된 뷰 · 지켜보기 · 연도 · 웹훅 · 공지 · 검토 이력 · 서버 · 내보내기 | `get_guide(topic="admin")` | 고치는 것은 전부 미리 보기 먼저. 지우기는 `config_delete` 하나. 부서 · 공지 · 웹훅 · 서버는 읽기만 |
 | 첨부 저장소의 고아 파일 | `filestore_gc()` → 사람 확인 → `job_apply` | **시스템 관리자만.** 지운 파일은 못 되살린다 — 워커가 매일 스스로도 지운다 |

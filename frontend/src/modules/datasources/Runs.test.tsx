@@ -121,4 +121,44 @@ describe('최근 동기화', () => {
     await userEvent.click(screen.getByRole('button', { name: /동기화/ }))
     expect(await screen.findByRole('button', { name: /적용/ })).toBeEnabled()
   })
+
+  it('행 오류가 없고 선 · 참조만 기다리면 적용할 수 있다고 말하고, 그 말은 오류로 그리지 않는다', async () => {
+    // 관계 대기만 있는 계획이 「오류」 처럼 빨갛게 서서 적용할 수 없는 것으로 읽혔다(ADR 0089).
+    const waiting = [
+      '선 1줄은 끝점이 아직 없어 기다립니다 — 다음 동기화에서 다시 넣습니다: …',
+      '참조 1건은 가리키는 것이 아직 없어 그 칸을 비워 두고 기다립니다 — …',
+    ]
+    datasourceApi.list.mockResolvedValue([SOURCE])
+    datasourceApi.runs.mockResolvedValue([])
+    const counts = { create: 0, update: 0, error: 0, relations_waiting: 1, refs_waiting: 1 }
+    datasourceApi.sync.mockResolvedValue({
+      run: {
+        id: 'r2',
+        status: 'planned',
+        applied: false,
+        actor_label: '관리자',
+        rows_seen: 0,
+        counts,
+        errors: waiting,
+        started_at: '2026-10-04T01:00:00Z',
+        finished_at: '2026-10-04T01:00:01Z',
+      },
+      applied: false,
+      counts,
+      rows: [],
+      errors: waiting,
+      truncated: false,
+    })
+    ontologyApi.schema.mockResolvedValue({ types: [], relation_types: [], groups: [] })
+    workspaceApi.list.mockResolvedValue([])
+    render(<DataSourcesPage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'PLM 부품' }))
+    await userEvent.click(screen.getByRole('button', { name: /동기화/ }))
+    expect(await screen.findByRole('button', { name: /적용/ })).toBeEnabled()
+    expect(screen.getByText(/적용할 수 있습니다\. 기다리는 선 · 참조는/)).toBeInTheDocument()
+    expect(screen.getByText(/선 기다림 1 · 참조 대기 1/)).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: '안내' })).not.toHaveClass('text-destructive')
+    expect(screen.queryByRole('list', { name: '오류' })).toBeNull()
+  })
 })

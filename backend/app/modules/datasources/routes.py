@@ -80,6 +80,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         since_mark=row.since_mark,
         relations_since_mark=row.relations_since_mark,
         relations_waiting=len(row.relations_waiting or []),
+        refs_waiting=len(services.refs_waiting_of(row)),
         interval_minutes=row.interval_minutes,
         is_active=row.is_active,
         last_run_at=row.last_run_at,
@@ -536,7 +537,12 @@ def update_source(
         assert object_type is not None
         if row.kind != ra_reports.KIND:
             _check_mapping(db, object_type, payload.mapping)
+        gained = services.gained_columns(row.mapping or {}, payload.mapping)
         row.mapping = payload.mapping
+        if gained and row.since_mark:
+            # **칸을 더하면 처음부터 다시 받는다**(ADR 0089) — 이어 받기는 바뀐 행만 오므로,
+            # 이미 받은 행에는 새 칸의 값이 영영 안 들어온다. 코어 구독이 칸을 이을 때와 같다.
+            services.restart(row)
     target = db.get(ObjectType, row.type_id)
     assert target is not None
     reshaped = row.kind != kind_before or "type_slug" in sent

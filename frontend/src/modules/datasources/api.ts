@@ -110,6 +110,8 @@ export interface DataSource {
   relations_since_mark?: string
   /** 끝점을 아직 못 찾아 기다리는 선 — 다음 동기화가 다시 넣어 본다. */
   relations_waiting?: number
+  /** 참조 대기(ADR 0089) — 가리키는 것을 못 찾아 그 칸을 비워 둔 것. 다음 동기화가 다시 찾는다. */
+  refs_waiting?: number
   /** RA 보고서: 마지막 전량 대조 — 하루가 지나면 다음 동기화가 전량으로 받아 대조한다. */
   reconciled_at?: string | null
   /** 이 소스를 맞추는 코어 구독(ADR 0085) — 토큰 · 간격 · 칸 대응을 구독이 맞춘다. */

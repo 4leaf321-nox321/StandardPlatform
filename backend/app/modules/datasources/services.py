@@ -659,6 +659,308 @@ def _remember_externals(
         known.held.setdefault(object_id, []).append(norm)
 
 
+#: 참조 대기를 몇 번 연속(동기화 차례)으로 못 풀면 오류로 올리나(ADR 0089).
+REF_WAIT_LIMIT = 3
+#: 참조 대기 — 소스의 `options` 안에(`_` 로 시작해 화면에 안 나가고, 처음부터 다시 받으면
+#: 비운다).
+REFS_WAITING = "_refs_waiting"
+
+
+def self_refs(object_type: ObjectType, defs: list[PropertyDef]) -> list[PropertyDef]:
+    """**같은 타입을 가리키는** 참조 칸 — 문서의 「상위 절」 · 부품의 「상위 조립」. 대상이 이
+    타입이 구현한 인터페이스여도 같다."""
+    names = {object_type.slug, *(object_type.interface_slugs or [])}
+    return [
+        one
+        for one in defs
+        if one.data_type == "object_ref" and (one.ref_type_slug or "") in names
+    ]
+
+
+def _batch_names(rows: list[Mapped]) -> set[str]:
+    """이 차례에 함께 온 행이 불릴 이름 — 식별자 · 이름(참조 칸의 값이 그것으로 온다)."""
+    out: set[str] = set()
+    for one in rows:
+        for name in ("key", "label"):
+            value = one.row.get(name)
+            if isinstance(value, str) and value.strip() and value != bulk.NULL_MARK:
+                out.add(value.strip())
+    return out
+
+
+def refs_waiting_of(source: DataSource) -> list[dict[str, Any]]:
+    """**참조 대기** — 가리키는 것을 못 찾아 그 칸을 비우고 넣은(또는 필수 칸이라 줄째 미룬)
+    것. `{external, field, value, waits, since, object_id?, row?}`."""
+    raw = (source.options or {}).get(REFS_WAITING) or []
+    return [dict(one) for one in raw if isinstance(one, dict)]
+
+
+def _set_refs_waiting(source: DataSource, entries: list[dict[str, Any]]) -> None:
+    options = dict(source.options or {})
+    if entries:
+        options[REFS_WAITING] = entries
+    else:
+        options.pop(REFS_WAITING, None)
+    source.options = options
+
+
+def _wait_key(external: str, field_key: str, value: Any) -> tuple[str, str, str]:
+    """대기 하나의 정체 — 같은 행 · 같은 칸 · **같은 값**이어야 「연속」 이다(값이 바뀌면 새로
+    센다)."""
+    return (compare_key(external), field_key, str(value))
+
+
+def _wait_entry(
+    previous: dict[tuple[str, str, str], dict[str, Any]],
+    external: str,
+    field_key: str,
+    value: Any,
+    *,
+    now: str,
+    object_id: uuid.UUID | None = None,
+    row: dict[str, Any] | None = None,
+    bump: bool = True,
+) -> dict[str, Any]:
+    """이번에도 못 찾은 대기 — 지난번에도 같은 것이 기다렸으면 횟수를 잇는다. `bump` 가
+    거짓이면(끝까지 받지 못하고 끊은 차례 — 이어 받는 중) 횟수를 그대로 둔다: 가리키는 것이 뒤
+    차례에 올 수 있다."""
+    before = previous.get(_wait_key(external, field_key, value))
+    waits = int(before.get("waits") or 0) if before else 0
+    entry: dict[str, Any] = {
+        "external": external,
+        "field": field_key,
+        "value": value,
+        "waits": max(waits + 1 if bump else waits, 1),
+        "since": str(before.get("since") or now) if before else now,
+    }
+    if object_id is not None:
+        entry["object_id"] = str(object_id)
+    if row is not None:
+        entry["row"] = row
+    return entry
+
+
+def _waits_note(entries: list[dict[str, Any]], defs: list[PropertyDef]) -> list[str]:
+    """사람에게 남기는 말 — 기다리는 것(안내)과 `REF_WAIT_LIMIT` 번 넘게 기다린 것(오류)."""
+    labels = {one.key: one.label for one in defs}
+
+    def line(one: dict[str, Any]) -> str:
+        return (
+            f"{one['external']} 의 「{labels.get(one['field'], one['field'])}」 → "
+            f"「{one['value']}」" + (" (행째 대기)" if one.get("row") else "")
+        )
+
+    late = [one for one in entries if int(one.get("waits") or 0) >= REF_WAIT_LIMIT]
+    waiting = [one for one in entries if int(one.get("waits") or 0) < REF_WAIT_LIMIT]
+    out: list[str] = []
+    if late:
+        sample = " · ".join(line(one) for one in late[:3])
+        more = f" 외 {len(late) - 3}건" if len(late) > 3 else ""
+        out.append(
+            f"참조 {len(late)}건은 가리키는 것을 {REF_WAIT_LIMIT}번 연속 찾지 못했습니다 — "
+            f"원천의 값이나 칸 대응을 확인하세요(찾으면 그때 채웁니다): {sample}{more}"
+        )
+    if waiting:
+        sample = " · ".join(line(one) for one in waiting[:3])
+        more = f" 외 {len(waiting) - 3}건" if len(waiting) > 3 else ""
+        out.append(
+            f"참조 {len(waiting)}건은 가리키는 것이 아직 없어 그 칸을 비워 두고 기다립니다 — "
+            f"다음 동기화에서 다시 찾습니다: {sample}{more}"
+        )
+    return out
+
+
+@dataclass
+class _Missed:
+    """이번 차례에 가리키는 것을 못 찾은 칸 하나 — 칸만 비우고 넣었으면 그 객체, 필수 칸이라
+    줄째 미뤘으면 그 줄."""
+
+    external: str
+    field: str
+    value: Any
+    object_id: uuid.UUID | None = None
+    row: dict[str, Any] | None = None
+
+
+def _uuid_or_none(raw: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _missed_of(pieces: list[list[Mapped]], plans: list[bulk.Plan]) -> list[_Missed]:
+    """계획(또는 적용한 계획)의 「못 찾아 비운 칸」 — 조각의 차례 번호로 그 행을 찾는다."""
+    out: list[_Missed] = []
+    for piece, plan in zip(pieces, plans, strict=True):
+        for number, fields in plan.missed.items():
+            one = piece[number - 1]
+            row_plan = plan.rows[number - 1] if number - 1 < len(plan.rows) else None
+            skipped = bool(row_plan is not None and row_plan.skipped)
+            for field_key, raw in fields:
+                out.append(
+                    _Missed(
+                        external=one.external_id,
+                        field=field_key,
+                        value=raw,
+                        object_id=None if skipped or row_plan is None else row_plan.object_id,
+                        row=dict(one.row) if skipped else None,
+                    )
+                )
+    return out
+
+
+def _wait_items(entries: list[dict[str, Any]]) -> list[tuple[uuid.UUID, str, Any]]:
+    """기다리던 칸 → `_fill_refs` 의 줄(객체 id 가 있는 것만 — 부르는 쪽이 이미 걸렀다)."""
+    return [
+        (object_id, str(one.get("field") or ""), one.get("value"))
+        for one in entries
+        if (object_id := _uuid_or_none(one.get("object_id"))) is not None
+    ]
+
+
+def _waits_after(
+    previous: dict[tuple[str, str, str], dict[str, Any]],
+    missed: list[_Missed],
+    still: list[dict[str, Any]],
+    *,
+    now: str,
+    bump: bool = True,
+) -> list[dict[str, Any]]:
+    """이번 차례가 끝난 뒤의 참조 대기 — 새로 못 찾은 것과 여전히 못 찾은 것(횟수를 잇는다,
+    `bump` 는 `_wait_entry`)."""
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for one in missed:
+        key = _wait_key(one.external, one.field, one.value)
+        if key not in seen:
+            seen.add(key)
+            out.append(
+                _wait_entry(
+                    previous,
+                    one.external,
+                    one.field,
+                    one.value,
+                    now=now,
+                    object_id=one.object_id,
+                    row=one.row,
+                    bump=bump,
+                )
+            )
+    for wait in still:
+        external = str(wait.get("external") or "")
+        field_key = str(wait.get("field") or "")
+        key = _wait_key(external, field_key, wait.get("value"))
+        if key not in seen:
+            seen.add(key)
+            out.append(
+                _wait_entry(
+                    previous,
+                    external,
+                    field_key,
+                    wait.get("value"),
+                    now=now,
+                    object_id=_uuid_or_none(wait.get("object_id")),
+                    bump=bump,
+                )
+            )
+    return out
+
+
+def _deferred_count(plans: list[bulk.Plan]) -> int:
+    return sum(len(fields) for plan in plans for fields in plan.deferred.values())
+
+
+def _ref_counts(
+    same_sync: int, resolved: int, entries: list[dict[str, Any]]
+) -> dict[str, int]:
+    """실행 기록의 셈 — 같은 동기화에서 푼 참조 · 기다리던 것 중 푼 것 · 참조 대기 · 참조 오류
+    (`REF_WAIT_LIMIT` 번 연속). 0 은 싣지 않는다."""
+    late = sum(1 for one in entries if int(one.get("waits") or 0) >= REF_WAIT_LIMIT)
+    out = {
+        "refs_same_sync": same_sync,
+        "refs_resolved": resolved,
+        "refs_waiting": len(entries) - late,
+        "refs_error": late,
+    }
+    return {name: value for name, value in out.items() if value}
+
+
+def _fill_refs(
+    db: Session,
+    actor: User,
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    items: list[tuple[uuid.UUID, str, Any]],
+    *,
+    apply: bool,
+    reason: str,
+    pending: dict[str, set[str]] | None = None,
+) -> tuple[int, list[int]]:
+    """객체를 다 넣은 **뒤에** 참조 칸을 채운다 — (채운 수, 못 찾은 것의 차례 번호).
+
+    같은 동기화에서 함께 온 행을 가리키는 칸(`Plan.deferred`)과 지난번에 못 찾아 기다리던 칸이
+    여기로 온다. 그때는 상대가 아직 없었다 — 이제 같은 트랜잭션에 들어갔거나 다른 소스가
+    넣었다. `apply` 가 거짓이면 찾기만 한다(미리 보기). 사람이 고쳐 둔 칸은 비켜 간다(적재의
+    규칙)."""
+    from app.modules.objects import humanedits
+    from app.modules.objects.services import audit_state
+    from app.modules.ontology.services import merge_properties, validate_properties
+
+    if not items:
+        return 0, []
+    by_key = {one.key: one for one in defs}
+    refs = bulk.Refs(db, actor, pending, blank_missing=True)
+    filled = 0
+    missing: list[int] = []
+    for index, (object_id, field_key, raw) in enumerate(items):
+        definition = by_key.get(field_key)
+        if definition is None:
+            continue
+        try:
+            value = bulk.cell_to_value(definition, raw, refs)
+        except bulk.PendingRef:
+            # 미리 보기 — 이 차례에 함께 오는 행이다(적용하면 행을 넣은 뒤에 채운다).
+            filled += 1
+            continue
+        except (bulk.MissingRef, AppError):
+            missing.append(index)
+            continue
+        if not apply:
+            filled += 1
+            continue
+        target = db.get(ObjectInstance, object_id)
+        if target is None or target.deleted_at is not None:
+            continue
+        if humanedits.protected(target, [f"{humanedits.PROP}{field_key}"]):
+            continue
+        before = audit_state(target)
+        try:
+            target.properties = validate_properties(
+                defs, merge_properties(target.properties or {}, {field_key: value})
+            )
+        except AppError:
+            missing.append(index)
+            continue
+        moved = audit.diff(before, audit_state(target))
+        if moved:
+            audit.record(
+                db,
+                action="object.update",
+                actor=actor,
+                target_table="objects",
+                target_id=target.id,
+                target_label=f"{object_type.slug}:{target.label}",
+                workspace_id=target.owner_workspace_id,
+                changes=moved,
+                reason=reason,
+            )
+        filled += 1
+    if apply:
+        db.flush()
+    return filled, missing
+
+
 def _apply_chunk(
     db: Session,
     actor: User,
@@ -671,8 +973,14 @@ def _apply_chunk(
     owner: uuid.UUID | None,
     aliases_mode: str = "add",
     blank_missing: bool = False,
+    pending: dict[str, set[str]] | None = None,
+    commit: bool = True,
 ) -> bulk.Plan:
     """조각 하나를 넣고 — **같은 커밋에** 외부 식별자를 남긴다.
+
+    `commit` 이 거짓이면(같은 타입을 가리키는 칸이 있는 소스 — 한 차례를 한 트랜잭션으로,
+    ADR 0089) 커밋하지 않고 보내기만 하고, 외부 식별자도 그 자리에서 남긴다 — 부르는 쪽이
+    끝에서 한 번 커밋한다(둘은 여전히 함께 들어가거나 함께 안 들어간다).
 
     일괄 입력은 조각마다 스스로 커밋한다. 예전에는 외부 식별자를 조각을 다 넣은 **뒤에** 따로
     남겼다 — 그 사이(선 받기 · 마지막 커밋)에서 예외가 나면 객체는 들어가고 외부 식별자는
@@ -680,6 +988,24 @@ def _apply_chunk(
     일괄 입력이 커밋하기 **직전**(`before_commit`)에 함께 싣는다 — 둘은 함께 들어가거나 함께
     안 들어간다. 실행 기록의 「적용함」 도 그 커밋에 탄다.
     """
+    if not commit:
+        plan = bulk.apply_objects(
+            db,
+            actor,
+            object_type,
+            [one.row for one in sent],
+            owner_workspace_id=owner,
+            source=source_name(source),
+            aliases_mode=aliases_mode,
+            blank_missing=blank_missing,
+            pending=pending,
+            commit=False,
+        )
+        if plan.ok:
+            run.applied = True
+            _remember_externals(db, object_type, source.slug, sent, plan.rows, known)
+        return plan
+
     captured: list[bulk.Plan] = []
 
     def ride(_session: Session) -> None:
@@ -702,6 +1028,7 @@ def _apply_chunk(
             source=source_name(source),
             aliases_mode=aliases_mode,
             blank_missing=blank_missing,
+            pending=pending,
             before_apply=captured.append,
         )
     finally:
@@ -1161,6 +1488,22 @@ def _sync_body(
     mapped = [map_row(mapping, raw, source.slug, mirror=mirror, keep=keep) for raw in alive]
     if source.kind == "sp_core":
         _carry_core(mapped, alive)
+    # **참조 대기**(ADR 0089) — 지난번에 가리키는 것을 못 찾은 칸 · 줄. 필수 칸이라 줄째 미룬
+    # 것은 그 행이 이번에 다시 안 왔으면 이 차례에 다시 싣는다 — 시계가 넘어가 다시 오지
+    # 않는다.
+    waits_before = {
+        _wait_key(
+            str(wait.get("external") or ""), str(wait.get("field") or ""), wait.get("value")
+        ): wait
+        for wait in refs_waiting_of(source)
+    }
+    arrived = {compare_key(one.external_id) for one in mapped if not one.error}
+    again = set(arrived)
+    for wait in waits_before.values():
+        external = str(wait.get("external") or "")
+        if isinstance(wait.get("row"), dict) and compare_key(external) not in again:
+            mapped.append(Mapped(external_id=external, row=dict(wait["row"])))
+            again.add(compare_key(external))
     # 거울이면 별칭을 **맞춘다**(뺀 것을 뺀다) — 아니면 더하기만(사람이 붙인 것을 지우지 않게).
     aliases_mode = "replace" if mirror else "add"
     run.rows_seen = len(fetched.rows)
@@ -1202,6 +1545,13 @@ def _sync_body(
     # bulk 의 상한(한 번에 5,000행)은 조각으로 넘는다 — 계획은 전부 세운 뒤에 적용한다.
     pieces = [good[i : i + bulk.MAX_ROWS] for i in range(0, len(good), bulk.MAX_ROWS)]
     actor = _actor(db, user)
+    # **같은 동기화에서 함께 온 행도 참조 대상이다**(ADR 0089) — 같은 타입을 가리키는 칸(상위
+    # 절)이 이 차례에 함께 온 행을 가리키면, 먼저 행을 다 만들고 그 칸을 뒤에 채운다(두 단계,
+    # 한 트랜잭션). 그래서 계획은 그 칸을 빼고 들고 있다(`Plan.deferred`). 끝내 못 찾은 참조는
+    # **그 칸만 비우고** 넣는다(`blank_missing` — 줄째 막지 않는다) — 참조 대기로 남아 다음
+    # 동기화가 다시 찾는다.
+    together = bool(self_refs(object_type, defs))
+    pending = {object_type.slug: _batch_names(good)} if together else None
     plans = [
         bulk.plan_objects(
             db,
@@ -1213,6 +1563,8 @@ def _sync_body(
             # 허브가 내려준 타입은 받기까지 막힌다(잠근 뜻은 그것이 아니다).
             source=source_name(source),
             aliases_mode=aliases_mode,
+            pending=pending,
+            blank_missing=True,
         )
         for piece in pieces
     ]
@@ -1238,13 +1590,49 @@ def _sync_body(
     # 끊김을 기억해 이을 수 있으면 화면에 「끊김」 으로 알리지 않는다 — 적용을 막는 표시다.
     truncated = fetched.truncated and not resumable
 
+    # 칸만 비우고 넣은 대기 — 그 행이 이번에 다시 왔으면 새 값이 대신한다(다시 센다).
+    waited_fields = [
+        wait
+        for wait in waits_before.values()
+        if not isinstance(wait.get("row"), dict)
+        and _uuid_or_none(wait.get("object_id")) is not None
+        and compare_key(str(wait.get("external") or "")) not in arrived
+    ]
+    stamp = datetime.now(UTC).isoformat()
+
     if not apply or not ok:
         if revive:
             counts["revived"] = len(revive)
+        # 참조 — 같은 동기화에서 풀 것 · 기다리던 것 중 이제 풀 것 · 여전히(또는 새로)
+        # 기다릴 것.
+        resolvable, unresolved = _fill_refs(
+            db,
+            actor,
+            object_type,
+            defs,
+            _wait_items(waited_fields),
+            apply=False,
+            reason="",
+            pending=pending,
+        )
+        entries = _waits_after(
+            waits_before,
+            _missed_of(pieces, plans),
+            [waited_fields[i] for i in unresolved],
+            now=stamp,
+            bump=not resumable,
+        )
+        counts.update(_ref_counts(_deferred_count(plans), resolvable, entries))
+        notes.extend(_waits_note(entries, defs))
         if wants_relations(source):
             # **선도 미리 세어 본다** — 계획에 객체만 나오면 사람은 선이 올 줄 모른다.
             edge_counts, edge_errors, edges_ok = _relations_or_note(
-                db, user, source, object_type, apply=False
+                db,
+                user,
+                source,
+                object_type,
+                apply=False,
+                batch={compare_key(name) for name in _batch_names(good)},
             )
             counts = {**counts, **edge_counts}
             errors.extend(edge_errors)
@@ -1272,6 +1660,11 @@ def _sync_body(
     run.status = "failed"
     run.errors = [INTERRUPTED]
     applied_rows: list[bulk.RowPlan] = []
+    applied_plans: list[bulk.Plan] = []
+    # **같은 타입을 가리키는 칸이 있으면 한 차례를 한 트랜잭션으로**(ADR 0089) — 행을 다 넣고
+    # (조각마다 커밋하지 않고 보내기만) 그 칸을 채운 뒤 끝에서 한 번 커밋한다. 도중에 막히면
+    # 세이브포인트로 되돌려 반쯤 들어간 차례가 남지 않는다(실행 기록은 남는다).
+    together_tx = db.begin_nested() if together else None
     for piece in pieces:
         done = _apply_chunk(
             db,
@@ -1283,8 +1676,13 @@ def _sync_body(
             known,
             owner=source.workspace_id,
             aliases_mode=aliases_mode,
+            blank_missing=True,
+            pending=pending,
+            commit=not together,
         )
         if not done.ok:
+            if together_tx is not None:
+                together_tx.rollback()
             run.status = "failed"
             run.errors = (
                 done.errors
@@ -1301,6 +1699,59 @@ def _sync_body(
             db.commit()
             return SyncResult(run=run, plan_rows=plan_rows, truncated=truncated)
         applied_rows.extend(done.rows)
+        applied_plans.append(done)
+
+    # **둘째 단계 — 같은 동기화에서 함께 온 행을 가리키는 칸**을 채운다. 이제 그 행이 있다.
+    deferred: list[tuple[uuid.UUID, str, Any, Mapped]] = []
+    for piece, done in zip(pieces, applied_plans, strict=True):
+        for number, fields in done.deferred.items():
+            row_plan = done.rows[number - 1]
+            if row_plan.object_id is None:
+                continue
+            deferred.extend(
+                (row_plan.object_id, key, raw, piece[number - 1]) for key, raw in fields
+            )
+    same_sync, unfilled = _fill_refs(
+        db,
+        actor,
+        object_type,
+        defs,
+        [(object_id, key, raw) for object_id, key, raw, _one in deferred],
+        apply=True,
+        reason="데이터 소스 — 같은 동기화에서 함께 온 것을 가리키는 칸",
+    )
+    missed = _missed_of(pieces, applied_plans) + [
+        _Missed(
+            external=deferred[i][3].external_id,
+            field=deferred[i][1],
+            value=deferred[i][2],
+            object_id=deferred[i][0],
+        )
+        for i in unfilled
+    ]
+    # 기다리던 칸 — 이제 가리키는 것이 있으면(다른 소스 · 이 차례가 넣었다) 채운다.
+    resolved, unresolved = _fill_refs(
+        db,
+        actor,
+        object_type,
+        defs,
+        _wait_items(waited_fields),
+        apply=True,
+        reason="데이터 소스 — 참조 대기를 풂",
+    )
+    # 끊어 이어 받는 차례는 「연속」 으로 세지 않는다 — 가리키는 것이 뒤 차례에 올 수 있다.
+    entries = _waits_after(
+        waits_before,
+        missed,
+        [waited_fields[i] for i in unresolved],
+        now=stamp,
+        bump=not resumable,
+    )
+    _set_refs_waiting(source, entries)
+    ref_counts = _ref_counts(same_sync, resolved, entries)
+    ref_late = bool(ref_counts.get("refs_error"))
+    if together_tx is not None:
+        together_tx.commit()
 
     # 이번에 온 것 — 바깥 식별자로도, 객체로도(합친 객체는 식별자 하나만 와도 온 것이다).
     seen_norms = {compare_key(one.external_id) for one in mapped if not one.error}
@@ -1345,18 +1796,21 @@ def _sync_body(
             "권한 · 쪽 넘김을 확인하세요. 정말 사라진 것이면 객체 화면에서 골라 사용 "
             "중지하세요 — 그 뒤로는 멈추지 않습니다."
         )
-    run.status = "failed" if relations_failed or held_back else "ok"
+    # 참조를 `REF_WAIT_LIMIT` 번 연속 못 찾으면 **오류로 올린다** — 객체는 넣었고 시계도
+    # 옮겼지만(막으면 나머지가 영영 안 들어온다) 사람이 원천의 값 · 칸 대응을 봐야 한다.
+    run.status = "failed" if relations_failed or held_back or ref_late else "ok"
     run.applied = True
     run.counts = {
         **counts,
         "deprecated": deprecated,
         **({"revived": revived} if revived else {}),
         **({"gone_held_back": held_back} if held_back else {}),
+        **ref_counts,
         **edge_counts,
     }
     # 선 쪽의 말(처음부터 다시 받음 · 끊김 거절) · 끊은 자리는 **성공한 실행에도 남긴다** —
     # 사람이 「무엇이 더 있었나」 를 그 기록에서 읽는다.
-    run.errors = (warnings + errors + notes)[:ERROR_SAMPLE]
+    run.errors = (warnings + _waits_note(entries, defs) + errors + notes)[:ERROR_SAMPLE]
     run.finished_at = datetime.now(UTC)
     source.last_run_at = run.finished_at
     source.last_status = run.status
@@ -1387,6 +1841,7 @@ def _relations_or_note(
     object_type: ObjectType,
     *,
     apply: bool,
+    batch: set[str] | None = None,
 ) -> tuple[dict[str, int], list[str], bool]:
     """선 받기 — **상대에 닿지 못해도 객체 쪽 결과는 남긴다.**
 
@@ -1394,7 +1849,7 @@ def _relations_or_note(
     식별자 · 사용 중지 · 객체의 시계)까지 롤백되고 기록에는 「계획 · 미완료」 만 남았다
     (2026-10-08). 이제는 그 실행의 실패로 적고 선의 시계만 안 옮긴다."""
     try:
-        return _sync_relations(db, user, source, object_type, apply=apply)
+        return _sync_relations(db, user, source, object_type, apply=apply, batch=batch)
     except AppError as caught:
         return {}, [f"선을 받지 못했습니다 — {caught.message}"], False
 
@@ -1428,6 +1883,22 @@ def public_options(options: dict[str, Any] | None) -> dict[str, Any]:
 def internal_options(options: dict[str, Any] | None) -> dict[str, Any]:
     """동기화가 적어 두는 칸 — 정의를 고쳐도 지킨다(화면은 이것을 모른다)."""
     return {key: value for key, value in (options or {}).items() if key.startswith("_")}
+
+
+def gained_columns(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """칸 대응에 **새로 생긴 칸**(넣을 자리 기준, ADR 0089) — 있으면 이미 받은 행에도 그 값이
+    있을 수 있어 처음부터 다시 받아야 한다. 바깥 칸 이름만 바꾼 것도 새로 받는다(값이
+    달라진다)."""
+
+    def pairs(mapping: dict[str, Any]) -> set[tuple[str, str]]:
+        return {
+            (str(one.get("source") or ""), str(one.get("target") or ""))
+            for one in mapping.get("columns") or []
+            if isinstance(one, dict)
+        }
+
+    old = pairs(before)
+    return sorted({target for source, target in pairs(after) - old if target})
 
 
 def restart(row: DataSource, *, edges_only: bool = False) -> None:
@@ -2151,6 +2622,70 @@ def _edge_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
     return out
 
 
+def _coming_edges(
+    db: Session, object_type: ObjectType, waiting: list[Waiting], batch: set[str]
+) -> tuple[list[Waiting], list[Waiting]]:
+    """미리 보기의 기다리는 선을 가른다 — (이 차례에 함께 오는 객체로 설 것, 정말 기다릴 것).
+
+    끝마다 이 차례의 행(식별자 · 이름의 비교키, `batch`)에 있거나 이미 있으면(식별자로) 선다.
+    도착 타입은 **허브의 slug** 로 온다 — 이쪽에 그 slug 의 타입이 있으면 거기서, 없으면 이
+    소스의 타입에서 찾는다(이 차례의 행이 그 타입이다)."""
+    if not waiting:
+        return [], []
+    local = {
+        row.slug: row.id
+        for row in db.scalars(
+            select(ObjectType).where(
+                ObjectType.slug.in_(
+                    {str(one.row.get("dst_type") or "") for one in waiting}
+                    | {object_type.slug}
+                )
+            )
+        )
+    }
+
+    def target_of(one: Waiting) -> str:
+        slug = str(one.row.get("dst_type") or "")
+        return slug if slug in local else object_type.slug
+
+    wanted: dict[str, set[str]] = {}
+    for one in waiting:
+        wanted.setdefault(object_type.slug, set()).add(str(one.row.get("src") or ""))
+        wanted.setdefault(target_of(one), set()).add(str(one.row.get("dst") or ""))
+    present: set[tuple[str, str]] = set()
+    for slug, keys in wanted.items():
+        type_id = local.get(slug)
+        if type_id is None:
+            continue
+        for part in id_batches(sorted(one for one in keys if one)):
+            present.update(
+                (slug, compare_key(key))
+                for key in db.scalars(
+                    select(ObjectInstance.key).where(
+                        ObjectInstance.type_id == type_id,
+                        ObjectInstance.key.in_(part),
+                        ObjectInstance.deleted_at.is_(None),
+                    )
+                )
+                if key
+            )
+
+    def placed(slug: str, key: str) -> bool:
+        norm = compare_key(key)
+        return (slug == object_type.slug and norm in batch) or (slug, norm) in present
+
+    coming: list[Waiting] = []
+    still: list[Waiting] = []
+    for one in waiting:
+        if placed(object_type.slug, str(one.row.get("src") or "")) and placed(
+            target_of(one), str(one.row.get("dst") or "")
+        ):
+            coming.append(one)
+        else:
+            still.append(one)
+    return coming, still
+
+
 def _waiting_note(waiting: list[Waiting]) -> str:
     """사람에게 남기는 말 — 몇 줄이 왜 기다리는지(앞의 셋만)."""
     sample = " · ".join(
@@ -2172,6 +2707,7 @@ def _sync_relations(
     object_type: ObjectType,
     *,
     apply: bool,
+    batch: set[str] | None = None,
 ) -> tuple[dict[str, int], list[str], bool]:
     """형제 설치의 **선**을 받는다 — `(셈, 오류 줄, 됐나)`.
 
@@ -2316,6 +2852,20 @@ def _sync_relations(
     errors.extend(cut_errors)
     edges_ok = edges_ok and cut_ok
     errors.extend(more)
+    if not apply and batch:
+        # **미리 보기는 객체를 아직 안 넣었다** — 이 차례에 함께 들어오는 객체를 가리키는 선은
+        # 적용하면 객체 뒤에 선다(ADR 0089). 그것까지 「기다림」 으로 세면 처음 받는 소스는
+        # 선이 전부 기다리는 것처럼 보였다.
+        coming, still = _coming_edges(db, object_type, still, batch)
+        if coming:
+            counts["relations_waiting"] = counts.get("relations_waiting", 0) - len(coming)
+            if not counts["relations_waiting"]:
+                counts.pop("relations_waiting")
+            counts["relations_same_sync"] = len(coming)
+            errors.append(
+                f"선 {len(coming)}줄은 이번 동기화에 함께 들어오는 객체를 이어, 적용하면 객체 "
+                "뒤에 섭니다."
+            )
     if still:
         errors.append(_waiting_note(still))
     ok = edges_ok and not any(
