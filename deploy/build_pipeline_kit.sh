@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 정제 도구 묶음 — 사용자 PC(Claude Desktop · Gemini CLI)에 옮기는 zip 하나.
+# 정제 도구 묶음 — 사용자 PC(Claude Desktop · Claude Code · Gemini CLI)에 옮기는 zip 하나.
 #
 #   ./deploy/build_pipeline_kit.sh            버전은 git describe 에서
 #   ./deploy/build_pipeline_kit.sh v0.2.0     직접 지정

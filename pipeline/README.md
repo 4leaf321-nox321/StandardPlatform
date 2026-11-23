@@ -94,10 +94,10 @@ python sp_pipeline.py docx 00-원천/설계서.docx      # → docs/설계서/ (
 ADR 0053 과 부딪치지 않는다** — 이 도구는 사용자 PC 에서 표준 라이브러리만으로 돌고, 글은 초안일 뿐 다듬기는
 AI 몫이다. zip 은 풀기 전에 항목 수 · 풀린 크기를 보고, 디스크에 경로째 풀지 않으며, DTD 가 든 XML 은 읽지 않는다.
 
-## Claude Desktop · Gemini CLI 에 붙이기 (로컬 MCP)
+## Claude Desktop · Claude Code · Gemini CLI 에 붙이기 (로컬 MCP)
 
 AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 직접 돌리게 한다. 도구는
-`sp_mcp.py` 하나이고, 두 클라이언트가 같은 설정 모양으로 붙는다.
+`sp_mcp.py` 하나이고, 세 클라이언트가 같은 설정 모양으로 붙는다.
 
 **1. 설치 — 더블클릭.** 받는 사람은 개발자가 아니다(Claude Desktop 만 쓰는 데이터 담당자).
 
@@ -108,14 +108,17 @@ AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 �
 2. 같은 자리의 **「이 PC 에 등록 정보 복사」** — 이 플랫폼용 토큰을 하나 발급해 이름 · 주소와 함께
    클립보드에 넣는다(`SP-PIPELINE-PLATFORM {…}` 한 줄).
 3. 푼 폴더의 **`install.cmd` 를 더블클릭** — 처음이면 설치까지(MCP 서버를 실제로 띄워 도구 목록을
-   받아 보고, Claude Desktop 설정에 넣는다), 이미 설치했으면 그 플랫폼만 더한다. 클립보드의 등록
+   받아 보고, Claude Desktop 설정과 Claude Code 의 사용자 설정에 넣는다), 이미 설치했으면 그 플랫폼만 더한다. 클립보드의 등록
    정보를 읽고 **비운다**(토큰이 다음 붙여넣기에 딸려 나가지 않게). 작업 폴더는 처음에
    `~/온톨로지작업` 에 생긴다.
    - **Claude Desktop 이 켜져 있으면 먼저 끄라고 한다** — 켜진 앱은 설정 파일을 스스로 다시 쓴다(앱
      로그의 「Config file written」). 켜진 채로 넣으면 그 항목이 사라질 수 있다.
    - **Store(MSIX) 판은 설정 파일이 둘일 수 있다**(`%APPDATA%\Claude\` 와
      `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude\`) — 있는 곳에 다 넣는다.
-4. **Claude Desktop 을 켠다.** 안 보이면 **`check.cmd` 를 더블클릭** — 앱이 읽는 설정 파일마다
+   - **Claude Code**(명령 창 · VS Code 확장)는 사용자 범위에 넣는다 — `~/.claude.json` 의 맨 위
+     `mcpServers`(`claude mcp add -s user` 와 같은 자리)라 어느 작업 폴더에서 켜도 뜬다. 그 파일이
+     없으면(그 PC 에서 Claude Code 를 켠 적이 없다) 건너뛴다 — 한 번 켠 뒤 다시 더블클릭.
+4. **Claude Desktop 을 켠다**(Claude Code 는 새 대화의 `/mcp` 로 확인). 안 보이면 **`check.cmd` 를 더블클릭** — 앱이 읽는 설정 파일마다
    항목이 있는지 · 서버가 뜨는지 · 앱의 로그(`mcp-server-sp-pipeline.log`)를 한 화면에 보인다.
 
 **적용은 그 플랫폼 화면 「작업」 에서** 사람이 「적용」 을 누른다 — 미리 보기 뒤에 AI 가 그 계획이
@@ -127,13 +130,13 @@ AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 �
 
 ```bash
 python\python.exe sp_setup.py --work-root "D:\온톨로지작업" --platform rootdesign \
-                   --server http://<서버>:3030/rootdesign --token spt_... --write-claude
+                   --server http://<서버>:3030/rootdesign --token spt_... --write-claude --write-claude-code
 ```
 
 - Windows 는 키트의 파이썬(`python\python.exe`)으로 — 깔 것이 없다. macOS · Linux 는 그 PC 의
   `python3`(3.11 ~ 3.13)로 돌리면 venv(`venv/`)를 만들고 `mcp` 를 동봉 휠로 깐다(인터넷이 되면
   `--online`). 키트를 만드는 쪽: 내장용 파이썬의 판과 해시는 `deploy/build_pipeline_kit.sh` 에 있다.
-- `--write-claude` · `--write-gemini` 는 각 설정 파일에 `sp-pipeline` 항목만 넣는다. 원래 파일은
+- `--write-claude`(Desktop) · `--write-claude-code` · `--write-gemini` 는 각 설정 파일에 `sp-pipeline` 항목만 넣는다. 원래 파일은
   `.bak` 로 남고, 다른 MCP 항목은 안 건드린다. 빼면 넣을 내용만 보여 준다.
 - **플랫폼을 이 PC 의 설정에 이름으로 등록한다**(`--platform` — 그 설치의 slug. 비우면 주소
   끝에서 짓는다). 주소 · 토큰은 클라이언트 설정이 아니라 **이 PC 의 설정 파일 한 곳**에 있다:
@@ -182,6 +185,7 @@ python sp_setup.py --platform qings --server http://<새 주소>/qings --move   
 | --- | --- |
 | Claude Desktop (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Claude Desktop (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Code(명령 창 · VS Code 확장) | `~/.claude.json` 의 맨 위 `mcpServers` — 항목에 `"type": "stdio"` 를 더한다(`claude mcp add-json -s user sp-pipeline '<위 항목>'` 과 같다) |
 | Gemini CLI | `~/.gemini/settings.json` |
 
 | 환경 변수(있으면 설정 파일보다 이긴다) | 뜻 |

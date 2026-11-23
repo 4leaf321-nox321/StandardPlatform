@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""로컬 정제 MCP 설치 — Claude Desktop · Gemini CLI 설정을 만들고, **이 PC 가 넣을 플랫폼을
-등록한다.** 설치가 됐다는 것은 MCP 서버를 실제로 띄워 도구 목록을 받았다는 뜻이다.
+"""로컬 정제 MCP 설치 — Claude Desktop · Claude Code · Gemini CLI 설정을 만들고, **이 PC 가
+넣을 플랫폼을 등록한다.** 설치가 됐다는 것은 MCP 서버를 실제로 띄워 도구 목록을 받았다는
+뜻이다.
 
     python sp_setup.py --work-root "D:\\온톨로지작업" --platform rootdesign \\
-                       --server http://<서버>:3030/rootdesign --token spt_... --write-claude
+                       --server http://<서버>:3030/rootdesign --token spt_... \\
+                       --write-claude --write-claude-code
     python sp_setup.py --platform qings --server http://<서버>:3040/qings --token spt_... \\
                        --no-install                 # 두 번째 플랫폼 — 앞의 것은 남는다
     python sp_setup.py --forget qings               # 등록을 뺀다
@@ -18,9 +20,11 @@
 - 그 밖(macOS · 리눅스 · 저장소에서 바로)에서는 venv 를 만들어 깐다. 묶음에 `wheels/` 가 있으면
   **인터넷 없이** 그것으로(`--online` 이면 PyPI 에서).
 - 안 뜰 때는 `--check`(키트의 `check.cmd`) — 앱이 읽는 설정 파일 · 서버가 뜨는지 · 앱의 로그.
-- 설정은 기본으로 **보여 주기만** 한다. `--write-claude` · `--write-gemini` 를 주면 그 파일에
-  `sp-pipeline` 항목만 넣거나 바꾸고, 원래 파일은 `.bak` 으로 남긴다. 다른 MCP 항목은 안
-  건드린다.
+- 설정은 기본으로 **보여 주기만** 한다. `--write-claude`(Desktop) · `--write-claude-code` ·
+  `--write-gemini` 를 주면 그 파일에 `sp-pipeline` 항목만 넣거나 바꾸고, 원래 파일은 `.bak`
+  으로 남긴다. 다른 MCP 항목은 안 건드린다. Claude Code 는 사용자 범위(`~/.claude.json` 의 맨
+  위 `mcpServers` — 명령 창 · VS Code 확장이 함께 읽는다)에 넣고, 그 파일이 없으면(Claude
+  Code 를 켠 적이 없다) 건너뛴다.
 - 토큰을 안 주면 `<개인 토큰>` 자리표시로 적는다 — 설정 파일에서 바꾼다.
 
 표준 라이브러리만 쓴다(설치 전이라 아무것도 없다).
@@ -471,6 +475,29 @@ def try_server(python: Path, *, timeout: float = 120.0) -> list[str]:
             process.wait(timeout=10)
 
 
+def _check_config(path: Path, expected: dict[str, Any]) -> int:
+    """설정 파일 하나에 이 키트의 항목이 있나 — 한 줄로 말하고, 막힌 곳이면 1."""
+    if not path.is_file():
+        print(f"  - {path}: 파일 없음")
+        return 0
+    try:
+        entry = (
+            json.loads(path.read_text(encoding="utf-8") or "{}").get("mcpServers") or {}
+        ).get(NAME)
+    except (ValueError, AttributeError):
+        print(f"  ✗ {path}: JSON 이 아닙니다")
+        return 1
+    if not entry:
+        print(f"  ✗ {path}: {NAME} 항목이 없습니다 — install.cmd 를 다시")
+        return 1
+    if entry.get("command") != expected["command"] or entry.get("args") != expected["args"]:
+        print(f"  ✗ {path}: 다른 자리를 가리킵니다 — {entry.get('command')}")
+        print("    (키트 폴더를 옮겼거나 지웠다) — 이 폴더의 install.cmd 를 다시")
+        return 1
+    print(f"  ✓ {path}: 이 키트를 가리킵니다")
+    return 0
+
+
 def check(python: Path) -> int:
     """점검 — 안 뜰 때 **어디서 막혔는지 한 화면에.** 아무것도 안 바꾼다. 0 이면 이 PC 쪽은
     다 됐다(그래도 안 보이면 Claude Desktop 을 다시 켠다)."""
@@ -488,29 +515,13 @@ def check(python: Path) -> int:
     print("\n[Claude Desktop 설정 — 앱이 읽을 수 있는 파일마다]")
     expected = server_entry(python)
     for path in claude_configs():
-        if not path.is_file():
-            print(f"  - {path}: 파일 없음")
-            continue
-        try:
-            entry = (
-                json.loads(path.read_text(encoding="utf-8") or "{}").get("mcpServers") or {}
-            ).get(NAME)
-        except (ValueError, AttributeError):
-            print(f"  ✗ {path}: JSON 이 아닙니다")
-            problems += 1
-            continue
-        if not entry:
-            print(f"  ✗ {path}: {NAME} 항목이 없습니다 — install.cmd 를 다시")
-            problems += 1
-        elif (
-            entry.get("command") != expected["command"]
-            or entry.get("args") != expected["args"]
-        ):
-            print(f"  ✗ {path}: 다른 자리를 가리킵니다 — {entry.get('command')}")
-            print("    (키트 폴더를 옮겼거나 지웠다) — 이 폴더의 install.cmd 를 다시")
-            problems += 1
-        else:
-            print(f"  ✓ {path}: 이 키트를 가리킵니다")
+        problems += _check_config(path, expected)
+    print("\n[Claude Code 설정 — 명령 창 · VS Code 확장]")
+    code = claude_code_config()
+    if code.is_file():
+        problems += _check_config(code, expected)
+    else:
+        print(f"  - {code}: 파일 없음(Claude Code 를 켠 적이 없다 — 안 쓰면 괜찮다)")
 
     running = claude_desktop_running()
     print(f"\n[Claude Desktop] {'켜져 있음' if running else '꺼져 있음(또는 모름)'}")
@@ -543,6 +554,36 @@ def gemini_config() -> Path:
     return Path("~/.gemini/settings.json").expanduser()
 
 
+def claude_code_config() -> Path:
+    """Claude Code 의 사용자 설정 — 명령 창(`claude`) · VS Code 확장이 함께 읽는다.
+
+    사용자 범위의 MCP 는 이 파일의 **맨 위 `mcpServers`** 다(`claude mcp add -s user` 가 쓰는
+    자리 — 2026-11-24 실측). 폴더마다의 `.mcp.json` 이 아니라 여기에 두어야 어느 작업 폴더에서
+    켜도 뜬다. `CLAUDE_CONFIG_DIR` 이 있으면 그 안의 같은 이름이다.
+    """
+    base = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return (Path(base).expanduser() if base else Path("~").expanduser()) / ".claude.json"
+
+
+def claude_code_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Claude Code 는 항목에 `type` 을 적는다(`claude mcp add` 가 쓰는 모양) — 나머지는
+    같다."""
+    return {"type": "stdio", **entry}
+
+
+def write_claude_code(entry: dict[str, Any]) -> str:
+    """Claude Code 설정에 넣는다 — **파일이 없으면 만들지 않는다.** 그 파일은 Claude Code 가
+    처음 켤 때 상태(첫 실행 · 로그인)와 함께 만든다. 비어 있는 자리에 우리 항목만 적어 두면
+    무엇을 건너뛸지 모른다."""
+    path = claude_code_config()
+    if not path.is_file():
+        return (
+            f"Claude Code: {path} 가 없어 건너뜁니다 — Claude Code 를 쓰려면 한 번 켠 뒤 "
+            "install.cmd 를 다시 더블클릭하세요(안 쓰면 그대로 두면 됩니다)."
+        )
+    return merge(path, claude_code_entry(entry))
+
+
 def merge(path: Path, entry: dict[str, Any]) -> str:
     """설정 파일에 `sp-pipeline` 항목만 넣거나 바꾼다. 읽을 수 없는 파일은 **덮지 않는다.**"""
     body: dict[str, Any] = {}
@@ -554,7 +595,8 @@ def merge(path: Path, entry: dict[str, Any]) -> str:
         if not isinstance(loaded, dict):
             raise Stop(f"{path} 의 맨 위가 {{...}} 가 아닙니다 — 덮지 않고 멈춥니다")
         body = loaded
-        shutil.copyfile(path, path.with_name(path.name + ".bak"))
+        # 권한까지 — `.claude.json` 은 본인만 읽는 파일이다(계정 정보가 든다).
+        shutil.copy2(path, path.with_name(path.name + ".bak"))
     servers = body.setdefault("mcpServers", {})
     if not isinstance(servers, dict):
         raise Stop(f"{path} 의 mcpServers 가 {{...}} 가 아닙니다 — 덮지 않고 멈춥니다")
@@ -600,7 +642,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--venv", type=Path, default=HERE / "venv")
     parser.add_argument("--online", action="store_true", help="동봉 휠 대신 PyPI 에서")
     parser.add_argument("--no-install", action="store_true", help="설치는 건너뛰고 설정만")
-    parser.add_argument("--write-claude", action="store_true")
+    parser.add_argument(
+        "--write-claude", action="store_true", help="Claude Desktop 설정에 넣는다"
+    )
+    parser.add_argument(
+        "--write-claude-code",
+        action="store_true",
+        help="Claude Code 설정(사용자 범위 — 명령 창 · VS Code 확장)에 넣는다",
+    )
     parser.add_argument("--write-gemini", action="store_true")
     parser.add_argument(
         "--check",
@@ -673,7 +722,10 @@ def main(argv: list[str] | None = None) -> int:
             tools = try_server(python)
             print(f"MCP 서버를 띄워 봤습니다 — 도구 {len(tools)}개")
         entry = server_entry(python)
-        print("\nMCP 항목(두 클라이언트 같음) — mcpServers 안에:")
+        print(
+            "\nMCP 항목(클라이언트마다 같음 — Claude Code 는 type: stdio 를 더한다) — "
+            "mcpServers 안에:"
+        )
         print(json.dumps({NAME: entry}, ensure_ascii=False, indent=2))
         if args.write_claude:
             wait_for_desktop_quit()
@@ -682,6 +734,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             shown = " · ".join(str(one) for one in claude_configs())
             print(f"Claude Desktop: {shown} 에 넣으세요 (--write-claude 로 자동)")
+        if args.write_claude_code:
+            print(write_claude_code(entry))
+        else:
+            print(
+                f"Claude Code: {claude_code_config()} 의 mcpServers 에 넣으세요 "
+                "(--write-claude-code 로 자동)"
+            )
         if args.write_gemini:
             print(merge(gemini_config(), entry))
         else:
@@ -691,8 +750,8 @@ def main(argv: list[str] | None = None) -> int:
             "복사」 를 누르고 install.cmd 를 다시 더블클릭 — 앞에 등록한 것은 남습니다."
         )
         print(
-            "Claude Desktop 은 **켤 때** 새 MCP 를 읽습니다 — 켜져 있었다면 완전히 "
-            "종료했다가 다시."
+            "Claude Desktop · Claude Code 는 **켤 때** 새 MCP 를 읽습니다 — 켜져 있었다면 "
+            "완전히 종료했다가 다시(Claude Code 는 새 대화에서 /mcp 로 sp-pipeline 을 확인)."
         )
     except Stop as stop:
         print(str(stop), file=sys.stderr)

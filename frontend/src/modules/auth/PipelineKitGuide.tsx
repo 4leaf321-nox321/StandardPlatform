@@ -7,6 +7,8 @@
  * ## 받는 사람은 개발자가 아니다
  *
  * Claude Desktop 만 쓰는 데이터 담당자다 — 명령 창 · 설정 JSON · 토큰 범위를 몰라도 되게 한다.
+ * 같은 더블클릭이 Claude Code(명령 창 · VS Code 확장)의 사용자 설정에도 넣는다 — 그 PC 에서 Claude
+ * Code 를 켠 적이 있을 때.
  *
  *     받기 → 풀기 → 「이 PC 에 등록 정보 복사」 → install.cmd 더블클릭 → Claude Desktop 재시작
  *
@@ -62,7 +64,7 @@ export function setupCommand(
   return (
     // 키트에 든 파이썬으로 — PC 에 파이썬이 없어도 된다(PATH 에도 안 올린다).
     `python\\python.exe sp_setup.py --platform ${platform} ` +
-    `--server ${server} --token ${token || TOKEN_PLACEHOLDER} --write-claude`
+    `--server ${server} --token ${token || TOKEN_PLACEHOLDER} --write-claude --write-claude-code`
   )
 }
 
@@ -203,6 +205,9 @@ export function PipelineKitGuide({
               목록에 <span className="font-mono">sp-pipeline</span> 이 보이면 대화에서 「○○ 자료
               작업을 시작하자」 고 말합니다 — AI 가 차례를 안내합니다. 안 보이면 같은 폴더의{' '}
               <b className="font-mono">check.cmd</b> 를 더블클릭 — 어디서 막혔는지 보여 줍니다.
+              <b>Claude Code</b>(명령 창 · VS Code 확장)를 쓰면 그 설정에도 함께 넣습니다 — 새 대화를
+              열고 <span className="font-mono">/mcp</span> 로 확인합니다(그 PC 에서 Claude Code 를
+              켠 적이 없으면 건너뜁니다 — 한 번 켠 뒤 install.cmd 를 다시).
             </li>
           </ol>
 

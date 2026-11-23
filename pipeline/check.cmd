@@ -1,5 +1,5 @@
 @echo off
-rem 정제 도구 키트 점검 — 설치했는데 Claude Desktop 에 sp-pipeline 이 안 뜰 때 더블클릭한다.
+rem 정제 도구 키트 점검 — 설치했는데 Claude Desktop · Claude Code 에 sp-pipeline 이 안 뜰 때 더블클릭한다.
 rem 아무것도 바꾸지 않는다. 나온 화면을 그대로 복사해 물어보면 된다(토큰은 가려져 있다).
 chcp 65001 >nul
 cd /d "%~dp0"

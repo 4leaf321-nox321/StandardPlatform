@@ -44,10 +44,31 @@ def test_점검은_앱이_읽는_파일마다_말한다(
     monkeypatch.setattr(sp_setup, "claude_configs", lambda: [good, private])
     monkeypatch.setattr(sp_setup, "claude_logs", lambda: [])
     monkeypatch.setattr(sp_setup, "claude_desktop_running", lambda: False)
+    # Claude Code — 켠 적이 없는 PC 면 막힌 곳이 아니다. 진짜 사용자 설정을 안 읽게 자리를
+    # 옮긴다.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-code"))
 
     assert sp_setup.check(PYTHON) == 1
     shown = capsys.readouterr().out
     assert f"✓ {good}: 이 키트를 가리킵니다" in shown
     assert f"✗ {private}: sp-pipeline 항목이 없습니다" in shown
+    assert "[Claude Code 설정" in shown and "Claude Code 를 켠 적이 없다" in shown
     assert "도구 19개" in shown
     assert "앱이 이 항목을 띄운 적이 없습니다" in shown
+
+
+def test_점검은_Claude_Code_설정도_본다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SP_SETTINGS", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    code = tmp_path / ".claude.json"
+    code.write_text(json.dumps({"userID": "u"}))
+    monkeypatch.setattr(sp_setup, "claude_configs", lambda: [])
+    monkeypatch.setattr(sp_setup, "claude_logs", lambda: [])
+    monkeypatch.setattr(sp_setup, "claude_desktop_running", lambda: False)
+    assert sp_setup.check(PYTHON) == 1
+    assert f"✗ {code}: sp-pipeline 항목이 없습니다" in capsys.readouterr().out
+    sp_setup.write_claude_code(sp_setup.server_entry(PYTHON))
+    assert sp_setup.check(PYTHON) == 0
+    assert f"✓ {code}: 이 키트를 가리킵니다" in capsys.readouterr().out

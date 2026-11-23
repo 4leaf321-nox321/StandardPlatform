@@ -118,6 +118,8 @@ describe('정제 도구 키트 안내', () => {
     expect(command).toContain('--server http://10.0.0.5:3030/rootdesign ')
     // **이름으로 더한다** — 한 PC 가 플랫폼 여럿을 겨눈다. 이름이 없으면 덮어쓰게 된다.
     expect(command).toContain('--platform rootdesign ')
+    // Claude Desktop 과 Claude Code(명령 창 · VS Code 확장) 둘 다에 넣는다.
+    expect(command.endsWith('--write-claude --write-claude-code')).toBe(true)
     expect(registrationLine('qings', 'http://h/qings', 't')).toBe(
       `${REGISTRATION} {"platform":"qings","server":"http://h/qings","token":"t"}`,
     )

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""로컬 정제 MCP 서버 — Claude Desktop · Gemini CLI 가 **사용자 PC 에서** 파이프라인을 돌린다.
+"""로컬 정제 MCP 서버 — Claude Desktop · Claude Code · Gemini CLI 가 **사용자 PC 에서**
+파이프라인을 돌린다.
 
 Claude Desktop 은 PC 의 명령을 직접 못 돌리고, Gemini CLI 는 돌리지만 사람마다 부르는 법이
 달라진다. 둘 다 말하는 MCP 로 도구를 한 벌 두면 **같은 절차 · 같은 멈춤 자리**로 일한다. 원천

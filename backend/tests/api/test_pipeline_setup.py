@@ -1,7 +1,7 @@
 """로컬 MCP 설치(`pipeline/sp_setup.py`) — **남의 설정 파일을 망가뜨리지 않는다.**
 
 venv 를 만들고 휠을 까는 부분은 시험하지 않는다(느리고 네트워크 · OS 에 달렸다). 사람이 가장
-크게 다치는 자리 — Claude Desktop · Gemini CLI 설정 파일에 합치는 것 — 만 본다.
+크게 다치는 자리 — Claude Desktop · Claude Code · Gemini CLI 설정 파일에 합치는 것 — 만 본다.
 """
 
 from __future__ import annotations
@@ -334,15 +334,65 @@ def test_키트에_든_파이썬을_쓰고_venv_도_pip_도_안_쓴다(
     monkeypatch.setattr(setup, "claude_configs", lambda: configs)
     monkeypatch.setattr(setup, "wait_for_desktop_quit", lambda: None)
     monkeypatch.setattr(setup, "default_work_root", lambda: tmp_path / "work")
-    assert (
-        setup.main(["--server", "http://h/qings", "--token", "spt_q", "--write-claude"]) == 0
-    )
+    code_dir = tmp_path / "claude-code"
+    code_dir.mkdir()
+    (code_dir / ".claude.json").write_text(json.dumps({"userID": "u"}), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(code_dir))
+    argv = ["--server", "http://h/qings", "--token", "spt_q", "--write-claude"]
+    assert setup.main([*argv, "--write-claude-code"]) == 0
     # 설치가 됐다는 것은 띄워 봤다는 것이다.
     assert tried == [embedded]
     # Store 판의 앱 전용 파일까지 — 앱이 어느 쪽을 읽든 뜬다.
     for path in configs:
         entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["sp-pipeline"]
         assert entry["command"] == str(embedded)
+    # Claude Code(명령 창 · VS Code 확장)의 사용자 설정에도 — 같은 더블클릭이다.
+    code = json.loads((code_dir / ".claude.json").read_text(encoding="utf-8"))
+    assert code["mcpServers"]["sp-pipeline"]["command"] == str(embedded)
+
+
+def test_Claude_Code_는_사용자_범위에_넣고_그_파일의_상태는_남긴다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code 의 사용자 범위 MCP 는 `~/.claude.json` 의 맨 위 `mcpServers` 다(`claude mcp
+    add -s user` 가 쓰는 자리 — 명령 창 · VS Code 확장이 함께 읽는다). 그 파일에는 첫 실행 ·
+    계정 · 폴더마다의 상태가 함께 들어 있다 — 우리 항목만 바꾸고, 본인만 읽는 권한도 그대로
+    둔다."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    path = tmp_path / ".claude.json"
+    original: dict[str, Any] = {
+        "userID": "u1",
+        "projects": {"/work": {"mcpServers": {"local-one": {"command": "y"}}}},
+        "mcpServers": {"other-server": {"type": "stdio", "command": "x"}},
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+    path.chmod(0o600)
+    assert setup.claude_code_config() == path
+    assert "넣었습니다" in setup.write_claude_code(_entry())
+    merged = json.loads(path.read_text(encoding="utf-8"))
+    assert merged["mcpServers"]["sp-pipeline"] == {"type": "stdio", **_entry()}
+    assert merged["mcpServers"]["other-server"] == original["mcpServers"]["other-server"]
+    assert merged["userID"] == "u1" and merged["projects"] == original["projects"]
+    backup = path.with_name(".claude.json.bak")
+    assert json.loads(backup.read_text(encoding="utf-8")) == original
+    assert (path.stat().st_mode & 0o777) == 0o600
+    assert (backup.stat().st_mode & 0o777) == 0o600
+    # 두 번째는 바꾼다(`claude mcp add` 처럼 「이미 있다」 로 멈추지 않는다).
+    assert "바꿨습니다" in setup.write_claude_code(_entry())
+
+
+def test_Claude_Code_를_켠_적이_없으면_설정_파일을_만들지_않는다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """그 파일은 Claude Code 가 처음 켤 때 첫 실행 · 로그인 상태와 함께 만든다 — 우리 항목만 든
+    파일을 먼저 두면 무엇을 건너뛸지 모른다. 건너뛰고 그렇다고 말한다."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    said = setup.write_claude_code(_entry())
+    assert "건너뜁니다" in said and "install.cmd" in said
+    assert not (tmp_path / ".claude.json").exists()
+    # 설정 자리를 따로 두지 않으면 사용자 폴더 바로 밑이다.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert setup.claude_code_config() == Path("~").expanduser() / ".claude.json"
 
 
 def test_Store_판은_앱_전용_설정도_찾는다(

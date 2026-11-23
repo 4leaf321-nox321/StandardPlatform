@@ -17,10 +17,10 @@ if not defined PY ( py -3 -c "import sys" >nul 2>nul && set "PY=py -3" )
 if not defined PY ( python -c "import sys" >nul 2>nul && set "PY=python" )
 if not defined PY goto nopython
 
-%PY% "%~dp0sp_setup.py" --from-clipboard --write-claude %*
+%PY% "%~dp0sp_setup.py" --from-clipboard --write-claude --write-claude-code %*
 set "CODE=%ERRORLEVEL%"
 echo.
-if "%CODE%"=="0" echo 끝났습니다. 이제 Claude Desktop 을 켜세요. 안 보이면 같은 폴더의 check.cmd 를 더블클릭하세요.
+if "%CODE%"=="0" echo 끝났습니다. 이제 Claude Desktop(또는 Claude Code)을 켜세요. 안 보이면 같은 폴더의 check.cmd 를 더블클릭하세요.
 pause
 exit /b %CODE%
 
