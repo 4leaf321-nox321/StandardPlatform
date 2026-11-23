@@ -34,7 +34,7 @@ from app.modules.review import services as review_services
 from app.modules.review.models import ReviewDecision
 from app.modules.review.registry import Applied, Filters, Item
 from app.modules.workspaces.models import Workspace
-from app.shared import events
+from app.shared import events, readguard
 from app.shared.batches import chunks
 from app.shared.text import compare_key
 from tests.api.conftest import Signed, _login, _make_user, finish_job
@@ -1285,6 +1285,52 @@ def test_느린_종류가_있어도_나머지는_서고_그_종류는_늦음이�
         "느린 slow_big" in line and "이번에는 고르지 않았습니다" in line
         for line in planned["notes"]
     )
+
+
+def test_취소가_닿지_않아도_DB_가_스스로_끊는다(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**끊는 신호가 닿지 않는 날에도 60초 앞에서 멈춘다.** 시간 상한은 도는 질의에 취소를
+    보내 끊는다 — 그 신호가 질의와 질의 사이에 닿았거나 취소 연결이 막히면, 큰 질의 하나가 DB
+    의 질의 상한(60초)까지 돌아 앞단이 504 를 냈다. 종류마다 남은 시간만큼 DB 의 질의 상한을
+    걸어(세이브포인트 안) DB 가 스스로 끊고, 끊는 신호도 끝날 때까지 다시 보낸다."""
+    tool = _make_type(client, admin, "tool", label="툴")
+    _make_object(client, admin, tool, label="Kestrel Mesher")
+    _miss(db, tool, "Kestrel Meshr")
+    seen: list[str] = []
+
+    def one_big(db: Session, _user: User, _flt: Filters) -> registry.Collected:
+        seen.append(str(db.scalar(text("SHOW statement_timeout"))))
+        db.execute(text("SELECT pg_sleep(30)"))
+        return registry.Collected(items=[], total=1)
+
+    monkeypatch.setitem(registry._registry, "slow_big", _slow_provider("slow_big", one_big))
+    monkeypatch.setattr(review_services, "KIND_SECONDS", 1.0)
+    monkeypatch.setattr(review_services, "KIND_GRACE", 0.3)
+    # 취소가 닿지 않는다(취소 연결이 막힌 날).
+    monkeypatch.setattr(readguard, "_cancel", lambda _guard: None)
+
+    started = time.monotonic()
+    page = _items(client, admin, type=tool)
+    took = time.monotonic() - started
+    assert took < 10, took  # 30초 질의를 기다리지 않았다
+    kinds = {one["kind"]: one for one in page["kinds"]}
+    assert kinds["slow_big"]["late"] is True
+    assert "읽지 못해 이번에는 건너뛰었습니다" in kinds["slow_big"]["notes"][0]
+    # 종류 안에서는 남은 시간이 상한이었고, 끝나면 요청의 원래 상한으로 돌아간다.
+    assert seen and seen[0].endswith("ms") and int(seen[0][:-2]) <= 3000, seen
+    assert kinds["alias_candidate"]["late"] is False
+    assert [one["kind"] for one in page["items"]] == ["alias_candidate"]
+
+    # 끝나면(끊기든 아니든) 요청의 원래 상한으로 — 뒤의 읽기가 낮은 상한을 물려받지 않게.
+    before = str(db.scalar(text("SHOW statement_timeout")))
+    review_services._within(db, time.monotonic() + 5, lambda: db.scalar(text("SELECT 1")))
+    assert str(db.scalar(text("SHOW statement_timeout"))) == before
+    with pytest.raises(review_services._Late):
+        review_services._within(
+            db, time.monotonic() + 0.2, lambda: db.execute(text("SELECT pg_sleep(5)"))
+        )
+    assert str(db.scalar(text("SHOW statement_timeout"))) == before
 
 
 def test_별칭_후보는_시간이_다_되면_많이_찾은_것부터_셈한_만큼만_낸다(

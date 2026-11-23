@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Any
 
-from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -195,43 +195,63 @@ class _Late(Exception):
     """종류 하나가 끊을 시각을 넘겼다 — 그 종류가 읽은 것은 버렸다."""
 
 
+#: DB 의 질의 상한을 끊는 신호보다 이만큼(초) 늦게 둔다 — 보통은 신호가 먼저 끊고, 신호가 안
+#: 닿은 날에만 DB 가 끊는다.
+DB_CAP_MARGIN = 0.5
+
+
 def _within[T](db: Session, cutoff: float, work: Callable[[], T]) -> T:
     """`work` 를 `cutoff`(`time.monotonic()`)까지만 — 넘기면 도는 질의를 취소하고 다음 질의를
     보내지 않는다(`readguard` 의 길 — 큰 질의 하나도, 짧은 질의를 여럿 부르는 되풀이도
-    끊긴다). 세이브포인트 안에서 돌려 끊겨도 요청의 트랜잭션은 산다. 끊기면 `_Late`."""
+    끊긴다). 세이브포인트 안에서 돌려 끊겨도 요청의 트랜잭션은 산다. 끊기면 `_Late`.
+
+    **끊는 신호가 안 닿는 날에도 멈춘다.** 신호는 「지금 도는 질의」 를 끊는 것이라 질의 사이에
+    닿으면 아무 일도 없고, 취소 연결이 막히면 닿지 않는다 — 그러면 큰 질의 하나가 DB 의 질의
+    상한(`read_query_seconds`, 60초)까지 돌아 앞단이 504 를 냈다. 그래서 (1) 신호를 끝날
+    때까지 `readguard.POLL` 마다 다시 보내고(`readguard.run` 과 같다), (2) 세이브포인트
+    안에서 DB 의 질의 상한을 남은 시간(+ `DB_CAP_MARGIN`)으로 낮춰 DB 가 스스로 끊게 한다.
+    끝나면 원래 상한으로 돌린다(끊기면 세이브포인트를 되돌리며 함께 돌아간다)."""
     nested = db.begin_nested()
     lock = threading.Lock()
-    finished = False
+    finished = threading.Event()
     guard: readguard.Guard | None = None
+    previous = _statement_cap(db)
+    capped = _cap_statements(db, cutoff, previous)
     try:
         with readguard.watching() as guard:
+            mine = guard
 
             def fire() -> None:
-                # 끝난 뒤에는 취소를 보내지 않는다 — 다음 종류의 질의가 맞을 수 있다.
-                with lock:
-                    if not finished and guard is not None:
-                        readguard.stop(guard, "time")
+                # 시간이 되면 끝날 때까지 다시 보낸다 — 끝난 뒤에는 보내지 않는다(다음 종류의
+                # 질의가 맞을 수 있다).
+                if finished.wait(max(cutoff - time.monotonic(), 0.0)):
+                    return
+                while True:
+                    with lock:
+                        if finished.is_set():
+                            return
+                        readguard.stop(mine, "time")
+                    if finished.wait(readguard.POLL):
+                        return
 
-            timer = threading.Timer(max(cutoff - time.monotonic(), 0.0), fire)
-            timer.daemon = True
+            timer = threading.Thread(target=fire, name="review-cutoff", daemon=True)
             timer.start()
             try:
                 result = work()
             finally:
                 with lock:
-                    finished = True
-                timer.cancel()
+                    finished.set()
             if guard.why is not None:
                 # 마지막 질의가 끝난 바로 뒤에 시간이 됐다 — 끊긴 것과 같이 본다(같은 요청에
                 # 같은 답이 나게).
                 raise _Late
     except BaseException as caught:
         # 끊긴 질의 뒤의 트랜잭션은 실패 상태다 — 세이브포인트로 돌려야 다음 종류가 읽는다.
-        # `watching()` 을 나온 뒤라 이 되돌리기는 막히지 않는다.
+        # `watching()` 을 나온 뒤라 이 되돌리기는 막히지 않는다. 낮춘 상한도 함께 돌아간다.
         nested.rollback()
         timed_out = guard is not None and guard.why is not None
         if isinstance(caught, _Late) or (
-            timed_out
+            (timed_out or capped)
             and (
                 isinstance(caught, readguard.Stopped)
                 or (isinstance(caught, OperationalError) and querycap.cancelled(caught))
@@ -239,8 +259,33 @@ def _within[T](db: Session, cutoff: float, work: Callable[[], T]) -> T:
         ):
             raise _Late from caught
         raise
+    if capped:
+        _set_statement_cap(db, previous)
     nested.commit()
     return result
+
+
+def _statement_cap(db: Session) -> int:
+    """지금 이 세션의 DB 질의 상한(ms, 0 이면 없음) — `pg_settings` 는 단위를 ms 로 준다."""
+    return int(
+        db.execute(
+            text("SELECT setting::int FROM pg_settings WHERE name = 'statement_timeout'")
+        ).scalar_one()
+    )
+
+
+def _cap_statements(db: Session, cutoff: float, previous: int) -> bool:
+    """DB 의 질의 상한을 남은 시간(+ 여유)으로 낮춘다 — 원래 상한이 더 짧으면 그대로.
+    낮췄나."""
+    left = max(1, round((cutoff - time.monotonic() + DB_CAP_MARGIN) * 1000))
+    if previous and previous <= left:
+        return False
+    _set_statement_cap(db, left)
+    return True
+
+
+def _set_statement_cap(db: Session, ms: int) -> None:
+    db.execute(text("SELECT set_config('statement_timeout', :v, true)"), {"v": str(int(ms))})
 
 
 def _late_note(provider: Provider, took: float, alone: bool) -> str:
