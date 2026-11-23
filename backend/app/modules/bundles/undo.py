@@ -299,7 +299,7 @@ def _object(
                 object_id=row.id,
                 message="그 뒤에 고쳐져 안 지웁니다",
             )
-        blocked = _blockers(db, row, doomed, cut)
+        blocked = blockers(db, row, doomed, cut)
         if blocked:
             return bulk.RowPlan(
                 row=index,
@@ -424,10 +424,12 @@ def _restore(row: ObjectInstance, key: str, value: Any) -> None:
         setattr(row, key, value if value is not None else "")
 
 
-def _blockers(
+def blockers(
     db: Session, row: ObjectInstance, doomed: set[uuid.UUID], cut: set[uuid.UUID]
 ) -> str:
-    """이 객체를 **이 판 밖에서** 가리키는 것 — 있으면 사람이 읽는 한 줄.
+    """이 객체를 **이 판 밖에서** 가리키는 것 — 있으면 사람이 읽는 한 줄. 원천이 무덤으로
+    지울 때(`tombstones`, ADR 0090)도 같은 잣대다: 함께 지울 것(`doomed`) · 함께 끊을
+    선(`cut`)은 빼고 센다.
 
     ⚠️ 줄마다 참조를 다 훑으면(`lifecycle.references_of`) 수만 줄에서 질의가 수만 번이다.
        여기서는 그 객체에 **아직 남아 있는 선**과 그 객체를 담은 칸만 본다 — 이 판이 만든

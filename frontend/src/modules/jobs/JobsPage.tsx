@@ -15,6 +15,7 @@ import { ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react'
 
 import { jobsApi, isTerminal, STATUS_LABEL } from '@/modules/jobs/api'
 import type { Job, JobBulkResult, JobStatus } from '@/modules/jobs/api'
+import { TombstonePlanView, graveSummary, tombstonesOf } from '@/modules/jobs/TombstonePlanView'
 import type { ImportPlan } from '@/modules/objects/api'
 import type { RetypeOut } from '@/modules/ontology/api'
 import { DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
@@ -103,11 +104,14 @@ function Outcome({ job }: { job: Job }) {
     ?.counts
   if (!counts) return null
   const applied = (job.result as { applied?: boolean }).applied
+  // 묶음의 무덤 — 「지움」 과 「사용 중지」 를 따로(ADR 0090).
+  const graves = graveSummary(counts)
   return (
     <span className="text-muted-foreground text-xs">
       {applied ? '적용 — ' : '계획 — '}
       새로 {counts.create ?? 0} · 고침 {counts.update ?? 0} · 그대로 {counts.unchanged ?? 0}
       {counts.error ? ` · 오류 ${counts.error}` : ''}
+      {graves ? ` · ${graves}` : ''}
     </span>
   )
 }
@@ -290,6 +294,8 @@ function Detail({
   const job = (brief ? full.data : null) ?? listed
   const plan = planOf(job)
   const batches = bundleBatches(job)
+  // 묶음의 무덤 — 걷어내기(datarelay)는 이것만 담아 온다.
+  const graves = tombstonesOf(job.result)
   const retype = retypeOf(job)
   // 사진 일괄 업로드 — 파일마다 무엇이 되나. 「적용」 은 결과의 `ok`(붙는 것이 있나)로 선다.
   const photos = photoPlanOf(job.result)
@@ -330,6 +336,7 @@ function Detail({
           </tbody>
         </table>
       )}
+      {graves && <TombstonePlanView plan={graves} />}
       {!plan && !batches && !retype && !photos && !reassign && !job.error && (
         <p className="text-muted-foreground text-xs">
           {job.has_output ? '만든 파일을 받으세요.' : '남길 결과가 없는 작업입니다.'}

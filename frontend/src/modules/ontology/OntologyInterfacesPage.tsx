@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { ChevronDown, Plus, Settings2 } from 'lucide-react'
 
 import { InterfaceEditDialog } from '@/modules/ontology/InterfaceEditDialog'
+import { ManagedBadge } from '@/modules/ontology/ManagedBadge'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { PropertyEditor } from '@/modules/ontology/PropertyEditor'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -89,7 +90,13 @@ export default function OntologyInterfacesPage() {
                       <TypeIcon name={row.icon} className="mr-2 inline align-text-bottom" />
                       {row.label}
                       {row.managed_by && (
-                        <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
+                        <ManagedBadge
+                          kind="interfaces"
+                          slug={row.slug}
+                          label={row.label}
+                          owner={row.managed_by}
+                          onUnlocked={reload}
+                        />
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.slug}</TableCell>

@@ -142,3 +142,9 @@ export function useAuth(): AuthContextValue {
   if (!value) throw new Error('useAuth 는 AuthProvider 안에서만 쓸 수 있습니다')
   return value
 }
+
+/** 로그인 정보가 **없어도 되는** 자리 — 표 안의 작은 단추처럼, 그 화면의 시험이 AuthProvider 없이
+ *  그리는 곳. 없으면 null(권한이 필요한 것은 안 보인다). */
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext)
+}

@@ -329,6 +329,14 @@ class ObjectTypeSchema(ObjectTypeOut):
 # --- 인터페이스 (ADR 0006) ------------------------------------------------------
 
 
+class DefinitionUnlockOut(BaseModel):
+    """원천 잠금을 푼 결과(ADR 0090)."""
+
+    slug: str
+    was: str
+    """풀기 전에 잠근 원천 — 이미 풀려 있었으면 빈 값(아무것도 안 바뀐다)."""
+
+
 class ObjectInterfaceOut(BaseModel):
     """여러 타입이 따르는 공통 모양."""
 

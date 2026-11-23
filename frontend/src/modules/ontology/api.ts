@@ -636,6 +636,9 @@ export interface ResetPlan {
   snapshot_id: string | null
 }
 
+/** 잠금을 푸는 정의의 종류 — API 의 경로 이름 그대로. */
+export type UnlockKind = 'types' | 'relation-types' | 'interfaces'
+
 export const ontologyApi = {
   /** **자기 설명적 스키마.** 화면도 MCP 도 이 하나를 읽는다. */
   schema: () => api.get<OntologySchema>('/ontology/schema'),
@@ -683,6 +686,10 @@ export const ontologyApi = {
   updateRelationType: (slug: string, body: Record<string, unknown>) =>
     api.patch<RelationType>(`/ontology/relation-types/${slug}`, body),
   removeRelationType: (slug: string) => api.delete<void>(`/ontology/relation-types/${slug}`),
+  /** 원천 잠금을 푼다(ADR 0090) — 시스템 관리자. 원천이 같은 정의를 다시 보내면 다시 잠근다.
+   *  `was` 는 풀기 전의 원천(이미 풀려 있었으면 빈 값). */
+  unlock: (kind: UnlockKind, slug: string) =>
+    api.post<{ slug: string; was: string }>(`/ontology/${kind}/${slug}/unlock`),
 
   properties: (slug: string) => api.get<PropertyDef[]>(`/ontology/types/${slug}/properties`),
   createProperty: (slug: string, body: Record<string, unknown>) =>

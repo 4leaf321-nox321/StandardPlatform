@@ -66,6 +66,7 @@ from app.modules.ontology.models import (
 )
 from app.modules.ontology.schemas import (
     ChangeOut,
+    DefinitionUnlockOut,
     DeleteBlockOut,
     DeleteKind,
     DeletePlanOut,
@@ -1559,6 +1560,88 @@ def delete_interface(
     ).delete(synchronize_session=False)
     db.delete(row)
     db.commit()
+
+
+# --- 원천 잠금 풀기(ADR 0090) ---------------------------------------------------
+#
+# 원천(datarelay · 허브)이 보낸 정의는 그 원천만 고친다(`managed_by`). 그런데 원천을 끊거나
+# 시험으로 보낸 타입을 치울 때는 그 잠금이 정의를 영영 붙든다 — 객체를 다 지워도 타입이 남는다.
+# 그래서 시스템 관리자가 화면에서 잠금을 푼다. 그 뒤로는 사람이 평소처럼 고치고 지운다.
+# **원천이 같은 정의를 다시 보내면 다시 잠근다**(가져오기의 규칙 그대로) — 아직 보내는 중인
+# 원천이면 다음 받기가 다시 잠그고 덮어쓴다.
+
+UNLOCK_NOTE = "잠금 해제 — 원천이 같은 정의를 다시 보내면 다시 잠긴다"
+
+
+def _unlock(
+    db: Session,
+    user: User,
+    row: ObjectType | RelationType | ObjectInterface,
+    *,
+    action: str,
+    table: str,
+) -> DefinitionUnlockOut:
+    was = managed.owner_of(row)
+    if was:
+        row.managed_by = ""
+        record_audit(
+            db,
+            action=action,
+            actor=user,
+            target_table=table,
+            target_id=row.id,
+            target_label=row.slug,
+            changes={"managed_by": {"before": was, "after": ""}},
+            reason=UNLOCK_NOTE,
+        )
+        db.commit()
+    return DefinitionUnlockOut(slug=row.slug, was=was)
+
+
+@router.post("/types/{slug}/unlock", response_model=DefinitionUnlockOut)
+def unlock_type(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> DefinitionUnlockOut:
+    """타입의 **원천 잠금을 푼다**(`managed_by` 를 비운다) — 그 뒤로 사람이 객체 · 정의를
+    평소처럼 고치고 지운다. 원천이 같은 타입을 다시 보내면 다시 잠근다. 이미 풀려 있으면
+    아무것도 안 바꾼다(`was` 가 빈 값)."""
+    return _unlock(
+        db, user, _type(db, slug), action="ontology.type.unlock", table="object_types"
+    )
+
+
+@router.post("/relation-types/{slug}/unlock", response_model=DefinitionUnlockOut)
+def unlock_relation_type(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> DefinitionUnlockOut:
+    """관계 종류의 원천 잠금을 푼다 — 그 뒤로 사람이 그 선을 잇고 끊고, 종류를 지운다."""
+    return _unlock(
+        db,
+        user,
+        _relation_type(db, slug),
+        action="ontology.relation_type.unlock",
+        table="relation_types",
+    )
+
+
+@router.post("/interfaces/{slug}/unlock", response_model=DefinitionUnlockOut)
+def unlock_interface(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> DefinitionUnlockOut:
+    """인터페이스의 원천 잠금을 푼다."""
+    return _unlock(
+        db,
+        user,
+        _interface(db, slug),
+        action="ontology.interface.unlock",
+        table="object_interfaces",
+    )
 
 
 # --- 공통 속성 ---------------------------------------------------------------

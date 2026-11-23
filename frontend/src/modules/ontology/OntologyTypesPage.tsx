@@ -14,6 +14,7 @@ import { Eye, Settings2 } from 'lucide-react'
 import { PropertyEditor } from '@/modules/ontology/PropertyEditor'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
 import { TypeExamples } from '@/modules/ontology/TypeExamples'
+import { ManagedBadge } from '@/modules/ontology/ManagedBadge'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -127,7 +128,13 @@ export default function OntologyTypesPage() {
                         <span className="text-muted-foreground ml-2 text-xs">비활성</span>
                       )}
                       {row.managed_by && (
-                        <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
+                        <ManagedBadge
+                          kind="types"
+                          slug={row.slug}
+                          label={row.label}
+                          owner={row.managed_by}
+                          onUnlocked={reload}
+                        />
                       )}
                       {/* 기록은 검색 · 상세 · 그래프에서 다르게 선다(ADR 0011) — 목록에서 보여야
                           「왜 검색에 안 나오지」 를 여기서 푼다. */}

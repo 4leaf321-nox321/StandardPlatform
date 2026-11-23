@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import { ArrowLeftRight, ArrowRight, Plus } from 'lucide-react'
 
+import { ManagedBadge } from '@/modules/ontology/ManagedBadge'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import {
   CARDINALITY_LABELS,
@@ -107,7 +108,13 @@ export default function OntologyRelationsPage() {
                         <span className="text-muted-foreground ml-2 text-xs">비활성</span>
                       )}
                       {row.managed_by && (
-                        <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
+                        <ManagedBadge
+                          kind="relation-types"
+                          slug={row.slug}
+                          label={row.label}
+                          owner={row.managed_by}
+                          onUnlocked={reload}
+                        />
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.slug}</TableCell>

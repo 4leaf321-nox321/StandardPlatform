@@ -6463,6 +6463,135 @@
         }
       }
     },
+    "/api/ontology/types/{slug}/unlock": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Unlock Type",
+        "description": "타입의 **원천 잠금을 푼다**(`managed_by` 를 비운다) — 그 뒤로 사람이 객체 · 정의를\n평소처럼 고치고 지운다. 원천이 같은 타입을 다시 보내면 다시 잠근다. 이미 풀려 있으면\n아무것도 안 바꾼다(`was` 가 빈 값).",
+        "operationId": "unlock_type_api_ontology_types__slug__unlock_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionUnlockOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/relation-types/{slug}/unlock": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Unlock Relation Type",
+        "description": "관계 종류의 원천 잠금을 푼다 — 그 뒤로 사람이 그 선을 잇고 끊고, 종류를 지운다.",
+        "operationId": "unlock_relation_type_api_ontology_relation_types__slug__unlock_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionUnlockOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/unlock": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Unlock Interface",
+        "description": "인터페이스의 원천 잠금을 푼다.",
+        "operationId": "unlock_interface_api_ontology_interfaces__slug__unlock_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionUnlockOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/interfaces/{slug}/properties": {
       "get": {
         "tags": [
@@ -34677,6 +34806,25 @@
         ],
         "title": "DataSourceWriteRequest"
       },
+      "DefinitionUnlockOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "was": {
+            "type": "string",
+            "title": "Was"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "was"
+        ],
+        "title": "DefinitionUnlockOut",
+        "description": "원천 잠금을 푼 결과(ADR 0090)."
+      },
       "DefsOut": {
         "properties": {
           "sector": {
@@ -45336,6 +45484,15 @@
               }
             ],
             "title": "Merged Into"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "deprecate",
+              "delete"
+            ],
+            "title": "Action",
+            "default": "deprecate"
           }
         },
         "type": "object",

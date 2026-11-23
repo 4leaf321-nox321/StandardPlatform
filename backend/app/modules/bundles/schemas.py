@@ -45,6 +45,15 @@ class ObjectTombstoneIn(BaseModel):
     merged_into: str | None = None
     """다른 것에 **합쳐져** 사라졌으면 이긴 쪽의 식별자. 받는 쪽은 합치기를 계획에 올린다 —
     그래야 이쪽에서 그것을 가리키던 참조 · 관계가 이긴 쪽으로 옮겨진다."""
+    action: Literal["deprecate", "delete"] = "deprecate"
+    """받는 쪽이 무엇을 하나(ADR 0090) — `deprecate`(기본)는 사용 중지로 둔다. `delete` 는
+    화면의 삭제와 같다(`deleted_at` — 이력 · 감사 기록은 남고, 되살리는 길은 없다).
+
+    `delete` 는 **그 타입을 잠근 원천의 묶음만**(`managed_by == source`) 쓴다 — 시험으로 보낸
+    것 · 잘못 보낸 것을 보낸 쪽이 치우는 길이다. 이미 사용 중지된 객체에도 된다. 가리키는
+    것(다른 객체의 칸 · 선)이 있으면 화면의 막기(`mode=block`)처럼 그 줄을 오류로 둔다 — 같은
+    묶음이 함께 끊는 선 · 함께 지우는 객체는 빼고 센다. 합치기(`merged_into`)와 함께 적지
+    않는다."""
 
 
 class RelationTombstoneIn(BaseModel):
@@ -177,7 +186,8 @@ class BundleOut(BaseModel):
     objects: list[BatchOut]
     relations: list[BatchOut]
     tombstones: RowsPlanOut | None = None
-    """사라진 것을 어떻게 할지 — 줄마다 `merge` · `deprecate` · `unlink` · `unchanged`."""
+    """사라진 것을 어떻게 할지 — 줄마다 `merge` · `deprecate`(사용 중지) · `delete`(원천이
+    지움, ADR 0090) · `unlink` · `unchanged` · `error`."""
     errors: list[str]
     """묶음 전체에 걸린 오류(권한 등)."""
     snapshot_id: uuid.UUID | None
