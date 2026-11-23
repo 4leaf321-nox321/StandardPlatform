@@ -208,9 +208,12 @@ MCP_HOST="${MCP_HOST:-$(unit_env MCP_HOST)}"
 MCP_PORT="${MCP_PORT:-$(unit_env MCP_PORT)}";  MCP_PORT="${MCP_PORT:-$MCP_PORT_DEFAULT}"
 MCP_API_BASE="${MCP_API_BASE:-$(unit_env PLATFORM_API_BASE)}"
 MCP_API_BASE="${MCP_API_BASE:-http://127.0.0.1:$APP_PORT}"
-# DNS rebinding 보호 허용 Host(쉼표구분). 비우면 server.py 가 비-localhost 바인딩 시
-# 보호를 끈다(사내망). 외부 노출 시 도메인/IP 지정 권장. 이 값도 위처럼 기억된다.
+# 받을 Host(쉼표구분) — 적은 호스트는 그 Origin(http(s)://<호스트>)도 받는다(server.py
+# `transport_security`). 비우면 비-localhost 바인딩 시 검사를 끈다(사내망). 포털 nginx 의
+# `<slug>-mcp` 라우트로 받으면 포털 호스트 · 게이트웨이가 부르는 `<서버>:<MCP 포트>` 를 적는다.
+# Origin 만 다른 곳은 MCP_ALLOWED_ORIGINS. 둘 다 위처럼 기억된다.
 MCP_ALLOWED_HOSTS="${MCP_ALLOWED_HOSTS:-$(unit_env MCP_ALLOWED_HOSTS)}"
+MCP_ALLOWED_ORIGINS="${MCP_ALLOWED_ORIGINS:-$(unit_env MCP_ALLOWED_ORIGINS)}"
 # 우리 nginx(LB_MODE=local)는 Host 를 그대로 넘기므로 공개 호스트명이 허용 목록에 있어야 한다.
 # 메인 서버의 nginx 가 무엇을 넘기는지는 모르므로 그때는 비워 둔다(0.0.0.0 이면 보호를 끈다 — 사내망).
 [[ "$HA_ROLE" != "" && "$LB_MODE" == "local" && -z "$MCP_ALLOWED_HOSTS" ]] && MCP_ALLOWED_HOSTS="$PUBLIC_HOST,$WEB_VIP,$SELF_IP,$PEER_IP"
@@ -581,16 +584,27 @@ cmd_hwax_request() {
         warn "위임 비밀을 새로 만들어 $ENV_FILE 에 적었습니다 — 앱이 읽게 다시 띄우세요:"
         echo "    sudo APP_SLUG=$APP_SLUG ./deploy.sh restart${HA_ROLE:+   (이중화면 다른 서버에서도)}"
     fi
-    # 게이트웨이가 우리 MCP 를 부르려면 — 바인딩 · Host 검사.
+    # 게이트웨이 · 포털 nginx(`<slug>-mcp` 라우트)가 우리 MCP 를 부르려면 — 바인딩 · 받을 Host.
+    # 포털 nginx 는 Host 에 포털 호스트를 싣는다 — 받을 Host 에 없으면 421(Origin 은 403)이고,
+    # 그때 포털은 중계를 따로 두어야 한다. 받을 Host 에 포털 호스트 · 게이트웨이가 부르는 서버
+    # 주소를 적으면 그 Origin 까지 받는다(server.py `transport_security`).
+    local portal_host want
+    portal_host="$(env_file_get PORTAL_LAUNCH_URL)"; portal_host="${portal_host#*://}"; portal_host="${portal_host%%/*}"
+    want="${portal_host:-<포털 호스트>},${SELF_IP:-<A 주소>}:$MCP_PORT${PEER_IP:+,$PEER_IP:$MCP_PORT}"
     if [[ "$MCP_ENABLED" != "1" ]]; then
         warn "MCP 가 꺼져 있습니다(MCP_ENABLED=$MCP_ENABLED) — 게이트웨이가 붙을 MCP 가 없습니다."
     elif [[ "$MCP_HOST" == "127.0.0.1" || "$MCP_HOST" == "localhost" || "$MCP_HOST" == "::1" ]]; then
-        warn "MCP 가 이 서버 안에만 열려 있습니다(MCP_HOST=$MCP_HOST) — 게이트웨이가 못 닿습니다:"
-        echo "    sudo APP_SLUG=$APP_SLUG MCP_HOST=0.0.0.0 ./deploy.sh update"
-    fi
-    if [[ -n "$MCP_ALLOWED_HOSTS" ]]; then
-        warn "MCP_ALLOWED_HOSTS 가 있습니다 — 게이트웨이가 부르는 주소(포트까지, 예: <A 주소>:$MCP_PORT)와 포털 nginx 의 $APP_SLUG-mcp 라우트가 넘기는 Host 가 그 안에 있어야 합니다(없으면 421)."
+        warn "MCP 가 이 서버 안에만 열려 있습니다(MCP_HOST=$MCP_HOST) — 게이트웨이 · 포털 nginx 가 못 닿습니다:"
+        echo "    sudo APP_SLUG=$APP_SLUG MCP_HOST=0.0.0.0 MCP_ALLOWED_HOSTS=$want ./deploy.sh update"
+    elif [[ -z "$MCP_ALLOWED_HOSTS" ]]; then
+        info "MCP 의 Host · Origin 검사가 꺼져 있습니다(바깥에 열고 받을 Host 를 안 적음) — 포털 nginx 로도 붙습니다. 켜 두려면:"
+        echo "    sudo APP_SLUG=$APP_SLUG MCP_ALLOWED_HOSTS=$want ./deploy.sh update"
+    elif [[ -n "$portal_host" && ",${MCP_ALLOWED_HOSTS// /}," != *",$portal_host,"* ]]; then
+        warn "받을 Host(MCP_ALLOWED_HOSTS)에 포털 호스트($portal_host)가 없습니다 — 포털 nginx 의 $APP_SLUG-mcp 라우트가 421 · 403 입니다:"
         echo "    지금: $MCP_ALLOWED_HOSTS"
+        echo "    sudo APP_SLUG=$APP_SLUG MCP_ALLOWED_HOSTS=$MCP_ALLOWED_HOSTS,$portal_host ./deploy.sh update"
+    else
+        info "MCP 가 받을 Host: $MCP_ALLOWED_HOSTS — 게이트웨이가 부르는 서버 주소(포트까지, 예: <A 주소>:$MCP_PORT, B 도)가 있는지 봅니다(없으면 421)."
     fi
     if [[ -z "$(env_file_get PORTAL_JWKS_URL)" ]]; then
         echo
@@ -1232,6 +1246,7 @@ render_mcp_service_unit() {
         -e "s|@@MCP_HOST@@|$MCP_HOST|g" \
         -e "s|@@MCP_PORT@@|$MCP_PORT|g" \
         -e "s|@@MCP_ALLOWED_HOSTS@@|$MCP_ALLOWED_HOSTS|g" \
+        -e "s|@@MCP_ALLOWED_ORIGINS@@|$MCP_ALLOWED_ORIGINS|g" \
         -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
         "$HERE/mcp.service.template" > "$MCP_SERVICE_UNIT"
     chmod 644 "$MCP_SERVICE_UNIT"

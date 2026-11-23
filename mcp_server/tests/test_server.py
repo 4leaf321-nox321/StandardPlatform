@@ -2572,3 +2572,63 @@ def test_분석의_배율은_순차_검정과_같은_인자를_받는다() -> No
         server.metric_analyze(_ctx("Bearer t"), "claims", "ratio", options={"rho": 2})
     )
     assert "rho" in refused["error"]
+
+
+# --- 들어오는 Host · Origin ---------------------------------------------------------
+
+
+def _verdict(guard: Any, host: str, origin: str | None = None) -> int:
+    """라이브러리의 검사기에 요청 하나를 넣어 본다 — 통과면 200, 아니면 그 상태(421 · 403)."""
+    from mcp.server.transport_security import TransportSecurityMiddleware
+    from starlette.requests import Request
+
+    headers = [(b"host", host.encode())]
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
+    request = Request({"type": "http", "method": "GET", "path": "/mcp", "headers": headers})
+    refused = asyncio.run(TransportSecurityMiddleware(guard).validate_request(request))
+    return 200 if refused is None else int(refused.status_code)
+
+
+def test_localhost_에_묶이면_라이브러리처럼_localhost_만_받는다() -> None:
+    """HWAX 운영이 본 것 — 포털 호스트의 Host 는 421, 포털의 Origin 은 403(그래서 중계를
+    뒀다)."""
+    guard = server.transport_security({"MCP_HOST": "127.0.0.1"})
+    assert _verdict(guard, "127.0.0.1:8042") == 200
+    assert _verdict(guard, "portal.example") == 421
+    assert _verdict(guard, "127.0.0.1:8042", origin="https://portal.example") == 403
+
+
+def test_허용_Host_에_포털_호스트를_적으면_그_Host_와_Origin_을_받는다() -> None:
+    """포털 nginx 의 `<id>-mcp` 라우트가 Host 를 그대로 넘겨도 — 중계 없이. 포트 없이 적은
+    호스트는 포트가 붙어 와도 맞고, 게이트웨이가 부르는 서버 주소(포트까지)도 함께 적는다."""
+    env = {
+        "MCP_HOST": "0.0.0.0",
+        "MCP_ALLOWED_HOSTS": "portal.example, 10.0.0.5:8042",
+    }
+    guard = server.transport_security(env)
+    assert _verdict(guard, "portal.example") == 200
+    assert _verdict(guard, "portal.example:443") == 200
+    assert _verdict(guard, "portal.example", origin="https://portal.example") == 200
+    assert _verdict(guard, "portal.example", origin="http://portal.example") == 200
+    assert _verdict(guard, "10.0.0.5:8042") == 200  # 게이트웨이
+    assert _verdict(guard, "127.0.0.1:8042") == 200  # 서버 안의 점검
+    assert _verdict(guard, "evil.example") == 421
+    assert _verdict(guard, "portal.example", origin="https://evil.example") == 403
+    # localhost 에 묶여도 적은 것을 쓴다(전에는 무시하고 localhost 만 받았다).
+    local = server.transport_security({**env, "MCP_HOST": "127.0.0.1"})
+    assert _verdict(local, "portal.example") == 200
+
+
+def test_Origin_만_다른_곳은_따로_적고_아무것도_안_적으면_검사를_끈다() -> None:
+    env = {
+        "MCP_HOST": "0.0.0.0",
+        "MCP_ALLOWED_HOSTS": "portal.example",
+        "MCP_ALLOWED_ORIGINS": "https://chat.example/",
+    }
+    guard = server.transport_security(env)
+    assert _verdict(guard, "portal.example", origin="https://chat.example") == 200
+    # 바깥에 열고 아무것도 안 적은 사내망 — 지금처럼 끈다.
+    off = server.transport_security({"MCP_HOST": "0.0.0.0"})
+    assert off.enable_dns_rebinding_protection is False
+    assert _verdict(off, "anything.example", origin="https://anything.example") == 200

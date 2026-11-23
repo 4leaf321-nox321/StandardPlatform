@@ -317,9 +317,13 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   `sudo MCP_HOST=0.0.0.0 ./deploy.sh update` — 이후 `./deploy.sh update` 는 설치된 유닛에서
   값을 읽어 **자동으로 유지**하므로 매번 다시 붙일 필요 없다(되돌릴 땐 그때만 `sudo MCP_HOST=127.0.0.1 ./deploy.sh update`).
   외부망이면 nginx 리버스프록시(TLS) 권장. 백엔드가 다른 주소면 `MCP_API_BASE=http://127.0.0.1:<포트>`.
-- **Host 보호**: 비-localhost 로 열면 server.py 가 DNS rebinding 보호를 자동으로 끈다(사내망 가정).
-  더 단단히 하려면 `MCP_ALLOWED_HOSTS="<서버호스트>:<mcp포트>,<서버IP>:<mcp포트>"` (또는 nginx 도메인) 지정 —
-  이 값도 유닛에 저장돼 자동 유지된다. (지정한 Host 만 허용, 나머지는 421 차단)
+- **Host · Origin 검사**: 비-localhost 로 열고 아무것도 안 적으면 server.py 가 DNS rebinding 보호를 끈다(사내망 가정).
+  `127.0.0.1` 에 묶이면 localhost 만 받는다(바깥 Host 는 421, 바깥 Origin 은 403).
+  더 단단히 하려면 `MCP_ALLOWED_HOSTS="<서버호스트>,<서버IP>:<mcp포트>"`(또는 nginx · 포털 도메인)를 적는다 —
+  적은 호스트는 포트가 붙어 와도 받고 그 Origin(`http(s)://<호스트>`)도 받는다. localhost 는 늘 받는다. 나머지 Host 는
+  421, 나머지 Origin 은 403. 받을 Host 밖의 Origin 은 `MCP_ALLOWED_ORIGINS`. 둘 다 유닛에 저장돼 자동 유지된다.
+  **HWAX 포털 뒤**면 `<포털 호스트>,<A>:<MCP 포트>,<B>:<MCP 포트>` — 포털 nginx 의 `<id>-mcp` 라우트가 중계 없이 닿는다
+  (`sudo ./deploy.sh hwax-request` 가 이 설치에 맞는 명령을 보여 준다).
 - **못 찾은 말이 남는다**(ADR 0025) — 화면 · MCP 의 이름 풀이 · 통합 검색 · 목록 검색이
   아무것도 못 찾은 말을 `search_misses` 표에 남긴다(별칭 후보 — 데이터 품질 화면 · MCP `alias_candidates`).
   **누가 찾았는지는 안 남고** 몇 사람인지(설치의 `JWT_SECRET` 으로 섞은 짧은 지문)만 센다. 숫자뿐인 말 ·

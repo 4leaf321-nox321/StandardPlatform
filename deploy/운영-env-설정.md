@@ -72,7 +72,7 @@ install 이 그렇게 만든다(`deploy.sh generate_env_if_missing`). 비밀 셋
 | --- | --- | --- |
 | `/etc/platform-instances/<slug>.conf`(644, 비밀 없음) | `APP_NAME` · `APP_TAGLINE` · `APP_PORT` · `MCP_PORT` · `EXTENSIONS` · `INSTALL_DIR` · `DATA_DIR` · `BACKUP_HOST_DIR` | **서버마다** — 이중화면 A · B 에 따로 있다 |
 | `/etc/platform-ha.conf`(644) | `HA_ROLE` · `LB_MODE` · `PEER_IP` · `SELF_IP` · `WEB_VIP` · `DB_VIP` · `PUBLIC_HOST` · `VRRP_IFACE` · `TLS_CERT` · `TLS_KEY` | 서버마다(그 서버의 모든 설치가 함께) |
-| `/etc/systemd/system/<slug>-mcp.service` 의 `Environment=` | `PLATFORM_API_BASE`(= `MCP_API_BASE`) · `MCP_HOST` · `MCP_PORT` · `MCP_ALLOWED_HOSTS` · `APP_SLUG` | 서버마다 |
+| `/etc/systemd/system/<slug>-mcp.service` 의 `Environment=` | `PLATFORM_API_BASE`(= `MCP_API_BASE`) · `MCP_HOST` · `MCP_PORT` · `MCP_ALLOWED_HOSTS` · `MCP_ALLOWED_ORIGINS` · `APP_SLUG` | 서버마다 |
 
 **기억되지 않는 것**(줄 때마다 그 한 번만): `MCP_ENABLED` · `SYNC_ENABLED` · `METRICS_ENABLED`(기본 1 — 3.15) · `DB_NAME` · `DB_USER` ·
 `DB_HOST_OVERRIDE` · `PG_VERSION` · `OPERATOR` · `AI_BUNDLE` · `OLLAMA_VERSION`.
@@ -293,7 +293,8 @@ Claude 에서 목록 하나를 물어 답의 `url` 이 그 값으로 시작하�
 | `MCP_PUBLIC_URL` | `.env` | 빈 값(화면이 짐작 · 포털 뒤면 서버가 `<포털>/<id>-mcp/mcp`) | 화면(토큰 발급 · 「내 정보」)이 **사람에게 안내할 MCP 주소**. 표준이 아닌 포트의 프록시 뒤면 `https://<호스트>:<포트>/<slug>/mcp`, 포털에 `<id>-mcp` 라우트가 없으면 `http://<이 서버 IP>:<MCP 포트>/mcp` | 포털 뒤에 `https://<포털 호스트>/<id>/mcp` 를 적으면 그 길은 앱이라 404 다(포털은 `/<id>-mcp/` 를 MCP 로 넘긴다) — 서버 화면 · `env-check.sh` 가 경고한다 |
 | `MCP_HOST` | MCP 유닛 | `127.0.0.1`(이중화면 `0.0.0.0`) | `sudo MCP_HOST=0.0.0.0 ./deploy.sh update` 한 번 — 기억된다 | `127.0.0.1` 이면 다른 PC · 게이트웨이 · 상대 nginx 가 못 닿는다 |
 | `MCP_PORT` | MCP 유닛 · 설치 기록 | 앱 +2 | 보통 안 준다 | 다른 설치의 앱 · MCP 포트와 겹치면 deploy 가 멈춘다 |
-| `MCP_ALLOWED_HOSTS` | MCP 유닛 | 빈 값(사내망 가정, 보호 끔) | 허용할 `Host`(포트까지). 이중화 `LB_MODE=local` 은 저절로 채운다 | 적었는데 게이트웨이 · nginx 가 부르는 주소가 없으면 **421** |
+| `MCP_ALLOWED_HOSTS` | MCP 유닛 | 빈 값(바깥에 열면 검사 끔 · `127.0.0.1` 이면 localhost 만) | 받을 `Host`(쉼표). 포트 없이 적은 호스트는 포트가 붙어 와도 받고, 그 호스트의 Origin(`http(s)://<호스트>`)도 받는다. localhost 는 늘 받는다. 포털 뒤면 `<포털 호스트>,<A>:<MCP 포트>,<B>:<MCP 포트>` — 포털 nginx 의 `<id>-mcp` 라우트가 중계 없이 닿는다. 이중화 `LB_MODE=local` 은 저절로 채운다 | 적었는데 게이트웨이 · nginx 가 넘기는 Host 가 없으면 **421**, 그 밖의 Origin 은 **403** |
+| `MCP_ALLOWED_ORIGINS` | MCP 유닛 | 빈 값 | 받을 Host 밖의 Origin(`https://<호스트>`, 쉼표) — 보통 안 적는다 | — |
 | `MCP_API_BASE` | MCP 유닛(`PLATFORM_API_BASE`) | `http://127.0.0.1:<포트>` | MCP 가 부르는 백엔드. **기억되므로 앱 포트를 바꾸면 함께 준다**(3.10) | 옛 포트를 부르면 모든 도구가 연결 실패 |
 | `MCP_ENABLED` | (기억 안 됨) | `1` | `0` 이면 그 update 에서 MCP 를 건너뛴다 | 다음 update 가 다시 깐다(3.15) |
 

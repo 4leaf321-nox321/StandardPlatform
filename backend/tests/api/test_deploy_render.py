@@ -553,6 +553,7 @@ def test_요청서는_인스턴스의_값으로_채우고_자리를_안_남긴�
         assert "{{" not in text and "}}" not in text, re.findall(r"\{\{\w*\}\}", text)
         assert "<!-- 틀" not in text and "이 파일은 틀" not in text
         assert f"{slug}=http://<A 주소>:{app}/" in text  # 화면 라우트(끝 / = STRIP)
+        assert f"{slug}-mcp=http://<A 주소>:{mcp}/" in text  # 우리 토큰으로 직접 붙는 MCP
         assert f'"url": "http://<A 주소>:{mcp}/mcp"' in text  # 게이트웨이 백엔드
         assert f"{slug}:{prefix}" in text and f"{prefix}_SSO_SECRET" in text
         assert f"{prefix}_SSO_URL=http://<A 주소>:{app}/api/auth/sso" in text
@@ -620,3 +621,40 @@ def test_허용_IP_는_env_로_받고_비밀은_받지_않는다(tmp_path: Path)
     values = _values(env_file)
     assert values["HEAX_SSO_ALLOWED_IPS"] == ["10.1.2.3,10.1.3.0/24"]
     assert "HEAX_SSO_SECRET" not in values and "x" * 64 not in shown
+
+
+def test_요청서는_포털_호스트를_MCP_가_받을_Host_로_적는_명령을_보인다(
+    bundle: Path, tmp_path: Path
+) -> None:
+    """포털 nginx 의 `<id>-mcp` 라우트는 Host 에 포털 호스트를 싣는다 — 우리 MCP 가 받을
+    Host 에 없으면 421 · 403 이고, 포털이 중계를 따로 둬야 한다(2026-11-23 HWAX 운영). 화면이
+    이 설치에 맞는 명령(포털 호스트 · 게이트웨이가 부르는 서버 주소)을 보인다."""
+    ha = {
+        "HA_ROLE": "master",
+        "PEER_IP": "10.20.30.2",
+        "SELF_IP": "10.20.30.1",
+        "DB_VIP": "10.20.30.11",
+        "PUBLIC_HOST": "portal.example.local",
+        "VRRP_IFACE": "eth0",
+        "DATA_DIR": str(tmp_path / "data" / "jajuverify"),
+    }
+    env_file = Path(ha["DATA_DIR"]) / ".env"
+    env_file.parent.mkdir(parents=True)
+    shutil.copy(DEPLOY / ".env.production.example", env_file)
+    with env_file.open("a", encoding="utf-8") as out:
+        out.write("PORTAL_LAUNCH_URL=https://portal.example/launch/jajuverify\n")
+    want = "MCP_ALLOWED_HOSTS=portal.example,10.20.30.1:8052,10.20.30.2:8052"
+    # 바깥에 열고 받을 Host 를 안 적었다 — 검사가 꺼져 있다고 말하고, 켜는 명령을 보인다.
+    shown, _, _ = _hwax_request(bundle, tmp_path, "jajuverify", port=8050, **ha)
+    assert "검사가 꺼져 있습니다" in shown and want in shown
+    # 받을 Host 를 적었는데 포털 호스트가 없다 — 경고하고 더하는 명령을 보인다.
+    shown, _, _ = _hwax_request(
+        bundle, tmp_path, "jajuverify", port=8050, MCP_ALLOWED_HOSTS="10.20.30.1:8052", **ha
+    )
+    assert "포털 호스트(portal.example)가 없습니다" in shown
+    assert "MCP_ALLOWED_HOSTS=10.20.30.1:8052,portal.example" in shown
+    # 이 서버 안에만 열렸으면 바인딩과 받을 Host 를 함께 고치는 명령이다.
+    shown, _, _ = _hwax_request(
+        bundle, tmp_path, "jajuverify", port=8050, **{**ha, "MCP_HOST": "127.0.0.1"}
+    )
+    assert f"MCP_HOST=0.0.0.0 {want}" in shown

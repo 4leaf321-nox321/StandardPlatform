@@ -39,6 +39,7 @@ import re
 import secrets
 import shlex
 import time
+from collections.abc import Mapping
 from pathlib import PureWindowsPath
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -5617,6 +5618,70 @@ async def slide_update(
     return _slide_brief(await _patch(ctx, f"/api/slides/{slide_id}", body))
 
 
+# --- 들어오는 Host · Origin -----------------------------------------------------
+#
+# 라이브러리(FastMCP)는 localhost 에 묶이면 DNS rebinding 보호를 켜고 Host 는 localhost 만
+# (아니면 421), Origin 은 localhost 만(있으면 그 밖은 403) 받는다. 포털 nginx 의 `<id>-mcp`
+# 라우트는 Host 에 포털 호스트를, 브라우저 쪽 손님은 Origin 에 포털 주소를 싣는다 — 그래서
+# 포털이 중계를 따로 두어 두 머리를 고쳐 넘겨야 했다(2026-11-23 HWAX 운영). 이제는 우리가
+# 받을 것을 적는다: `MCP_ALLOWED_HOSTS` 에 포털 호스트를 넣으면 그 Host 와 그 호스트의 Origin
+# (`http(s)://<호스트>`)을 함께 받는다. Origin 만 다른 곳이면 `MCP_ALLOWED_ORIGINS`.
+
+#: 라이브러리가 localhost 에 묶을 때 거는 목록 — 보호를 켜면 늘 넣는다(서버 안의
+#: `curl http://127.0.0.1:<MCP 포트>/mcp` 점검 · 같은 서버의 백엔드).
+LOCAL_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+LOCAL_ORIGINS = ("http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*")
+
+
+def _listed(raw: str) -> list[str]:
+    return [one.strip().rstrip("/") for one in raw.split(",") if one.strip().rstrip("/")]
+
+
+def _has_port(host: str) -> bool:
+    """`host:8042` · `[::1]:8042` · `host:*` — 대괄호 안의 `:` 는 IPv6 주소다."""
+    tail = host.rsplit("]", 1)[-1]
+    return ":" in tail
+
+
+def transport_security(env: Mapping[str, str]) -> Any:
+    """들어오는 요청의 Host · Origin 을 무엇까지 받나 — 기동 때 환경으로 정한다.
+
+    - 보호를 켜는 때: localhost 에 묶였거나(라이브러리와 같다) `MCP_ALLOWED_HOSTS` 를 적었을
+      때. 목록은 localhost(위) + 적은 것.
+    - 0.0.0.0 처럼 바깥에 열고 아무것도 안 적었으면 끈다 — 인증은 토큰(백엔드가 검증), 망
+      보호는 방화벽 · 앞의 nginx 에 맡기는 사내망.
+    - 포트 없이 적은 호스트(`portal.example`)는 포트가 붙어 와도(`portal.example:443`) 받는다 —
+      라이브러리의 `:*` 는 포트가 있을 때만 맞는다.
+    - 적은 호스트마다 `http://<호스트>` · `https://<호스트>` 를 Origin 으로도 받는다. 같은
+      호스트의 화면이 부르는 것이다. 그 밖의 Origin 은 `MCP_ALLOWED_ORIGINS`(쉼표 구분)에.
+    """
+    # 여기서 읽는다 — 백엔드 시험은 `mcp.server.fastmcp` 만 대역으로 두고 이 모듈을
+    # import 한다.
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    host = env.get("MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    extra_hosts = _listed(env.get("MCP_ALLOWED_HOSTS", ""))
+    if host not in ("127.0.0.1", "localhost", "::1") and not extra_hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    hosts: list[str] = list(LOCAL_HOSTS)
+    origins: list[str] = list(LOCAL_ORIGINS)
+    for one in extra_hosts:
+        base = one[:-2] if one.endswith(":*") else one
+        hosts.append(one)
+        if not _has_port(one):
+            hosts.append(f"{one}:*")
+        for scheme in ("http", "https"):
+            origins.append(f"{scheme}://{base}")
+            if not _has_port(base):
+                origins.append(f"{scheme}://{base}:*")
+    origins.extend(_listed(env.get("MCP_ALLOWED_ORIGINS", "")))
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(dict.fromkeys(hosts)),
+        allowed_origins=list(dict.fromkeys(origins)),
+    )
+
+
 # --- 기동 ----------------------------------------------------------------------
 #
 # **이 블록은 파일의 맨 끝이어야 한다.** `mcp.run()` 이 블로킹이라 그 뒤에 적힌 `@tool()` 은
@@ -5627,33 +5692,17 @@ if __name__ == "__main__":
     mcp.settings.host = host
     mcp.settings.port = int(os.environ.get("MCP_PORT", "8042"))
 
-    # FastMCP 는 생성 시점(host=127.0.0.1)에 DNS rebinding 보호를 켜고
-    # allowed_hosts 를 localhost(127.0.0.1:* / localhost:* / [::1]:*)로 고정한다.
-    # 위에서 host 를 0.0.0.0 등으로 바꿔도 그 설정은 그대로라, 서버 IP·도메인으로
-    # 들어온 Host 헤더가 거부돼 421 "Invalid Host header" 가 난다(외부 노출 시).
-    # 비-localhost 바인딩이면 여기서 transport_security 를 다시 설정한다.
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        from mcp.server.transport_security import TransportSecuritySettings
-
-        allowed = [
-            h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()
-        ]
-        if allowed:
-            # 권장: 허용할 Host 만 명시. 포트 와일드카드 가능.
-            #   MCP_ALLOWED_HOSTS="mcp.example.com,mcp.example.com:*,10.0.0.5:8042"
-            # nginx 리버스프록시면 proxy_set_header Host 로 넘어오는 값(도메인)을 넣는다.
-            mcp.settings.transport_security = TransportSecuritySettings(
-                enable_dns_rebinding_protection=True,
-                allowed_hosts=allowed,
-                allowed_origins=[],
-            )
-        else:
-            # 미지정이면 보호를 끈다 — 인증은 PAT(백엔드가 검증), 망 보호는
-            # nginx/방화벽에 맡기는 사내망 노출 시나리오. 외부망 노출 시엔
-            # MCP_ALLOWED_HOSTS 를 지정해 보호를 유지하길 권장.
-            mcp.settings.transport_security = TransportSecuritySettings(
-                enable_dns_rebinding_protection=False,
-            )
+    # 받을 Host · Origin — 라이브러리가 생성 시점(host=127.0.0.1)에 고정한 localhost 목록을
+    # 환경으로 다시 정한다(`transport_security`). 0.0.0.0 으로 바꿔도 그 목록이 그대로라
+    # 서버 IP · 도메인으로 들어온 Host 가 421 이었다. 적은 허용 Host 는 localhost 에 묶여도
+    # 쓴다.
+    guard = transport_security(os.environ)
+    mcp.settings.transport_security = guard
+    if guard.enable_dns_rebinding_protection:
+        hosts, origins = ", ".join(guard.allowed_hosts), ", ".join(guard.allowed_origins)
+        print(f"Host · Origin 검사: 켬 — Host {hosts} · Origin {origins}", flush=True)
+    else:
+        print("Host · Origin 검사: 끔(받을 Host 없이 바깥에 열림 — 인증은 토큰)", flush=True)
 
     # 라이브러리의 `run(transport="streamable-http")` 과 같되, 접속 요청의 토큰을 기억하는
     # 껍데기로 감싼다 — 안내문의 자동 요약을 그 사람의 눈으로 센다(ADR 0019).

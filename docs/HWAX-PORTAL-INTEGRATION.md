@@ -52,8 +52,13 @@ MCP 포트를 직접 부른다 — 그래서 `MCP_HOST=0.0.0.0`(이중화면 이
 nginx 의 `/<id>-mcp/` 라우트(`<id>-mcp=http://<A>:<MCP 포트>/`, 접두어를 떼고 넘긴다)로 `https://<포털 호스트>/<id>-mcp/mcp`
 에 붙는다(ADR 0028 보강, 2026-11-23). `MCP_PUBLIC_URL` 을 비워 두면 토큰 발급 화면이 그 주소를 안내한다 —
 `PORTAL_LAUNCH_URL` 의 호스트 + 접두어 + `-mcp/mcp`. `https://<포털>/<id>/mcp` 는 앱으로 가 404 다(그 길을 적으면 서버 화면이
-경고한다). `MCP_ALLOWED_HOSTS` 를 쓰는 설치는 게이트웨이가 부르는 주소(**포트까지** `<A>:<MCP 포트>`, B 도)와 포털 nginx 가
-넘기는 `Host` 를 넣는다 — 없으면 421.
+경고한다).
+
+**받을 Host · Origin** — 포털 nginx 는 Host 에 포털 호스트를, 브라우저 쪽 손님은 Origin 에 포털 주소를 싣는다. 우리 MCP 가
+`127.0.0.1` 에 묶이면 localhost 밖의 Host 는 421, Origin 은 403 이라 포털이 중계를 따로 둬야 했다. 이제는 우리 쪽에 적는다:
+`sudo APP_SLUG=<slug> MCP_HOST=0.0.0.0 MCP_ALLOWED_HOSTS=<포털 호스트>,<A>:<MCP 포트>,<B>:<MCP 포트> ./deploy.sh update`
+(유닛에 기억된다). 적은 호스트는 포트가 붙어 와도 받고 그 Origin(`http(s)://<포털 호스트>`)도 받는다 — **포털 쪽 중계는 걷어도
+된다.** 둘째 · 셋째는 게이트웨이가 부르는 서버 주소(포트까지)다. `sudo ./deploy.sh hwax-request` 가 이 설치에 맞는 명령을 보여 준다.
 
 **큰 요청 · 긴 요청** — 사진 일괄 업로드 zip 은 2GB(`JOB_PHOTOS_MAX_BYTES`), 내보내기 결과는 수백 MB, 큰 계획(일괄 입력 ·
 검토함 미리 보기)은 요청 안에서 수십 초 ~ 수 분이다. 포털 템플릿의 기본(전역 2048m · 버퍼링 켬 · 응답 대기 60초)이면
