@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.config import Settings
-from app.shared.public_url import mcp_app_origin, screen_base
+from app.shared.public_url import mcp_app_origin, mcp_url, screen_base
 
 
 def _settings(**env: str) -> Settings:
@@ -88,3 +88,36 @@ def test_읽을_수_없는_주소는_모르는_것으로_둔다() -> None:
         MCP_PUBLIC_URL="https://sp.example.com/mcp",
     )
     assert screen_base(broken_portal) == "https://sp.example.com"
+
+
+def test_포털_뒤면_MCP_주소는_포털의_id_mcp_길이다() -> None:
+    """포털 nginx 는 `/<id>/` 를 앱으로, `/<id>-mcp/` 를 MCP 포트로 넘긴다(둘 다 접두어를
+    뗀다) — 화면의 짐작(`<포털>/<id>/mcp`)은 앱으로 가 404 다. 그래서 서버가 준다."""
+    portal = _settings(
+        PORTAL_LAUNCH_URL="http://portal.example.com/launch/sp", PUBLIC_PATH="/sp"
+    )
+    assert mcp_url(portal) == "http://portal.example.com/sp-mcp/mcp"
+    # 사람이 적은 정본이 먼저다(서버 직접 주소를 적어 둔 설치는 그대로).
+    told = _settings(
+        PORTAL_LAUNCH_URL="http://portal.example.com/launch/sp",
+        PUBLIC_PATH="/sp",
+        MCP_PUBLIC_URL="http://10.0.0.5:8042/mcp",
+    )
+    assert mcp_url(told) == "http://10.0.0.5:8042/mcp"
+    # 포털 밖 · 접두어 없음 · 깨진 포털 주소 — 화면이 들어온 주소로 짐작한다.
+    assert mcp_url(_settings(PUBLIC_PATH="/sp")) == ""
+    assert mcp_url(_settings(PORTAL_LAUNCH_URL="http://portal.example.com/launch/sp")) == ""
+    assert (
+        mcp_url(_settings(PORTAL_LAUNCH_URL="http://[portal/launch/x", PUBLIC_PATH="/sp"))
+        == ""
+    )
+
+
+def test_포털의_MCP_길을_적었으면_앱은_포털의_접두어_아래다() -> None:
+    """`MCP_PUBLIC_URL=<포털>/<id>-mcp/mcp` 를 손으로 적은 설치 — 업로드 주소의 앞이
+    `<포털>/<id>-mcp` 가 되면 MCP 로 올라간다. 앱은 그 포털의 `/<id>/` 다."""
+    settings = _settings(
+        MCP_PUBLIC_URL="http://portal.example.com/sp-mcp/mcp", PUBLIC_PATH="/sp"
+    )
+    assert mcp_app_origin(settings) == "http://portal.example.com"
+    assert screen_base(settings) == "http://portal.example.com/sp"

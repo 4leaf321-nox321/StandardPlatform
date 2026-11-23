@@ -61,11 +61,15 @@
 
 ## 3. 화면 라우트
 
-`backend/config/routes.local.env`(gitignore) — 한 줄:
+`backend/config/routes.local.env`(gitignore) — 두 줄:
 
 ```bash
 {{ID}}=http://<A 주소>:{{APP_PORT}}/        # 끝 / = 접두어 STRIP — 앱은 /api/… 로 받는다
+{{ID}}-mcp=http://<A 주소>:{{MCP_PORT}}/    # 우리 토큰으로 직접 붙는 MCP — /{{ID}}-mcp/mcp → :{{MCP_PORT}}/mcp
 ```
+
+둘째 줄은 사람이 우리 화면(「내 정보」)에서 토큰을 발급해 Claude 를 직접 붙이는 길이다 — 발급 화면이
+`https://<포털 호스트>/{{ID}}-mcp/mcp` 를 안내한다. 포털 개인 토큰으로 붙는 게이트웨이(5절)와는 따로다.
 
 RA 는 이 줄을 1e 가 `RA_HOST` 로 유도한다. 인스턴스가 여럿이면 9절의 목록형 단계가 같은 일을 한다 — 그 전까지는 손으로 한 줄.
 
@@ -208,7 +212,7 @@ platforms:
 ## 8. B 전환
 
 A 가 죽으면 **사람이** 주소를 B 로 바꾸고 `./infra/scripts/update-all.sh` 를 다시 돌린다(RA 와 같다). 9절의 단계가 있으면
-`{{PREFIX}}_HOST` 한 줄이고, 없으면 세 자리를 같이 바꾼다 — `routes.local.env` 의 `{{ID}}=` · `provision.env` 의
+`{{PREFIX}}_HOST` 한 줄이고, 없으면 네 자리를 같이 바꾼다 — `routes.local.env` 의 `{{ID}}=` · `{{ID}}-mcp=` · `provision.env` 의
 `{{PREFIX}}_SSO_URL` · `gateway_config.json` 의 `{{ID}}.url`. 우리 B 는 늘 앱이 떠 있고 DB 승격은 우리 몫이다. 자동 전환은 요청하지 않는다.
 
 ## 9. (권장) `update-all` 에 목록형 단계 한 번
@@ -227,7 +231,7 @@ SP_APPS="{{ID}}:{{PREFIX}}"
 
 단계가 쌍마다 하는 일(1e 와 같은 독자 `_envfile_value` · 같은 가드 — 모양 검사 · 루프백 거부 · 거부한 값은 비움, 적기는 `_upsert_kv`):
 
-1. `routes.local.env` 에 `<id>=http://$HOST:$PORT/`.
+1. `routes.local.env` 에 `<id>=http://$HOST:$PORT/` · `<id>-mcp=http://$HOST:$MCP_PORT/`.
 2. 게이트웨이 `provision.env` 에 `<P>_SSO_URL=http://$HOST:$PORT/api/auth/sso` · `PER_USER_SSO_APPS` 에 `<id>:<P>`(없으면) · 비밀.
 3. 게이트웨이 백엔드 `<id>` 의 `url = http://$HOST:$MCP_PORT/mcp`(없으면 5-1 모양으로 만든다 — `label` 은 타일 이름).
 4. §6 판정에 콜백 숫자(10-1)와 위임 점검(10-2 의 첫 `curl` — 토큰을 만들지 않는다) 한 줄씩.
@@ -298,6 +302,7 @@ grep -n "{{ID}}" infra/nginx/hwax.conf | head                         # location
 - [ ] ② 10-2 — 이메일 없이 400, 승인된 사람으로 200 + `access_token`
 - [ ] ③ 포털 타일 「{{NAME}}」 을 누르면 로그인된 첫 화면(`/{{ID}}/`). 처음 보는 사람은 우리 로그인 화면에 「가입 승인을 기다립니다」
 - [ ] ④ Claude 를 포털 `/mcp-gw/mcp` 로 붙여 `{{ID}}_whoami`(또는 `whoami`)가 **그 사람**을 말한다 — 게이트웨이 감사에 `mode=as-user-pat`
+- [ ] ④-2 우리 화면 「내 정보」 에서 발급한 토큰으로 `https://<포털 호스트>/{{ID}}-mcp/mcp` 에 붙여 `whoami` 가 **그 사람**(3절 둘째 줄)
 - [ ] ⑤ 범용 실행기로 `{{ID}}_objects_delete` 를 부르면 「파괴·제어성 도구라 범용 실행기로 부를 수 없습니다」(7절)
 - [ ] ⑥ 수백 MB 사진 zip 업로드가 413 · 504 없이 끝난다(3절)
 - [ ] ⑦ 다른 앱 라우트(`/`, `/report-archive/`, `/heax-hub/` …) 무영향

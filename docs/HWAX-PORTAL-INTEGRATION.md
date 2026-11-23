@@ -21,7 +21,8 @@
         `<base href="/<id>/">` · `<meta name="app-base">` 를 심는다(PUBLIC_PATH). 같은 번들이 어느 접두어에서도 뜬다.
 - 서브패스 손잡이: `.env` 의 PUBLIC_PATH=/<id> 한 줄 — 라우터 basename · API 주소 · 쿠키 path · FastAPI root_path 가
         전부 거기서 나온다. 앱은 접두어를 벗겨 오든 붙어 오든 받는다(PrefixMiddleware).
-- routes.local.env:  <id>=http://<A>:<앱 포트>/            (STRIP — 끝 /. MCP 경로는 없다)
+- routes.local.env:  <id>=http://<A>:<앱 포트>/            (STRIP — 끝 /)
+                     <id>-mcp=http://<A>:<MCP 포트>/     (STRIP — 우리 토큰으로 직접 붙는 MCP 길 /<id>-mcp/mcp)
 - loc_extras: <id> → client_max_body_size 2048m · proxy_request_buffering off · proxy_buffering off · proxy_read_timeout 600s
 - 게이트웨이: 백엔드 <id> = {url: http://<A>:<MCP 포트>/mcp, transport: streamable_http} (서비스 토큰 없음)
         provision.env: PER_USER_SSO_APPS 에 <id>:<접두> · <접두>_SSO_SECRET · <접두>_SSO_URL=http://<A>:<앱 포트>/api/auth/sso
@@ -42,14 +43,17 @@
 | API | `https://<포털 호스트>/<id>/api/…` | `:<앱 포트>/api/…` |
 | 포털 로그인 콜백 | `https://<포털 호스트>/<id>/api/auth/portal-callback` | `:<앱 포트>/api/auth/portal-callback` |
 | Claude(MCP) | 포털 게이트웨이 `https://<포털 호스트>/mcp-gw/mcp`(포털 개인 토큰) — 도구 이름에 `<id>_` | 게이트웨이가 `http://<A>:<MCP 포트>/mcp` 를 부른다 |
+| Claude(MCP, 우리 토큰으로 직접) | `https://<포털 호스트>/<id>-mcp/mcp` — 토큰 발급 화면이 이 주소를 안내한다 | 포털 nginx 가 `/<id>-mcp/` 를 떼고 `:<MCP 포트>/mcp` 로 |
 | 사람별 위임 발급 | — (포털 nginx 를 안 거친다) | 게이트웨이가 `http://<A>:<앱 포트>/api/auth/sso` 를 직접 |
 | 포털 JWKS(우리가 받는다) | — | `http://<포털>:8088/.well-known/jwks.json`(사내망 http 권장) |
 
-**MCP 는 포털 경로로 열지 않는다**(RA 와 같다). 사람들의 Claude 는 포털 게이트웨이에만 붙고, 게이트웨이가 우리 MCP 포트를
-직접 부른다 — 그래서 `MCP_HOST=0.0.0.0`(이중화면 이미 그렇다)이고, `MCP_ALLOWED_HOSTS` 를 쓰는 설치는 게이트웨이가 부르는
-주소를 **포트까지**(`<A>:<MCP 포트>`, B 도) 넣는다 — 없으면 421. 자기 토큰으로 직접 붙는 사람(사내망)을 위해
-`MCP_PUBLIC_URL=http://<A>:<MCP 포트>/mcp` 를 적어 둔다 — 비우면 화면(내 정보의 Claude 연결 안내)이 `https://<포털>/<id>/mcp`
-를 짐작하는데 그 길은 없다(서버 화면이 경고한다).
+**MCP 길은 둘이다.** 포털 개인 토큰으로 붙는 사람의 Claude 는 포털 게이트웨이(`/mcp-gw/mcp`)로 붙고, 게이트웨이가 우리
+MCP 포트를 직접 부른다 — 그래서 `MCP_HOST=0.0.0.0`(이중화면 이미 그렇다)이다. 우리 토큰을 발급해 직접 붙는 사람은 포털
+nginx 의 `/<id>-mcp/` 라우트(`<id>-mcp=http://<A>:<MCP 포트>/`, 접두어를 떼고 넘긴다)로 `https://<포털 호스트>/<id>-mcp/mcp`
+에 붙는다(ADR 0028 보강, 2026-11-23). `MCP_PUBLIC_URL` 을 비워 두면 토큰 발급 화면이 그 주소를 안내한다 —
+`PORTAL_LAUNCH_URL` 의 호스트 + 접두어 + `-mcp/mcp`. `https://<포털>/<id>/mcp` 는 앱으로 가 404 다(그 길을 적으면 서버 화면이
+경고한다). `MCP_ALLOWED_HOSTS` 를 쓰는 설치는 게이트웨이가 부르는 주소(**포트까지** `<A>:<MCP 포트>`, B 도)와 포털 nginx 가
+넘기는 `Host` 를 넣는다 — 없으면 421.
 
 **큰 요청 · 긴 요청** — 사진 일괄 업로드 zip 은 2GB(`JOB_PHOTOS_MAX_BYTES`), 내보내기 결과는 수백 MB, 큰 계획(일괄 입력 ·
 검토함 미리 보기)은 요청 안에서 수십 초 ~ 수 분이다. 포털 템플릿의 기본(전역 2048m · 버퍼링 켬 · 응답 대기 60초)이면
@@ -79,7 +83,7 @@
 | `PORTAL_ISSUER` | 포털의 `JWT_ISSUER` | 안 적으면 `PORTAL_LAUNCH_URL`(없으면 `PUBLIC_URL`)의 앞부분 `https://<포털 호스트>` — 포털의 기본값과 같다 |
 | `PUBLIC_PATH` | `/<id>` | 로그인 뒤 돌아갈 곳이 포털 첫 화면이 된다(서버 화면이 경고) |
 | `TRUST_PROXY` | `true` | 포털이 https 여도 쿠키에 Secure 가 안 붙는다(로그인은 된다) |
-| `MCP_PUBLIC_URL` | `http://<A>:<MCP 포트>/mcp` | 화면이 `https://<포털>/<id>/mcp`(없는 길)를 짐작한다 |
+| `MCP_PUBLIC_URL` | 적지 않는다(포털의 `/<id>-mcp/` 라우트가 있으면) — 없으면 `http://<A>:<MCP 포트>/mcp` | 비우면 화면이 `https://<포털 호스트>/<id>-mcp/mcp` 를 안내한다 |
 
 **직접 접속한 사람** — 앱 주소(`http://<A>:<앱 포트>/`)로 들어와도 로그인 화면의 「HWAX 포털로 로그인」 이 포털의
 `/launch/<id>` 로 보낸다. 포털이 그 사람으로 토큰을 만들어 포털 주소의 콜백에 보내므로, 로그인 뒤에는 포털 주소
@@ -190,5 +194,6 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<MCP 포트>/mcp      
 - [ ] 관리 › 서버 › 「HWAX 포털 로그인」 이 켜짐 · 공개 키 받음 · 문제 없음, 「게이트웨이 위임」 켜짐
 - [ ] 위임 발급(승인된 사람의 이메일로) 200 + `access_token` — 그 토큰으로 `/api/auth/me` 가 그 사람
 - [ ] Claude 를 포털 `/mcp-gw/mcp` 로 붙여 `<id>_whoami` 가 **그 사람** — 서버 화면의 「마지막 발급」 이 방금
+- [ ] 「내 정보」 에서 토큰을 발급하면 안내 주소가 `https://<포털 호스트>/<id>-mcp/mcp` — 그 주소로 붙여 `whoami` 가 그 사람
 - [ ] 사진 zip(수백 MB) 업로드가 413 · 504 없이 끝까지 — 진행률이 실제를 따라간다(버퍼링 끔)
 - [ ] 다른 앱 라우트 무영향

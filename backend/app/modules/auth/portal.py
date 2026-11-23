@@ -48,7 +48,7 @@ from app.modules.auth import delegation
 from app.modules.auth import services as auth_services
 from app.modules.auth.models import PortalLaunchJti
 from app.modules.auth.schemas import PortalStatusOut
-from app.shared import audit
+from app.shared import audit, public_url
 from app.shared.request_context import set_actor_client
 
 logger = logging.getLogger(__name__)
@@ -493,25 +493,39 @@ def status(db: Session, settings: Settings) -> PortalStatusOut:
 
 
 def _mcp_problems(settings: Settings) -> list[str]:
-    """화면(「내 정보」)이 안내할 MCP 주소가 포털 뒤에서 닿나.
+    """화면(토큰 발급 · 「내 정보」)이 안내할 MCP 주소가 포털 뒤에서 닿나.
 
-    **포털은 MCP 경로를 열지 않는다**(Report Archive 와 같다 — ADR 0028). 사람들의 Claude 는
-    포털의 게이트웨이(`/mcp-gw/mcp`)로 붙고, 게이트웨이가 우리 MCP 포트를 직접 부른다. 그런데
-    화면은 `MCP_PUBLIC_URL` 이 비면 들어온 주소에 `/mcp` 를 붙여 짐작한다 — 포털 뒤에서는
-    `https://<포털>/<id>/mcp` 가 되고 그 길은 없다(앱으로 떨어져 404). 직접 붙는 사람을 위해
-    MCP 포트 주소를 적게 한다.
+    포털 nginx 는 경로 목록의 줄마다 접두어를 떼고 넘긴다 — `/<id>/` 는 앱 포트로,
+    `/<id>-mcp/` 는 MCP 포트로(ADR 0028 보강). 그래서 우리 토큰으로 직접 붙는 주소는
+    `<포털>/<id>-mcp/mcp` 이고, `MCP_PUBLIC_URL` 을 비우면 화면이 그 주소를 안내한다
+    (`public_url.mcp_url`). `<포털>/<id>/mcp` 는 앱으로 가 404 다. 포털 개인 토큰으로 붙는
+    게이트웨이(`/mcp-gw/mcp`)는 그대로다 — 게이트웨이는 MCP 포트를 직접 부른다.
+
+    말하는 것은 둘 — 그 주소를 만들 수 없을 때(접두어나 `PORTAL_LAUNCH_URL` 이 없다), 포털
+    주소 아래에 다른 길을 적었을 때.
     """
-    public = settings.mcp_public_url.strip()
-    portal_host = urlsplit(settings.portal_launch_url.strip()).netloc
-    under_portal = (
-        bool(public) and bool(portal_host) and urlsplit(public).netloc == portal_host
-    )
-    if public and not under_portal:
-        return []
-    return [
-        "MCP_PUBLIC_URL 이 "
-        + ("포털 주소 아래입니다" if under_portal else "비어 있습니다")
-        + " — 포털은 MCP 경로(/<id>/mcp)를 열지 않습니다(Claude 는 포털의 /mcp-gw/mcp 로 "
-        "붙고, 게이트웨이가 MCP 포트를 직접 부릅니다). 화면의 Claude 연결 안내가 닿는 주소를 "
-        "보이도록 MCP_PUBLIC_URL=http://<이 서버>:<MCP 포트>/mcp 를 적으세요."
-    ]
+    public = settings.mcp_public_url.strip().rstrip("/")
+    base = settings.base_path
+    portal = public_url.portal_origin(settings)
+    expected = f"{base}{public_url.PORTAL_MCP_TAIL}/mcp"
+    if not public:
+        if portal and base:
+            return []
+        return [
+            "MCP_PUBLIC_URL 이 비어 있는데 포털의 MCP 주소(<포털>/<id>-mcp/mcp)를 만들 "
+            + ("접두어(PUBLIC_PATH)가" if not base else "PORTAL_LAUNCH_URL 이")
+            + " 없습니다 — 화면의 Claude 연결 안내가 닿지 않는 길을 보입니다. "
+            "MCP_PUBLIC_URL=https://<포털 호스트>/<id>-mcp/mcp 를 적으세요."
+        ]
+    try:
+        told = urlsplit(public)
+    except ValueError:
+        return [f"MCP_PUBLIC_URL 을 읽을 수 없습니다({public})."]
+    # 접두어가 없으면 위(「PUBLIC_PATH 가 비어 있습니다」)가 먼저 말한다 — 견줄 길도 없다.
+    if portal and base and told.netloc == urlsplit(portal).netloc and told.path != expected:
+        return [
+            f"MCP_PUBLIC_URL 이 포털 주소 아래인데 길이 {told.path or '/'} 입니다 — 포털은 "
+            f"{base}{public_url.PORTAL_MCP_TAIL}/ 를 MCP 로 넘깁니다({base}/ 는 앱이라 "
+            f"{base}/mcp 는 404). 비우면 화면이 {portal}{expected} 를 안내합니다."
+        ]
+    return []

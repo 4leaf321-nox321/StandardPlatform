@@ -92,7 +92,7 @@ install 이 만든 줄(`APP_ENV` · `APP_SLUG` · `APP_NAME` · `PORT` · `JWT_S
 | `PUBLIC_PATH` | 적지 않는다(루트) | **`/<slug>`** — nginx 조각이 `/<slug>` 로 박혀 있다 | **`/<id>`**(= `/<slug>`) |
 | `TRUST_PROXY` | `false` | `true` | `true` |
 | `PUBLIC_URL` | 권함: `http://<서버 호스트>:<포트>` | 권함: `https://<공용 호스트>/<slug>` | **적는다**: `https://<포털 호스트>/<id>` |
-| `MCP_PUBLIC_URL` | 적지 않는다 | 적지 않는다 | **`http://<이 서버 IP>:<MCP 포트>/mcp`** |
+| `MCP_PUBLIC_URL` | 적지 않는다 | 적지 않는다 | 적지 않는다 — 화면이 `https://<포털 호스트>/<id>-mcp/mcp` 를 안내한다(포털에 `<id>-mcp` 라우트가 없으면 `http://<이 서버 IP>:<MCP 포트>/mcp`) |
 | `REFRESH_COOKIE_SECURE` | `false` | `false` | `false` |
 | `DATABASE_URL` 의 호스트 | `localhost` | `<DB VIP>`(없으면 `<A 서버 IP>`) | 설치 형태대로 |
 | `BACKUP_DIR` | `/data/backup`(백업 폴더를 줄 때만) | `/data/backup` | 설치 형태대로 |
@@ -169,7 +169,7 @@ PORTAL_LAUNCH_URL=https://<포털 호스트>/launch/<id>
 # PORTAL_AUDIENCE · PORTAL_ISSUER 는 적지 않는다 — 기본(APP_SLUG · PORTAL_LAUNCH_URL 의 앞부분 = 포털의 기본 iss)이 맞다. 포털 id 를 slug 와 다르게 지었을 때만
 HEAX_SSO_SECRET=<hwax-request 가 만든 64자 — 손으로 짓지 않는다>
 HEAX_SSO_ALLOWED_IPS=<포털 박스 주소>
-MCP_PUBLIC_URL=http://<이 서버 IP>:<MCP 포트>/mcp
+# MCP_PUBLIC_URL 은 적지 않는다 — 토큰 발급 화면이 https://<포털 호스트>/<id>-mcp/mcp 를 안내한다(포털 nginx 의 <id>-mcp 라우트)
 ```
 
 ```bash
@@ -290,7 +290,7 @@ Claude 에서 목록 하나를 물어 답의 `url` 이 그 값으로 시작하�
 
 | 키 | 어디 | 기본 | 뜻 · 언제 바꾸나 | 틀리면 |
 | --- | --- | --- | --- | --- |
-| `MCP_PUBLIC_URL` | `.env` | 빈 값(화면이 짐작) | 화면(「내 정보」)이 **사람에게 안내할 MCP 주소**. 포털 뒤면 `http://<이 서버 IP>:<MCP 포트>/mcp`, 표준이 아닌 포트의 프록시 뒤면 `https://<호스트>:<포트>/<slug>/mcp` | 포털 뒤에서 비우면 화면이 `https://<포털 호스트>/<id>/mcp` 를 안내하는데 **그 길은 없다**(포털은 MCP 경로를 열지 않는다) |
+| `MCP_PUBLIC_URL` | `.env` | 빈 값(화면이 짐작 · 포털 뒤면 서버가 `<포털>/<id>-mcp/mcp`) | 화면(토큰 발급 · 「내 정보」)이 **사람에게 안내할 MCP 주소**. 표준이 아닌 포트의 프록시 뒤면 `https://<호스트>:<포트>/<slug>/mcp`, 포털에 `<id>-mcp` 라우트가 없으면 `http://<이 서버 IP>:<MCP 포트>/mcp` | 포털 뒤에 `https://<포털 호스트>/<id>/mcp` 를 적으면 그 길은 앱이라 404 다(포털은 `/<id>-mcp/` 를 MCP 로 넘긴다) — 서버 화면 · `env-check.sh` 가 경고한다 |
 | `MCP_HOST` | MCP 유닛 | `127.0.0.1`(이중화면 `0.0.0.0`) | `sudo MCP_HOST=0.0.0.0 ./deploy.sh update` 한 번 — 기억된다 | `127.0.0.1` 이면 다른 PC · 게이트웨이 · 상대 nginx 가 못 닿는다 |
 | `MCP_PORT` | MCP 유닛 · 설치 기록 | 앱 +2 | 보통 안 준다 | 다른 설치의 앱 · MCP 포트와 겹치면 deploy 가 멈춘다 |
 | `MCP_ALLOWED_HOSTS` | MCP 유닛 | 빈 값(사내망 가정, 보호 끔) | 허용할 `Host`(포트까지). 이중화 `LB_MODE=local` 은 저절로 채운다 | 적었는데 게이트웨이 · nginx 가 부르는 주소가 없으면 **421** |
@@ -680,7 +680,18 @@ check() {  # $1=.env  $2=설치 기록의 slug(직접 준 파일이면 빈 값)
         [[ -n "$prefix" ]] || say 오류 "포털 로그인이 켜졌는데 PUBLIC_PATH 가 없다 — 로그인 뒤 포털 첫 화면으로 간다"
         on "$(get "$f" TRUST_PROXY)" || say 경고 "포털 뒤인데 TRUST_PROXY 가 꺼졌다 — 쿠키에 Secure 가 안 붙는다"
         [[ -n "$url" ]] || say 경고 "포털 뒤인데 PUBLIC_URL 이 없다 — 링크가 PORTAL_LAUNCH_URL 의 호스트 짐작에 기댄다"
-        [[ -n "$(get "$f" MCP_PUBLIC_URL)" ]] || say 경고 "포털 뒤인데 MCP_PUBLIC_URL 이 없다 — 화면이 없는 길(<포털>/<id>/mcp)을 안내한다"
+        # MCP 주소 — 비우면 서버가 <포털>/<id>-mcp/mcp 를 준다(포털 nginx 가 /<id>-mcp/ 를 MCP 포트로,
+        # ADR 0028 보강). 포털 주소 아래에 다른 길(/<id>/mcp 는 앱이라 404)을 적었을 때만 말한다.
+        v="$(get "$f" MCP_PUBLIC_URL)"; v="${v%/}"
+        launch="$(get "$f" PORTAL_LAUNCH_URL)"
+        if [[ -z "$v" ]]; then
+            [[ -n "$launch" ]] || say 경고 "포털 뒤인데 MCP_PUBLIC_URL · PORTAL_LAUNCH_URL 이 없다 — 화면이 포털의 MCP 주소(<포털>${prefix:-/<id>}-mcp/mcp)를 못 만든다"
+        elif [[ -n "$launch" && -n "$prefix" ]]; then
+            told="${v#*://}"; portal="${launch#*://}"
+            if [[ "${told%%/*}" == "${portal%%/*}" && "/${told#*/}" != "${prefix}-mcp/mcp" ]]; then
+                say 경고 "MCP_PUBLIC_URL 의 길이 포털이 MCP 로 넘기는 ${prefix}-mcp/mcp 가 아니다: $v (비우면 그 주소를 쓴다)"
+            fi
+        fi
     fi
     v="$(get "$f" HEAX_SSO_SECRET)"
     [[ -z "$v" || ${#v} -ge 32 ]] || say 경고 "HEAX_SSO_SECRET 이 ${#v}자 — 32자 이상(openssl rand -hex 32)"

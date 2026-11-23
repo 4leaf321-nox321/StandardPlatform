@@ -589,7 +589,7 @@ cmd_hwax_request() {
         echo "    sudo APP_SLUG=$APP_SLUG MCP_HOST=0.0.0.0 ./deploy.sh update"
     fi
     if [[ -n "$MCP_ALLOWED_HOSTS" ]]; then
-        warn "MCP_ALLOWED_HOSTS 가 있습니다 — 게이트웨이가 부르는 주소(포트까지, 예: <A 주소>:$MCP_PORT)가 그 안에 있어야 합니다(없으면 421)."
+        warn "MCP_ALLOWED_HOSTS 가 있습니다 — 게이트웨이가 부르는 주소(포트까지, 예: <A 주소>:$MCP_PORT)와 포털 nginx 의 $APP_SLUG-mcp 라우트가 넘기는 Host 가 그 안에 있어야 합니다(없으면 421)."
         echo "    지금: $MCP_ALLOWED_HOSTS"
     fi
     if [[ -z "$(env_file_get PORTAL_JWKS_URL)" ]]; then

@@ -294,9 +294,11 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   MCP 포트로 직접)면 적지 않아도 맞고, 직접일 때는 앱 포트(MCP 포트 −2)로 올린다. ReportArchive
   처럼 MCP 직접 주소(`http://<IP>:<앱+2>/mcp`)를 적어 두어도 된다 — 화면은 그 주소를 안내하고,
   업로드는 들어온 주소로 만든다.
-  **HWAX 포털 뒤**면 포털은 MCP 경로를 열지 않는다(Report Archive 와 같다 — 9절) — 사람들의 Claude 는 포털의
-  게이트웨이(`/mcp-gw/mcp`)로 붙고 게이트웨이가 이 MCP 포트를 직접 부른다. 직접 붙는 사람을 위해
-  `MCP_PUBLIC_URL=http://<서버>:<MCP 포트>/mcp` 를 적는다(비우면 화면이 없는 길 `https://<포털>/<id>/mcp` 를 짐작한다).
+  **HWAX 포털 뒤**면 MCP 길이 둘이다(9절). 포털 개인 토큰으로 붙는 Claude 는 포털의 게이트웨이(`/mcp-gw/mcp`)로
+  붙고 게이트웨이가 이 MCP 포트를 직접 부른다. 우리 토큰으로 직접 붙는 사람은 포털 nginx 의 `/<id>-mcp/` 라우트로
+  `https://<포털>/<id>-mcp/mcp` 에 붙는다 — `MCP_PUBLIC_URL` 을 비우면 화면이 그 주소를 안내한다(`PORTAL_LAUNCH_URL` 의
+  호스트 + 접두어 + `-mcp/mcp`). `https://<포털>/<id>/mcp` 는 앱으로 가 404 다. 포털에 그 라우트가 없으면
+  `MCP_PUBLIC_URL=http://<서버>:<MCP 포트>/mcp` 를 적는다.
 - **답에 붙는 화면 주소**: AI 가 받은 목록 · 통계 · 지표 · 분석에 「같은 조건의 화면」 주소(`url`)가 붙는다 —
   사람이 눌러 확인한다. 바탕은 `/api/health` 의 `public_url` 이고, `.env` 의 `PUBLIC_URL`(접두어까지 —
   `https://<포털 호스트>/<slug>`) → `PORTAL_LAUNCH_URL` 의 호스트 + 접두어 → `MCP_PUBLIC_URL` 이

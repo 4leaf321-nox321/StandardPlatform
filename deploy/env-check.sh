@@ -15,7 +15,7 @@ conf() { if [[ -f "$INSTANCES/$1.conf" ]]; then sed -n "s|^$2=||p" "$INSTANCES/$
 on()   { [[ "${1,,}" =~ ^(1|true|yes|on|t|y)$ ]]; }
 
 check() {  # $1=.env  $2=설치 기록의 slug(직접 준 파일이면 빈 값)
-    local f="$1" want="$2" key v slug port mcp p prefix url who
+    local f="$1" want="$2" key v slug port mcp p prefix url who launch told portal
     echo "== $f${want:+  ($want)}"
     [[ -r "$f" ]] || { say 오류 "읽을 수 없다 — 운영 계정으로, 또는 sudo 로"; return 0; }
     [[ "$(head -c3 "$f" | od -An -tx1 | tr -d ' \n')" == efbbbf ]] \
@@ -82,7 +82,18 @@ check() {  # $1=.env  $2=설치 기록의 slug(직접 준 파일이면 빈 값)
         [[ -n "$prefix" ]] || say 오류 "포털 로그인이 켜졌는데 PUBLIC_PATH 가 없다 — 로그인 뒤 포털 첫 화면으로 간다"
         on "$(get "$f" TRUST_PROXY)" || say 경고 "포털 뒤인데 TRUST_PROXY 가 꺼졌다 — 쿠키에 Secure 가 안 붙는다"
         [[ -n "$url" ]] || say 경고 "포털 뒤인데 PUBLIC_URL 이 없다 — 링크가 PORTAL_LAUNCH_URL 의 호스트 짐작에 기댄다"
-        [[ -n "$(get "$f" MCP_PUBLIC_URL)" ]] || say 경고 "포털 뒤인데 MCP_PUBLIC_URL 이 없다 — 화면이 없는 길(<포털>/<id>/mcp)을 안내한다"
+        # MCP 주소 — 비우면 서버가 <포털>/<id>-mcp/mcp 를 준다(포털 nginx 가 /<id>-mcp/ 를 MCP 포트로,
+        # ADR 0028 보강). 포털 주소 아래에 다른 길(/<id>/mcp 는 앱이라 404)을 적었을 때만 말한다.
+        v="$(get "$f" MCP_PUBLIC_URL)"; v="${v%/}"
+        launch="$(get "$f" PORTAL_LAUNCH_URL)"
+        if [[ -z "$v" ]]; then
+            [[ -n "$launch" ]] || say 경고 "포털 뒤인데 MCP_PUBLIC_URL · PORTAL_LAUNCH_URL 이 없다 — 화면이 포털의 MCP 주소(<포털>${prefix:-/<id>}-mcp/mcp)를 못 만든다"
+        elif [[ -n "$launch" && -n "$prefix" ]]; then
+            told="${v#*://}"; portal="${launch#*://}"
+            if [[ "${told%%/*}" == "${portal%%/*}" && "/${told#*/}" != "${prefix}-mcp/mcp" ]]; then
+                say 경고 "MCP_PUBLIC_URL 의 길이 포털이 MCP 로 넘기는 ${prefix}-mcp/mcp 가 아니다: $v (비우면 그 주소를 쓴다)"
+            fi
+        fi
         # 발급자(iss)는 코드에 사내 주소를 두지 않아(v0.4.76) PORTAL_ISSUER → PORTAL_LAUNCH_URL → PUBLIC_URL 의 앞부분으로 읽는다.
         if [[ -z "$(get "$f" PORTAL_ISSUER)$(get "$f" PORTAL_LAUNCH_URL)$url" ]]; then
             say 오류 "포털 로그인이 켜졌는데 PORTAL_ISSUER · PORTAL_LAUNCH_URL · PUBLIC_URL 이 모두 없다 — 발급자(iss)를 못 정해 포털 로그인이 전부 「확인 실패」 다. PORTAL_LAUNCH_URL=https://<포털 호스트>/launch/<id> 를 적는다"

@@ -712,6 +712,49 @@ def test_진단은_시스템_관리자만_보고_공개_키가_닿는지_말한�
     assert any("MCP_PUBLIC_URL" in one for one in body["problems"])
 
 
+def test_포털_뒤의_MCP_주소는_id_mcp_길이고_다른_길을_적으면_말한다(
+    client: TestClient,
+    fake_portal: FakePortal,
+    admin: Signed,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """포털 nginx 는 `/<id>/` 를 앱으로, `/<id>-mcp/` 를 MCP 포트로 넘긴다(ADR 0028 보강).
+    토큰 발급 화면의 안내가 `<포털>/<id>/mcp`(앱이라 404)를 보이면 사람은 그 주소로 등록하고
+    MCP 쪽에서 까닭을 찾는다 — 비워 두면 서버가 `<포털>/<id>-mcp/mcp` 를 화면에 심는다."""
+    from app.main import create_app
+
+    prefix = "/hwaxapp"
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "<!doctype html><html><head><title>x</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FRONTEND_DIST", str(dist))
+    monkeypatch.setenv("PUBLIC_PATH", prefix)
+    get_settings.cache_clear()
+    with TestClient(create_app()) as web:
+        page = web.get("/login").text
+    assert f'<meta name="app-mcp" content="https://portal.test{prefix}-mcp/mcp" />' in page
+
+    def mcp_problems(told: str) -> list[str]:
+        monkeypatch.setenv("MCP_PUBLIC_URL", told)
+        get_settings.cache_clear()
+        got = client.get("/api/auth/portal-status", headers=admin.headers)
+        assert got.status_code == 200, got.text
+        return [one for one in got.json()["problems"] if "MCP_PUBLIC_URL" in one]
+
+    assert mcp_problems("") == []
+    assert mcp_problems(f"https://portal.test{prefix}-mcp/mcp") == []
+    assert mcp_problems("http://10.0.0.5:8042/mcp") == []  # 서버 직접 주소 — 포털 밖
+    (wrong,) = mcp_problems(f"https://portal.test{prefix}/mcp")
+    assert f"{prefix}-mcp/" in wrong and f"https://portal.test{prefix}-mcp/mcp" in wrong
+    # 접두어가 없으면 그 주소를 못 만든다고 말한다.
+    monkeypatch.setenv("PUBLIC_PATH", "")
+    assert len(mcp_problems("")) == 1
+
+
 def test_발급자를_못_정하면_로그인을_거절하고_진단이_말한다(
     browser: TestClient,
     fake_portal: FakePortal,

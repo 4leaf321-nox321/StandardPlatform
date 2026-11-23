@@ -31,8 +31,10 @@ const TOKEN_PLACEHOLDER = '‹발급받은_토큰›'
  * 그래서 **어디로 들어왔는지**로 가른다:
  * - 표준 포트(80 · 443) → 앞에 프록시가 있다 → `<origin><접두어>/mcp`
  * - 앱 포트로 직접 → `<호스트>:<앱포트+2>/mcp` (접두어 없음)
- * - 그 둘로 안 되는 구성(표준이 아닌 포트의 프록시)에서는 서버가 `<meta name="app-mcp">` 로
- *   정본을 내려 준다(`.env` 의 `MCP_PUBLIC_URL`).
+ * - 그 둘로 안 되는 구성에서는 서버가 `<meta name="app-mcp">` 로 정본을 내려 준다 — 표준이
+ *   아닌 포트의 프록시(`.env` 의 `MCP_PUBLIC_URL`), **HWAX 포털 뒤**(`<포털>/<id>-mcp/mcp` —
+ *   포털 nginx 는 `/<id>/` 를 앱으로, `/<id>-mcp/` 를 MCP 로 넘긴다. 위 첫 규칙의
+ *   `<포털>/<id>/mcp` 는 앱으로 가 404 다. 서버의 `shared/public_url.mcp_url`).
  */
 export interface Where {
   protocol: string
