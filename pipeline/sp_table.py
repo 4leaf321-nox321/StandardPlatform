@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""표(CSV) → 실행 폴더 — **규칙으로** 옮기는 정제.
+"""표(CSV · 엑셀 .xlsx) → 실행 폴더 — **규칙으로** 옮기는 정제.
 
     python sp_table.py <대응.json> <원천.csv> runs/2026-09-13-plm-models
 
@@ -28,14 +28,17 @@ import json
 import os
 import re
 import sys
+import zipfile
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import date
-from pathlib import Path
+from datetime import date, datetime, timedelta
+from pathlib import Path, PurePosixPath
 from typing import Any
+from xml.etree import ElementTree
 
 import sp_pipeline as pipeline
+import sp_work
 
 FORMAT = "sp-table/1"
 REPORT = "table-report.txt"
@@ -99,9 +102,23 @@ class Table:
     """(시트의 행 번호 — 머리글이 1, 값) — 출처(`_source.row`)에 그대로 쓴다."""
     blank_rows: int
     sha256: str
+    sheet: str = ""
+    """엑셀이면 읽은 시트의 이름."""
 
 
-def read_table(path: Path, *, encoding: str = "auto", delimiter: str = ",") -> Table:
+def read_table(
+    path: Path, *, encoding: str = "auto", delimiter: str = ",", sheet: str = ""
+) -> Table:
+    """원천 표 하나. `.xlsx` · `.xlsm` 은 시트 하나(`sheet` — 비면 첫 보이는 시트)를, 그 밖은
+    CSV 로 읽는다."""
+    suffix = path.suffix.lower()
+    if suffix in XLSX_SUFFIXES:
+        return read_xlsx(path, sheet=sheet)
+    if suffix == ".xls":
+        raise Stop(
+            f"{path.name}: 옛 엑셀(.xls)은 읽지 못합니다 — 엑셀에서 .xlsx 나 CSV UTF-8 로 "
+            "저장하세요"
+        )
     try:
         raw = path.read_bytes()
     except OSError as failure:
@@ -119,29 +136,7 @@ def read_table(path: Path, *, encoding: str = "auto", delimiter: str = ",") -> T
             "대응 파일의 source.encoding 에 인코딩을 적으세요"
         )
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
-    header = [one.strip() for one in next(reader, [])]
-    if not any(header):
-        raise Stop(f"{path.name}: 첫 줄(머리글)이 비어 있습니다")
-    doubled = sorted(name for name, count in Counter(header).items() if count > 1 and name)
-    if doubled:
-        raise Stop(f"{path.name}: 머리글에 같은 이름이 둘 이상입니다 — {', '.join(doubled)}")
-    rows: list[tuple[int, dict[str, str]]] = []
-    blank = 0
-    for number, record in enumerate(reader, start=2):
-        if not any(cell.strip() for cell in record):
-            blank += 1
-            continue
-        if len(record) > len(header) and any(cell.strip() for cell in record[len(header) :]):
-            raise Stop(f"{path.name} {number}행: 머리글보다 칸이 많습니다({len(record)}칸)")
-        rows.append(
-            (
-                number,
-                {
-                    name: (record[i] if i < len(record) else "")
-                    for i, name in enumerate(header)
-                },
-            )
-        )
+    header, rows, blank = _records(path.name, enumerate(reader, start=1))
     return Table(
         name=path.name,
         encoding=name,
@@ -149,6 +144,242 @@ def read_table(path: Path, *, encoding: str = "auto", delimiter: str = ",") -> T
         rows=rows,
         blank_rows=blank,
         sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def _records(
+    name: str, numbered: Iterator[tuple[int, list[str]]]
+) -> tuple[list[str], list[tuple[int, dict[str, str]]], int]:
+    """(행 번호, 칸들) → (머리글, 값이 있는 행, 빈 행 수). 첫 행이 머리글이다 — CSV 는 첫 줄,
+    엑셀은 값이 있는 첫 행."""
+    header = [one.strip() for one in next((record for _, record in numbered), [])]
+    if not any(header):
+        raise Stop(f"{name}: 첫 줄(머리글)이 비어 있습니다")
+    doubled = sorted(one for one, count in Counter(header).items() if count > 1 and one)
+    if doubled:
+        raise Stop(f"{name}: 머리글에 같은 이름이 둘 이상입니다 — {', '.join(doubled)}")
+    rows: list[tuple[int, dict[str, str]]] = []
+    blank = 0
+    for number, record in numbered:
+        if not any(cell.strip() for cell in record):
+            blank += 1
+            continue
+        if len(record) > len(header) and any(cell.strip() for cell in record[len(header) :]):
+            raise Stop(f"{name} {number}행: 머리글보다 칸이 많습니다({len(record)}칸)")
+        rows.append(
+            (
+                number,
+                {one: (record[i] if i < len(record) else "") for i, one in enumerate(header)},
+            )
+        )
+    return header, rows, blank
+
+
+# --------------------------------------------------------------------------
+# 엑셀(.xlsx) — 표준 라이브러리로 시트 하나를 읽는다
+# --------------------------------------------------------------------------
+#
+# 엑셀을 시트마다 CSV 로 저장하게 하면 사람이 시트를 빠뜨리고, 날짜가 지역 설정 모양
+# (「25. 11. 3.」)으로 바뀌고, 앞자리 0 이 사라진다. 파일을 그대로 읽는다 — 값은 셀에
+# 저장된 것(수식은 마지막 계산 값), 날짜 서식의 셀은 `YYYY-MM-DD`(시각이 있으면
+# `YYYY-MM-DD HH:MM:SS`), 숫자는 저장된 값의 15자리. 합친 셀은 왼쪽 위 칸에만 값이 있다
+# (엑셀과 같다).
+
+XLSX_SUFFIXES = (".xlsx", ".xlsm")
+_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_PKG = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+#: 엑셀이 정해 둔 날짜 서식 번호 — 14~22 · 45~47, 한국어 · 동아시아 판의 27~36 · 50~58.
+_DATE_FORMATS = frozenset([*range(14, 23), *range(27, 37), *range(45, 48), *range(50, 59)])
+_CELL_REF = re.compile(r"^([A-Z]+)(\d+)$")
+
+
+def _xml(archive: zipfile.ZipFile, member: str) -> ElementTree.Element | None:
+    try:
+        return ElementTree.fromstring(archive.read(member))
+    except KeyError:
+        return None
+
+
+def _date_style(code: str) -> bool:
+    """사용자 서식이 날짜인가 — 따옴표 · 대괄호 안을 빼고 연 · 일이 있으면."""
+    bare = re.sub(r'"[^"]*"|\[[^\]]*\]|\\.', "", code.lower())
+    return "y" in bare or "d" in bare
+
+
+def _styles(archive: zipfile.ZipFile) -> list[bool]:
+    """셀 서식(`s`) 번호마다 날짜인가."""
+    root = _xml(archive, "xl/styles.xml")
+    if root is None:
+        return []
+    custom = {
+        int(one.get("numFmtId", "0")): _date_style(one.get("formatCode", ""))
+        for one in root.iter(f"{_MAIN}numFmt")
+    }
+    found = root.find(f"{_MAIN}cellXfs")
+    out: list[bool] = []
+    for xf in found if found is not None else []:
+        number = int(xf.get("numFmtId", "0"))
+        out.append(custom.get(number, number in _DATE_FORMATS))
+    return out
+
+
+def _shared(archive: zipfile.ZipFile) -> list[str]:
+    root = _xml(archive, "xl/sharedStrings.xml")
+    if root is None:
+        return []
+    return [_text(one) for one in root.iter(f"{_MAIN}si")]
+
+
+def _text(node: ElementTree.Element) -> str:
+    """문자열 셀의 글 — 서식 조각(`r`)을 잇고, 일본어 읽기(`rPh`)는 뺀다."""
+    parts: list[str] = []
+    for child in node:
+        if child.tag == f"{_MAIN}t":
+            parts.append(child.text or "")
+        elif child.tag == f"{_MAIN}r":
+            parts.extend(t.text or "" for t in child.iter(f"{_MAIN}t"))
+    return "".join(parts)
+
+
+def _serial(value: float, base: date) -> str:
+    moment = datetime(base.year, base.month, base.day) + timedelta(days=value)
+    if moment.hour or moment.minute or moment.second:
+        return moment.strftime("%Y-%m-%d %H:%M:%S")
+    return moment.strftime("%Y-%m-%d")
+
+
+def _number(raw: str) -> str:
+    try:
+        value = float(raw)
+    except ValueError:
+        return raw
+    if value.is_integer() and abs(value) < 1e15:
+        return str(int(value))
+    return format(value, ".15g")
+
+
+def _column_index(ref: str) -> int | None:
+    found = _CELL_REF.match(ref)
+    if not found:
+        return None
+    index = 0
+    for letter in found.group(1):
+        index = index * 26 + ord(letter) - 64
+    return index - 1
+
+
+def _sheet_member(archive: zipfile.ZipFile, path: Path, wanted: str) -> tuple[str, str, date]:
+    """(시트 파일, 시트 이름, 날짜 기준일). 비면 첫 보이는 시트."""
+    book = _xml(archive, "xl/workbook.xml")
+    rels = _xml(archive, "xl/_rels/workbook.xml.rels")
+    if book is None or rels is None:
+        raise Stop(f"{path.name}: 엑셀 통합 문서가 아닙니다(xl/workbook.xml 없음)")
+    pr = book.find(f"{_MAIN}workbookPr")
+    base = (
+        date(1904, 1, 1)
+        if pr is not None and pr.get("date1904") in ("1", "true")
+        else date(1899, 12, 30)
+    )
+    targets = {
+        one.get("Id"): one.get("Target", "") for one in rels.iter(f"{_PKG}Relationship")
+    }
+    sheets = [
+        (one.get("name", ""), one.get(f"{_REL}id"), one.get("state", "visible"))
+        for one in book.iter(f"{_MAIN}sheet")
+    ]
+    names = [name for name, _rid, _state in sheets]
+    if wanted:
+        chosen = next((one for one in sheets if one[0] == wanted), None)
+        if chosen is None:
+            raise Stop(
+                f"{path.name}: 시트 「{wanted}」 가 없습니다 — 있는 시트: {', '.join(names)}"
+            )
+    else:
+        chosen = next((one for one in sheets if one[2] == "visible"), None)
+        if chosen is None:
+            raise Stop(f"{path.name}: 보이는 시트가 없습니다")
+    target = targets.get(chosen[1], "")
+    member = (
+        target.lstrip("/") if target.startswith("/") else str(PurePosixPath("xl") / target)
+    )
+    return member, chosen[0], base
+
+
+def _sheet_rows(
+    archive: zipfile.ZipFile, member: str, shared: list[str], dates: list[bool], base: date
+) -> Iterator[tuple[int, list[str]]]:
+    """시트의 행을 차례로 — 처음 값이 있는 행부터(그 위의 빈 행은 머리글 앞이다)."""
+    started = False
+    with archive.open(member) as stream:
+        for _event, node in ElementTree.iterparse(stream):
+            if node.tag != f"{_MAIN}row":
+                continue
+            cells: dict[int, str] = {}
+            for cell in node.iter(f"{_MAIN}c"):
+                index = _column_index(cell.get("r", ""))
+                if index is None:
+                    index = max(cells, default=-1) + 1
+                kind = cell.get("t", "n")
+                value = cell.find(f"{_MAIN}v")
+                raw = (value.text or "") if value is not None else ""
+                if kind == "s":
+                    text = shared[int(raw)] if raw.isdigit() and int(raw) < len(shared) else ""
+                elif kind == "inlineStr":
+                    inline = cell.find(f"{_MAIN}is")
+                    text = _text(inline) if inline is not None else ""
+                elif kind == "b":
+                    text = "TRUE" if raw == "1" else "FALSE" if raw == "0" else raw
+                elif kind in ("str", "e", "d"):
+                    text = raw
+                elif raw:
+                    style = int(cell.get("s", "0"))
+                    if style < len(dates) and dates[style]:
+                        try:
+                            text = _serial(float(raw), base)
+                        except (ValueError, OverflowError):
+                            text = raw
+                    else:
+                        text = _number(raw)
+                else:
+                    text = ""
+                cells[index] = text
+            number = int(node.get("r", "0") or 0)
+            node.clear()
+            record = [cells.get(i, "") for i in range(max(cells, default=-1) + 1)]
+            if not started:
+                if not any(one.strip() for one in record):
+                    continue
+                started = True
+            yield number, record
+
+
+def read_xlsx(path: Path, *, sheet: str = "") -> Table:
+    try:
+        raw = path.read_bytes()
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except (OSError, zipfile.BadZipFile) as failure:
+        raise Stop(f"엑셀 파일을 읽을 수 없습니다: {path} ({failure})") from failure
+    with archive:
+        member, name, base = _sheet_member(archive, path, sheet)
+        shared = _shared(archive)
+        dates = _styles(archive)
+        try:
+            header, rows, blank = _records(
+                f"{path.name} 「{name}」", _sheet_rows(archive, member, shared, dates, base)
+            )
+        except (KeyError, ElementTree.ParseError) as failure:
+            raise Stop(
+                f"{path.name}: 시트 「{name}」 를 읽을 수 없습니다 ({failure})"
+            ) from failure
+    return Table(
+        name=path.name,
+        encoding="xlsx",
+        header=header,
+        rows=rows,
+        blank_rows=blank,
+        sha256=hashlib.sha256(raw).hexdigest(),
+        sheet=name,
     )
 
 
@@ -902,6 +1133,7 @@ def convert(
         source_path,
         encoding=str(source.get("encoding") or "auto"),
         delimiter=str(source.get("delimiter") or ","),
+        sheet=str(source.get("sheet") or ""),
     )
     if not table.rows:
         raise Stop(f"{table.name}: 값이 있는 행이 없습니다")
@@ -942,6 +1174,7 @@ def convert(
             "sha256": table.sha256,
             "rows": len(table.rows),
             "encoding": table.encoding,
+            **({"sheet": table.sheet} if table.sheet else {}),
         }
     ]
     manifest["objects_order"] = [result.slug for result in results]
@@ -997,7 +1230,13 @@ def convert(
         )
     pipeline._write(run / pipeline.UNRESOLVED, unresolved)
 
-    text = _report(mapping, mapping_path, results, run, len(unresolved), edges)
+    found = _draft_for(mapping_path, source_path, table.sheet)
+    gaps = (
+        draft_gaps(found, ontology, mapping.types)
+        if found is not None and ontology is not None
+        else []
+    )
+    text = _report(mapping, mapping_path, results, run, len(unresolved), edges, gaps=gaps)
     (run / REPORT).write_text(text + "\n", encoding="utf-8")
     return not unresolved, text
 
@@ -1093,6 +1332,98 @@ def brief(report: str) -> str:
     return "\n".join(lines)
 
 
+# --------------------------------------------------------------------------
+# 정의 초안과 견주기 — 조사가 센 종류를 정의가 다르게 적었나(ADR 0095)
+# --------------------------------------------------------------------------
+
+#: 조사가 값을 세어 정한 종류 — 정의가 다르면 알린다. 글 · 긴 글 · 고를 값은 사람이 정한다.
+COUNTED_KINDS = frozenset({"number", "date", "bool", "url", "object_ref"})
+KIND_WORDS = {
+    "text": "글",
+    "text_long": "긴 글",
+    "number": "숫자",
+    "date": "날짜",
+    "datetime": "날짜와 시각",
+    "bool": "참 · 거짓",
+    "enum": "고를 값",
+    "url": "주소",
+    "object_ref": "참조",
+    "file": "파일",
+    "document": "문서",
+}
+#: 값을 바꿔 넣는 칸 — 원천 열의 모양과 정의가 다른 것이 정상이다.
+_REWRITTEN = frozenset({"map", "parser", "key_of", "value", "collect", "join"})
+
+
+def _draft_for(mapping_path: Path, source_path: Path, sheet: str) -> dict[str, Any] | None:
+    """그 원천의 정의 초안(`01-조사/<이름>.draft.json`) — 작업 폴더의 차례(대응은 `03-대응/`)
+    대로 찾는다. 없으면 None."""
+    stems = [f"{source_path.stem}-{sheet}", source_path.stem] if sheet else [source_path.stem]
+    for folder in (mapping_path.parent.parent / sp_work.SURVEY, mapping_path.parent):
+        for stem in stems:
+            path = folder / f"{stem}.draft.json"
+            if path.is_file():
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    return None
+                return loaded if isinstance(loaded, dict) else None
+    return None
+
+
+def draft_gaps(
+    draft: dict[str, Any], ontology: dict[str, Any], types: list[dict[str, Any]]
+) -> list[str]:
+    """초안이 센 종류 · 단위 · 가리키는 타입을 정의가 다르게 적은 칸 — 막지 않고 보고서에.
+    정의 파일에 없는 타입(이미 플랫폼에 있는 것)은 견주지 않는다."""
+    columns = {
+        one.get("_column"): one
+        for kind in draft.get("types") or []
+        for one in kind.get("properties") or []
+    }
+    defined = {
+        kind.get("slug"): {one.get("key"): one for one in kind.get("properties") or []}
+        for kind in ontology.get("types") or []
+    }
+    out: list[str] = []
+    for kind in types:
+        props = defined.get(kind.get("type_slug"))
+        if not props:
+            continue
+        for key, spec in (kind.get("fields") or {}).items():
+            if not isinstance(spec, dict) or set(spec) & _REWRITTEN:
+                continue
+            column = spec.get("column")
+            guess, have = columns.get(column), props.get(key)
+            if guess is None or have is None:
+                continue
+            want, got = guess.get("data_type"), have.get("data_type")
+            where = f"- 「{column}」 → {kind['type_slug']}.{key}"
+            widened = want == "date" and got == "datetime"
+            if want in COUNTED_KINDS and got != want and not widened:
+                out.append(
+                    f"{where}: 초안은 {KIND_WORDS.get(want, want)}({guess.get('_why', '')}) · "
+                    f"정의는 {KIND_WORDS.get(got, got)}"
+                )
+            elif (
+                want == got == "number"
+                and guess.get("unit")
+                and ((have.get("unit") or "") != guess["unit"])
+            ):
+                out.append(
+                    f"{where}: 초안의 단위 {guess['unit']} · 정의의 단위 "
+                    f"{have.get('unit') or '(없음)'}"
+                )
+            elif want == got == "object_ref" and guess.get("ref_type_slug") != have.get(
+                "ref_type_slug"
+            ):
+                out.append(
+                    f"{where}: 초안은 {guess.get('ref_type_slug')} 를 가리킴 · 정의는 "
+                    f"{have.get('ref_type_slug')}"
+                )
+    return out
+
+
 def _report(
     mapping: Mapping,
     mapping_path: Path,
@@ -1100,11 +1431,14 @@ def _report(
     run: Path,
     unresolved: int,
     edges: list[EdgeResult] | None = None,
+    *,
+    gaps: list[str] | None = None,
 ) -> str:
     table = mapping.table
     lines = [
         f"원천: {len(table.rows)}행(빈 행 {table.blank_rows})"
-        f" · {table.encoding} · 열 {len(table.header)}",
+        + (f" · 시트 「{table.sheet}」" if table.sheet else "")
+        + f" · {table.encoding} · 열 {len(table.header)}",
         f"대응: {mapping_path.name}",
         "",
     ]
@@ -1157,6 +1491,12 @@ def _report(
     lines.append("")
     if unresolved:
         lines.append(f"미해결 {unresolved}건 → {pipeline.UNRESOLVED} — 답을 정한 뒤 비우세요")
+    if gaps:
+        lines.append(
+            f"정의 초안과 다른 칸 {len(gaps)}개 — 조사가 센 것과 정의가 다릅니다(막지 않음). "
+            "정의가 맞으면 판단표에 까닭을 적고, 아니면 정의를 고쳐 다시 돌리세요:"
+        )
+        lines.extend(gaps)
     lines.append(f"다음: python sp_pipeline.py validate {run}")
     return "\n".join(lines)
 

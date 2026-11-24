@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """원천 표 조사 — AI 가 표를 「읽어서」 답하던 것을 **계산**한다.
 
-    python sp_profile.py <원천.csv> [--out 01-조사] [--values] [--match 열=타입|@파일]
+    python sp_profile.py <원천.csv|.xlsx> [--out 01-조사] [--values] [--match 열=타입|@파일]
+                         [--sheet 시트]
 
 행 단위 · 몇 대 몇 · 같은 식별자인데 갈리는 열 · 값의 형식 · 이름에 박힌 조각 · 고를 값 ·
 날짜 · 코어 대조를 한 번에 낸다. AI 는 **계산하지 않고 이 결과를 해석한다** — 수천 행의 통계를
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -124,6 +126,7 @@ def profile(
             "blank_rows": table.blank_rows,
             "encoding": table.encoding,
             "sha256": table.sha256,
+            **({"sheet": table.sheet} if table.sheet else {}),
         },
         "values_shown": show_values,
     }
@@ -360,6 +363,226 @@ def profile(
 
 
 # --------------------------------------------------------------------------
+# 정의 초안 — 조사 결과를 정의(ontology.json) 조각으로
+# --------------------------------------------------------------------------
+#
+# AI 가 정의를 매번 새로 쓰면 「중량(kg)」 이 글 칸으로, 「품번」 이 보통 칸으로 들어가고 같은
+# 원천을 두 번 돌리면 정의가 달라진다. 셀 수 있는 것(유일한 열 · 숫자 · 단위 · 날짜 · 종류가
+# 적은 값)은 여기서 정하고, AI 는 이 초안을 사람과 함께 고친다. 칸마다 `_why` 가 근거다.
+
+DRAFT_FORMAT = "sp-draft/1"
+KEY_HINTS = ("품번", "코드", "번호", "식별", "code", "id", "no", "key", "number")
+LABEL_HINTS = ("이름", "명", "제목", "name", "title", "label")
+UNIT_IN_HEADER = re.compile(r"^(.*?)\s*[\(\[]\s*([^\)\]]{1,10})\s*[\)\]]\s*$")
+NUMBER = re.compile(r"^([-+]?\d+(?:\.\d+)?)\s*([A-Za-z%°℃㎏㎜㎝㎞]+)?$")
+BOOL_VALUES = frozenset({"y", "n", "yes", "no", "true", "false", "예", "아니오", "o", "x"})
+KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
+#: 숫자로 볼 몫 · 날짜로 볼 몫 · 주소로 볼 몫.
+NUMBER_SHARE = 0.95
+DATE_DRAFT_SHARE = 0.9
+#: 평균 글자 수가 이만큼이면 긴 글.
+LONG_TEXT = 100
+
+
+def key_of(header: str, index: int) -> str:
+    """머리글 → 키 초안. 머리글이 영문이 아니면 `col_<n>` — AI 가 사람과 정한다(「중량(kg)」 을
+    `kg` 로 만들지 않게 글자를 덜어 내지 않는다)."""
+    if not re.fullmatch(r"[A-Za-z0-9 _\-./]+", header.strip()):
+        return f"col_{index}"
+    ascii_key = re.sub(r"[^a-z0-9]+", "_", header.lower()).strip("_")
+    return ascii_key if KEY_RE.match(ascii_key) else f"col_{index}"
+
+
+def _hinted(name: str, hints: tuple[str, ...]) -> bool:
+    lowered = name.lower()
+    return any(hint in lowered for hint in hints)
+
+
+def _number(value: str) -> tuple[str, str] | None:
+    found = NUMBER.match(value.replace(",", "").strip())
+    return (found.group(1), found.group(2) or "") if found else None
+
+
+def _guess(
+    name: str,
+    values: list[str],
+    *,
+    show_values: bool,
+    enum_limit: int,
+) -> dict[str, Any]:
+    """값으로 정한 칸 하나 — 키는 부르는 쪽이 붙인다."""
+    header, unit_in_header = name, ""
+    found = UNIT_IN_HEADER.match(name)
+    if found and found.group(1):
+        header, unit_in_header = found.group(1).strip(), found.group(2).strip()
+    filled = [one for one in values if one]
+    out: dict[str, Any] = {"label": header, "data_type": "text"}
+    if not filled:
+        out["_why"] = "값이 하나도 없음 — 글로 두었다"
+        return out
+    count = len(filled)
+    dates = sum(1 for one in filled if sp_table._as_date(one))
+    numbers = [one for one in (_number(v) for v in filled) if one]
+    distinct = sorted(set(filled))
+    if dates >= DATE_DRAFT_SHARE * count:
+        out["data_type"] = "date"
+        out["_why"] = f"값 {count}개 중 {dates}개가 날짜"
+    elif sum(one.startswith(("http://", "https://")) for one in filled) >= 0.9 * count:
+        out["data_type"] = "url"
+        out["_why"] = "값이 주소(http)"
+    elif len(numbers) >= NUMBER_SHARE * count:
+        units = Counter(unit for _, unit in numbers if unit)
+        unit = unit_in_header
+        why = f"값 {count}개 중 {len(numbers)}개가 숫자"
+        if not unit and units:
+            common, seen = units.most_common(1)[0]
+            if seen >= 0.9 * len(numbers):
+                unit = common
+                why += f" · 값에 붙은 단위 {common}"
+        elif unit:
+            why += f" · 머리글의 단위 ({unit})"
+        out["data_type"] = "number"
+        if unit:
+            out["unit"] = unit
+        out["_why"] = why
+    elif {one.lower() for one in distinct} <= BOOL_VALUES and len(distinct) <= 2:
+        out["data_type"] = "bool"
+        out["_why"] = f"값이 둘뿐({' · '.join(distinct)})"
+    elif len(distinct) <= enum_limit and count >= 2 * len(distinct):
+        out["data_type"] = "enum"
+        out["enum_options"] = distinct if show_values else None
+        out["_why"] = f"값 종류 {len(distinct)}개가 되풀이됨" + (
+            "" if show_values else " — 고를 값은 --values(show_values) 로 다시 돌리면 채워진다"
+        )
+    elif sum(len(one) for one in filled) / count >= LONG_TEXT:
+        out["data_type"] = "text_long"
+        out["_why"] = "평균 글자 수가 많음"
+    else:
+        out["_why"] = "글"
+    if unit_in_header and out["data_type"] != "number":
+        out["_why"] += f" — 머리글의 ({unit_in_header}) 는 단위로 쓰지 않았다(숫자가 아니다)"
+    return out
+
+
+def draft(
+    table: sp_table.Table,
+    result: dict[str, Any],
+    *,
+    slug: str,
+    show_values: bool = False,
+    enum_limit: int = ENUM_LIMIT,
+) -> dict[str, Any]:
+    """조사 결과 → 정의 초안(`ontology_import` 의 `types[]` 하나 + 근거). 아무것도 안
+    보낸다."""
+    header = [name for name in table.header if name]
+    values = {name: [row[name].strip() for _, row in table.rows] for name in header}
+    unique = list(result["unique"]["columns"])
+    notes: list[str] = []
+    key_column = next((one for one in unique if _hinted(one, KEY_HINTS)), None) or (
+        unique[0] if unique else None
+    )
+    by_name = {one["name"]: one for one in result["columns"]}
+    candidates = [
+        one for one in header if one != key_column and by_name[one]["distinct"] > enum_limit
+    ]
+    label_column = next((one for one in candidates if _hinted(one, LABEL_HINTS)), None) or (
+        max(candidates, key=lambda one: by_name[one]["distinct"]) if candidates else None
+    )
+    if key_column:
+        notes.append(f"식별자: 「{key_column}」 — 빈 값 없이 행마다 다르다")
+    elif result["unique"]["pairs"]:
+        pair = result["unique"]["pairs"][0]
+        notes.append(
+            f"한 열로 유일한 것이 없다 — 「{pair[0]}」 + 「{pair[1]}」 이 함께 유일하다. "
+            "식별자를 "
+            "이어 붙일지, 아래 「잇는 표」 인지 사람과 정한다"
+        )
+    else:
+        notes.append(
+            "행을 유일하게 하는 열이 없다 — 식별자 없이(optional) 두거나 사람에게 묻는다"
+        )
+    if label_column:
+        notes.append(f"이름: 「{label_column}」")
+
+    core_refs = {
+        one["column"]: one
+        for one in result.get("core") or []
+        if one["rows"] and (one["exact"] + one["case"]) >= 0.9 * one["rows"]
+    }
+    properties = []
+    for index, name in enumerate(header, start=1):
+        if name in (key_column, label_column):
+            continue
+        one = _guess(name, values[name], show_values=show_values, enum_limit=enum_limit)
+        if name in core_refs:
+            matched = core_refs[name]
+            one = {
+                "label": one["label"],
+                "data_type": "object_ref",
+                "ref_type_slug": matched["core"],
+                "_why": f"값의 {matched['exact'] + matched['case']}/{matched['rows']}개가 "
+                f"{matched['core']} 의 식별자",
+            }
+        properties.append({"key": key_of(name, index), "_column": name, **one})
+    if any(one["key"].startswith("col_") for one in properties):
+        notes.append("머리글을 영문 키로 못 바꾼 칸은 col_<n> — 키를 사람과 정한다")
+
+    out: dict[str, Any] = {
+        "format": DRAFT_FORMAT,
+        "source": result["source"]["name"],
+        "types": [
+            {
+                "slug": slug,
+                # 시트가 있으면 시트 이름, 아니면 파일 이름(확장자 뺌) — 사람이 고친다.
+                "label": result["source"].get("sheet") or Path(result["source"]["name"]).stem,
+                "key_policy": "required" if key_column else "optional",
+                "properties": properties,
+            }
+        ],
+        "_key_column": key_column,
+        "_label_column": label_column,
+        "_notes": notes,
+    }
+    bridge = _bridge(result, header)
+    if bridge:
+        out["_bridge"] = bridge
+        notes.append(
+            f"잇는 표 후보 — 「{bridge['src']}」 + 「{bridge['dst']}」 이 함께 유일하고 서로 "
+            "N:M 이다. "
+            "타입이 아니라 관계(앞 → 뒤)와 선의 칸(나머지 열)으로 넣는 것을 사람과 정한다"
+        )
+    return out
+
+
+def _bridge(result: dict[str, Any], header: list[str]) -> dict[str, Any] | None:
+    """BOM 같은 잇는 표 — 한 열로는 유일하지 않고, 두 열이 함께 유일하며 서로 N:M."""
+    if result["unique"]["columns"] or not result["unique"]["pairs"]:
+        return None
+    many = {(one["a"], one["b"]) for one in result["cardinality"] if one["kind"] == "N:M"}
+    for a, b in result["unique"]["pairs"]:
+        if (a, b) in many or (b, a) in many:
+            return {
+                "src": a,
+                "dst": b,
+                "edge_fields": [one for one in header if one not in (a, b)],
+            }
+    return None
+
+
+def render_draft(found: dict[str, Any]) -> str:
+    """초안을 말로 — 칸마다 종류와 근거."""
+    kind = found["types"][0]
+    lines = [f"## 정의 초안 — {kind['slug']}(식별자 {kind['key_policy']})"]
+    lines += [f"- {one}" for one in found["_notes"]]
+    for one in kind["properties"]:
+        unit = f" · {one['unit']}" if one.get("unit") else ""
+        lines.append(
+            f"- {one['_column']} → {one['key']}: {one['data_type']}{unit} ({one['_why']})"
+        )
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
 # 사람이 읽는 보고서
 # --------------------------------------------------------------------------
 
@@ -408,8 +631,9 @@ def render(result: dict[str, Any]) -> str:
     source = result["source"]
     total = source["rows"]
     lines = [
-        f"원천: {source['name']} · {total}행(빈 행 {source['blank_rows']})"
-        f" · {source['encoding']}",
+        f"원천: {source['name']}"
+        + (f" 「{source['sheet']}」" if source.get("sheet") else "")
+        + f" · {total}행(빈 행 {source['blank_rows']}) · {source['encoding']}",
         "값: "
         + ("그대로" if result["values_shown"] else "가린 패턴(A 영문 · 9 숫자 · 가 한글)"),
         "",
@@ -553,28 +777,40 @@ def run(
     matches: list[str] | None = None,
     encoding: str = "auto",
     delimiter: str = ",",
+    sheet: str = "",
     server: str = "",
     token: str = "",
 ) -> tuple[dict[str, Any], str]:
-    table = sp_table.read_table(source, encoding=encoding, delimiter=delimiter)
+    """조사 · 정의 초안. 엑셀의 시트를 고르면(`sheet`) 결과 파일 이름에 시트가 붙는다 —
+    `<이름>-<시트>.profile.json`."""
+    table = sp_table.read_table(source, encoding=encoding, delimiter=delimiter, sheet=sheet)
     if not table.rows:
         raise Stop(f"{table.name}: 값이 있는 행이 없습니다")
     core = core_sources(matches or [], base=Path.cwd(), server=server, token=token)
     result = profile(
         table, show_values=show_values, enum_limit=enum_limit, separator=separator, core=core
     )
-    text = render(result)
+    found = draft(
+        table,
+        result,
+        # 파일 이름을 영문 slug 로 못 바꾸면 자리 표시 — AI 가 사람과 정한다.
+        slug=key_of(sheet or source.stem, 0).replace("col_0", "type_draft"),
+        show_values=show_values,
+        enum_limit=enum_limit,
+    )
+    text = render(result) + "\n\n" + render_draft(found)
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = source.stem
+        stem = f"{source.stem}-{sheet}" if sheet else source.stem
         pipeline._write(out_dir / f"{stem}.profile.json", result)
+        pipeline._write(out_dir / f"{stem}.draft.json", found)
         (out_dir / f"{stem}.profile.txt").write_text(text + "\n", encoding="utf-8")
     return result, text
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sp_profile", description=__doc__.split("\n")[0])
-    parser.add_argument("source", type=Path, help="원천 표(CSV)")
+    parser.add_argument("source", type=Path, help="원천 표(CSV · 엑셀 .xlsx)")
     parser.add_argument("--out", type=Path, help="결과를 쓸 폴더(<이름>.profile.txt · .json)")
     parser.add_argument(
         "--values", action="store_true", help="고를 값 · 조각 값을 그대로 보인다"
@@ -584,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--match", action="append", default=[], help="열=타입 또는 열=@파일")
     parser.add_argument("--encoding", default="auto")
     parser.add_argument("--delimiter", default=",")
+    parser.add_argument("--sheet", default="", help="엑셀의 시트(비면 첫 보이는 시트)")
     parser.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
     parser.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
     args = parser.parse_args(argv)
@@ -597,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
             matches=args.match,
             encoding=args.encoding,
             delimiter=args.delimiter,
+            sheet=args.sheet,
             server=args.server,
             token=args.token,
         )

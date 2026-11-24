@@ -318,14 +318,22 @@ def decision_record(
 
 @mcp.tool()
 def source_profile(
-    work: str, source: str, show_values: bool = False, match: list[str] | None = None
+    work: str,
+    source: str,
+    show_values: bool = False,
+    match: list[str] | None = None,
+    sheet: str = "",
 ) -> str:
-    """원천 표(CSV) 조사를 **계산**한다 — 행 단위 · 몇 대 몇 · 갈리는 열 · 형식 · 이름의 조각 ·
-    고를 값 · 날짜 · 코어 대조. 결과는 `01-조사/<이름>.profile.txt · .json` 에도 남는다.
+    """원천 표(CSV · 엑셀 .xlsx) 조사를 **계산**한다 — 행 단위 · 몇 대 몇 · 갈리는 열 · 형식 ·
+    이름의 조각 · 고를 값 · 날짜 · 코어 대조. 결과는 `01-조사/<이름>.profile.txt · .json`
+    에도 남는다. **정의 초안**(`<이름>.draft.json` — 식별자 · 이름 열, 칸마다 종류 · 단위 ·
+    고를 값 · 근거 `_why`, 잇는 표 후보 `_bridge`)도 함께 쓴다 — 정의(`ontology.json`)는
+    여기서 시작한다.
 
     - `show_values=true` 면 고를 값 · 조각 값을 그대로 — 정의에 고를 값을 적을 때
     - `match=["열=<type_slug>"]` 플랫폼의 그 타입 식별자와 대조,
-      `"열=@01-조사/keys.txt"` 는 파일과"""
+      `"열=@01-조사/keys.txt"` 는 파일과
+    - `sheet` 엑셀의 시트(비면 첫 보이는 시트) — 결과 파일 이름에 시트가 붙는다"""
     folder = _work(work)
     path = _source(folder, source)
     for one in match or []:
@@ -342,6 +350,7 @@ def source_profile(
             out_dir=folder / sp_work.SURVEY,
             show_values=show_values,
             matches=match or [],
+            sheet=sheet,
             server=server,
             token=token,
         )
@@ -351,16 +360,18 @@ def source_profile(
 
 
 @mcp.tool()
-def source_head(work: str, source: str, rows: int = 20) -> str:
-    """원천 표의 머리글과 앞 몇 행(최대 50) — 규칙을 세울 때 실제 모양을 보려고."""
+def source_head(work: str, source: str, rows: int = 20, sheet: str = "") -> str:
+    """원천 표의 머리글과 앞 몇 행(최대 50) — 규칙을 세울 때 실제 모양을 보려고. 엑셀은
+    `sheet`(비면 첫 보이는 시트)."""
     path = _source(_work(work), source)
-    table = sp_table.read_table(path)
+    table = sp_table.read_table(path, sheet=sheet)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["행", *table.header])
     for number, row in table.rows[: max(1, min(rows, HEAD_LIMIT))]:
         writer.writerow([number, *(row[name] for name in table.header)])
-    return f"{table.name} · {len(table.rows)}행 · {table.encoding}\n{buffer.getvalue()}"
+    where = f"{table.name} 「{table.sheet}」" if table.sheet else table.name
+    return f"{where} · {len(table.rows)}행 · {table.encoding}\n{buffer.getvalue()}"
 
 
 @mcp.tool()

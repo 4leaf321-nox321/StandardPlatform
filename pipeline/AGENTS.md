@@ -19,9 +19,9 @@
 
 | 단계 | 도구 | 멈추고 사람에게 |
 | --- | --- | --- |
-| 0 작업 폴더 | `work_list` · `work_init` | **어느 플랫폼에 넣을지**(`work_list` 의 `platforms` 가 둘 이상이면 — 짐작하지 않는다) · 원천을 `00-원천/` 에 넣어 달라고(엑셀은 시트마다 CSV UTF-8) |
-| 1 조사 | `source_profile`(고를 값을 적을 땐 `show_values`, 코어에 붙나는 `match`) · `source_head` | 결과를 요약해 보인다. 애매한 것은 묻는다 |
-| 2 정의 초안 | **이미 있는 타입에 넣는 것이면 새 정의를 만들지 않는다** — 판단표에 「새 정의 없음 · 어느 타입에」 를 적어 보이고, 확정을 받으면 `decision_record(confirms_ontology=true)`(정의 파일 없이 = 「새 정의 없음」 확정). 새 타입이 필요하면 `pipeline_guide("modeling")` · `platform_schema(work)`(그 작업의 플랫폼 정의 — 서버 MCP 없이) · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
+| 0 작업 폴더 | `work_list` · `work_init` | **어느 플랫폼에 넣을지**(`work_list` 의 `platforms` 가 둘 이상이면 — 짐작하지 않는다) · 원천을 `00-원천/` 에 넣어 달라고(엑셀은 `.xlsx` 그대로 — 시트마다 CSV 로 바꾸지 않는다. 옛 `.xls` 만 `.xlsx` 로 저장) |
+| 1 조사 | `source_profile`(고를 값을 적을 땐 `show_values`, 코어에 붙나는 `match`, 엑셀의 다른 시트는 `sheet`) · `source_head` | 결과를 요약해 보인다. 애매한 것은 묻는다. **정의 초안**(`01-조사/<이름>.draft.json`)도 함께 나온다 |
+| 2 정의 초안 | **이미 있는 타입에 넣는 것이면 새 정의를 만들지 않는다** — 판단표에 「새 정의 없음 · 어느 타입에」 를 적어 보이고, 확정을 받으면 `decision_record(confirms_ontology=true)`(정의 파일 없이 = 「새 정의 없음」 확정). 새 타입이 필요하면 `pipeline_guide("modeling")` · `platform_schema(work)`(그 작업의 플랫폼 정의 — 서버 MCP 없이) · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` — **조사의 정의 초안에서 시작한다**: 식별자 · 숫자와 단위 · 날짜 · 고를 값은 계산한 것이라 그대로 두고(근거 `_why` 를 판단표에), `col_<n>` 키 · slug · 이름은 사람과 정한다. `_bridge`(잇는 표 후보)면 타입이 아니라 관계 + 선의 칸으로 넣을지 묻는다 | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
 | 3 대응 | `pipeline_guide("table")` · `work_write` 로 `03-대응/<원천 이름>.table.json` | — |
 | 4 변환 | `table_convert` → 보고서를 읽고 대응을 고쳐 다시 | **미해결은 사람에게 묻고** `decision_record` |
 | 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` | 확신 없는 것은 `unresolved.json` 으로 |
@@ -190,6 +190,13 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
 - 보고서 `table-report.txt` 는 값을 **가린 패턴**(영문 `A` · 숫자 `9` · 한글 `가`)으로만 적는다 —
   사내 밖으로 옮겨 규칙을 의논해도 된다. 원천 값은 실행 폴더의 파일에만 있다.
 - 인코딩은 BOM 붙은 UTF-8, 안 되면 CP949 로 읽는다(`source.encoding` 으로 고정).
+- **엑셀(`.xlsx` · `.xlsm`)은 그대로 읽는다** — 첫 보이는 시트, 다른 시트는 `source.sheet`(조사는
+  `source_profile(sheet=)`). 머리글은 값이 있는 첫 행, 행 번호는 시트의 행 번호다. 날짜 서식의 셀은
+  `YYYY-MM-DD`(시각이 있으면 `YYYY-MM-DD HH:MM:SS`), 수식은 마지막 계산 값이다.
+- **정의 초안과 다른 칸을 알린다** — `ontology` 가 있고 `01-조사/<이름>.draft.json` 이 있으면, 초안이
+  값을 세어 정한 종류(숫자 · 날짜 · 참 · 거짓 · 주소 · 참조) · 단위와 정의가 다른 칸을 보고서 끝에
+  적는다(막지 않는다). 정의가 맞으면 판단표에 까닭을 적고, 아니면 정의를 고쳐 다시 돌린다.
+  `map` · `parser` · `key_of` 로 값을 바꾸는 칸은 견주지 않는다.
 
 ### 대응 파일 (`sp-table/1`)
 
@@ -199,7 +206,7 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
   "title": "과제-모델 표",
   "workspace_slug": "plm",
   "ontology": "plm-ontology.json",
-  "source": {"encoding": "auto", "delimiter": ","},
+  "source": {"encoding": "auto", "delimiter": ",", "sheet": ""},
   "dictionaries": {"region": ["KOR", "NA", "EUR"]},
   "parsers": {
     "model_name": {
