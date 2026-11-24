@@ -30,6 +30,7 @@ from app.modules.objects import edges as edge_rule
 from app.modules.objects import proposals as objects_proposals
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology import (
+    checkup,
     codebook,
     datascope,
     importer,
@@ -41,6 +42,7 @@ from app.modules.ontology import (
     reset,
     retype,
     revision,
+    similar,
     views,
 )
 from app.modules.ontology import (
@@ -66,6 +68,7 @@ from app.modules.ontology.models import (
 )
 from app.modules.ontology.schemas import (
     ChangeOut,
+    CheckItemOut,
     DefinitionUnlockOut,
     DeleteBlockOut,
     DeleteKind,
@@ -91,6 +94,7 @@ from app.modules.ontology.schemas import (
     ObjectTypePatchRequest,
     ObjectTypeSchema,
     ObjectTypeWriteRequest,
+    OntologyCheckOut,
     OntologySchemaOut,
     PromoteOptionOut,
     PromoteOut,
@@ -112,6 +116,8 @@ from app.modules.ontology.schemas import (
     RetypeSampleOut,
     RetypeTypeOut,
     RetypeValueOut,
+    SimilarNearOut,
+    SimilarOut,
     SnapshotOut,
     SystemSourceOut,
 )
@@ -3168,7 +3174,11 @@ def _snapshot(db: Session, user: User, *, reason: str) -> OntologySnapshot:
 
 
 def _plan_out(
-    prepared: importer.Plan, *, applied: bool, snapshot_id: uuid.UUID | None
+    prepared: importer.Plan,
+    *,
+    applied: bool,
+    snapshot_id: uuid.UUID | None,
+    found: similar.Found | None = None,
 ) -> ImportPlanOut:
     return ImportPlanOut(
         applied=applied,
@@ -3176,9 +3186,20 @@ def _plan_out(
             ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields, via=c.via)
             for c in prepared.changes
         ],
-        warnings=prepared.warnings,
+        warnings=prepared.warnings + (found.lines() if found else []),
         errors=prepared.errors,
         snapshot_id=snapshot_id,
+        similar=[
+            SimilarOut(
+                kind=one.kind,
+                slug=one.slug,
+                label=one.label,
+                shape=one.shape,
+                near=[SimilarNearOut(**dataclasses.asdict(near)) for near in one.near],
+            )
+            for one in (found.items if found else [])
+        ],
+        similar_meaning=found.meaning if found else "none",
     )
 
 
@@ -3301,10 +3322,15 @@ def import_schema(
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
 
     if snapshot is None or prepared.errors:
+        # **미리 보기는 비슷한 정의를 함께 말한다**(ADR 0091) — 적용에서는 늦다.
+        found = similar.check(db, payload, prepared.changes) if dry_run else None
         # 오류가 하나라도 있으면 **아무것도 안 바꾼다**(남긴 스냅샷도 함께 되돌린다).
         db.rollback()
         return _unlocked(
-            request, source, prepared, _plan_out(prepared, applied=False, snapshot_id=None)
+            request,
+            source,
+            prepared,
+            _plan_out(prepared, applied=False, snapshot_id=None, found=found),
         )
 
     _audit(
@@ -3402,6 +3428,36 @@ def delete_plan(
         core_consumers=found.core_consumers,
         purge_deleted=found.doomed.objects,
         managed_by=found.managed_by,
+    )
+
+
+@router.get("/check", response_model=OntologyCheckOut)
+def check_ontology(
+    kind: str | None = Query(
+        default=None,
+        description="한 종류만 — " + " · ".join(checkup.KINDS),
+    ),
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> OntologyCheckOut:
+    """**정의 점검** — 지우거나 묶을 후보(ADR 0092). 아무것도 안 바꾼다.
+
+    아무도 안 채우고 안 쓰는 속성 · 따로 있는 같은 속성(인터페이스 후보) · 타입마다 종류가 다른
+    같은 키 · 아무도 안 고른 선택 값 · 오래 빈 타입 · 맺힌 관계가 없는 관계 종류 · 설명 없는
+    공개 타입. 줄마다 까닭(`reason`)과 다음 걸음(`next` — 삭제 미리 보기 · 종류 변경 · 정의
+    가져오기)을 싣는다. 정리는 그 미리 보기를 거쳐 사람이 정한다. 큰 타입은 표본 어림이다
+    (`estimated`). 객체 수까지 세므로 시스템 관리자만."""
+    if kind is not None and kind not in checkup.KINDS:
+        raise InvalidValue(
+            code("ONTOLOGY", 103),
+            f"점검 종류는 {' · '.join(checkup.KINDS)} 중 하나입니다: {kind}",
+        )
+    found = checkup.run(db, user, kind=kind)
+    return OntologyCheckOut(
+        items=[CheckItemOut(**dataclasses.asdict(one)) for one in found.items],
+        counts=found.counts,
+        kinds=dict(checkup.KIND_LABELS),
+        notes=found.notes,
     )
 
 

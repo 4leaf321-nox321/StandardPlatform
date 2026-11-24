@@ -38,7 +38,7 @@ from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut
 from app.modules.objects import bulk
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
 from app.modules.objects.schemas import ImportRowOut
-from app.modules.ontology import importer
+from app.modules.ontology import importer, similar
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.schemas import ChangeOut
 from app.modules.ontology.schemas import ImportPlanOut as SchemaPlanOut
@@ -270,6 +270,10 @@ def _stages(
             out.errors.append(f"정의: {caught.message}")
             return
         out.ontology = planned
+        if not bundle.apply:
+            # **미리 보기는 비슷한 정의를 함께 말한다**(ADR 0091) — 정의 가져오기와 같다.
+            found = similar.check(db, bundle.ontology, planned.changes)
+            planned.warnings.extend(found.lines())
         if planned.errors:
             # **정의가 안 서면 객체를 맞춰 볼 수 없다** — 거기서 멈추고 정의의 오류를 보인다.
             return

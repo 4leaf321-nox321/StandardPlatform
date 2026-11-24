@@ -8023,6 +8023,58 @@
         }
       }
     },
+    "/api/ontology/check": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Check Ontology",
+        "description": "**정의 점검** — 지우거나 묶을 후보(ADR 0092). 아무것도 안 바꾼다.\n\n아무도 안 채우고 안 쓰는 속성 · 따로 있는 같은 속성(인터페이스 후보) · 타입마다 종류가 다른\n같은 키 · 아무도 안 고른 선택 값 · 오래 빈 타입 · 맺힌 관계가 없는 관계 종류 · 설명 없는\n공개 타입. 줄마다 까닭(`reason`)과 다음 걸음(`next` — 삭제 미리 보기 · 종류 변경 · 정의\n가져오기)을 싣는다. 정리는 그 미리 보기를 거쳐 사람이 정한다. 큰 타입은 표본 어림이다\n(`estimated`). 객체 수까지 세므로 시스템 관리자만.",
+        "operationId": "check_ontology_api_ontology_check_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "한 종류만 — unused_field · interface_candidate · field_mismatch · unused_option · empty_type · unused_relation · undescribed_core",
+              "title": "Kind"
+            },
+            "description": "한 종류만 — unused_field · interface_candidate · field_mismatch · unused_option · empty_type · unused_relation · undescribed_core"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologyCheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/reset": {
       "post": {
         "tags": [
@@ -13148,7 +13200,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SimilarOut"
+                  "$ref": "#/components/schemas/app__modules__objects__schemas__SimilarOut"
                 }
               }
             }
@@ -13201,7 +13253,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SimilarOut"
+                  "$ref": "#/components/schemas/app__modules__objects__schemas__SimilarOut"
                 }
               }
             }
@@ -30336,6 +30388,84 @@
         "title": "ChangesScanOut",
         "description": "⑩ 값마다 훑기 — 「계절을 빼면 실제로 늘고 있는 증상은?」 늘어난 것부터."
       },
+      "CheckItemOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "next": {
+            "type": "string",
+            "title": "Next"
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated",
+            "default": false
+          },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
+          },
+          "action": {
+            "type": "string",
+            "title": "Action",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "slug",
+          "label",
+          "reason",
+          "next"
+        ],
+        "title": "CheckItemOut",
+        "description": "정의 점검의 한 줄 — **지우거나 묶을 후보**(ADR 0092). 아무것도 안 바꾼다."
+      },
       "CohortCellOut": {
         "properties": {
           "age": {
@@ -46315,6 +46445,46 @@
         ],
         "title": "ObjectTypeWriteRequest"
       },
+      "OntologyCheckOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CheckItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Kinds"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "counts",
+          "kinds",
+          "notes"
+        ],
+        "title": "OntologyCheckOut"
+      },
       "OntologySchemaOut": {
         "properties": {
           "groups": {
@@ -57761,48 +57931,49 @@
         ],
         "title": "SimilarItemOut"
       },
-      "SimilarOut": {
+      "SimilarNearOut": {
         "properties": {
-          "type_slug": {
+          "kind": {
             "type": "string",
-            "title": "Type Slug"
+            "title": "Kind"
           },
-          "total": {
-            "type": "integer",
-            "title": "Total"
+          "slug": {
+            "type": "string",
+            "title": "Slug"
           },
-          "fields": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Fields"
+          "label": {
+            "type": "string",
+            "title": "Label"
           },
-          "query": {
-            "items": {
-              "$ref": "#/components/schemas/SimilarTagOut"
-            },
-            "type": "array",
-            "title": "Query"
+          "why": {
+            "type": "string",
+            "title": "Why"
           },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/SimilarItemOut"
-            },
-            "type": "array",
-            "title": "Items"
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "pending": {
+            "type": "boolean",
+            "title": "Pending",
+            "default": false
           }
         },
         "type": "object",
         "required": [
-          "type_slug",
-          "total",
-          "fields",
-          "query",
-          "items"
+          "kind",
+          "slug",
+          "label",
+          "why"
         ],
-        "title": "SimilarOut",
-        "description": "비슷한 기록 — 축 태그가 많이 겹치는 기록(드문 태그가 겹칠수록 비슷하다)."
+        "title": "SimilarNearOut"
       },
       "SimilarTagOut": {
         "properties": {
@@ -63666,6 +63837,49 @@
         "title": "PointOut",
         "description": "점 하나 — 상자 그림의 값, 산점도의 좌표."
       },
+      "app__modules__objects__schemas__SimilarOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "query": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarTagOut"
+            },
+            "type": "array",
+            "title": "Query"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "total",
+          "fields",
+          "query",
+          "items"
+        ],
+        "title": "SimilarOut",
+        "description": "비슷한 기록 — 축 태그가 많이 겹치는 기록(드문 태그가 겹칠수록 비슷하다)."
+      },
       "app__modules__objects__schemas__SnapshotOut": {
         "properties": {
           "key": {
@@ -63804,6 +64018,18 @@
               }
             ],
             "title": "Snapshot Id"
+          },
+          "similar": {
+            "items": {
+              "$ref": "#/components/schemas/app__modules__ontology__schemas__SimilarOut"
+            },
+            "type": "array",
+            "title": "Similar"
+          },
+          "similar_meaning": {
+            "type": "string",
+            "title": "Similar Meaning",
+            "default": "none"
           }
         },
         "type": "object",
@@ -63816,6 +64042,42 @@
         ],
         "title": "ImportPlanOut",
         "description": "가져오기가 무엇을 할 것인가 — **적용 전에 보는 것.**\n\n이것이 없으면 에이전트의 실수가 **기계 속도로** 반영되고, 온톨로지는 데이터의\n모양이라 그 아래 쌓인 것이 전부 흔들린다."
+      },
+      "app__modules__ontology__schemas__SimilarOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "shape": {
+            "type": "string",
+            "title": "Shape",
+            "default": ""
+          },
+          "near": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarNearOut"
+            },
+            "type": "array",
+            "title": "Near"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "slug",
+          "label",
+          "near"
+        ],
+        "title": "SimilarOut"
       },
       "app__modules__ontology__schemas__SnapshotOut": {
         "properties": {

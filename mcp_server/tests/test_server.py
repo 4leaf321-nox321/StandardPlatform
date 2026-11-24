@@ -37,6 +37,7 @@ TOOLS = {
     "table_infer",
     "table_build",
     "ontology_delete",
+    "ontology_check",
     "ontology_retype",
     "ontology_rename_option",
     "ontology_promote",
@@ -295,6 +296,18 @@ def test_미리_보기가_기본이다() -> None:
     assert seen[0].url.path == "/api/jobs"
     assert b'name="kind"' in seen[0].content and b"objects_import" in seen[0].content
     assert got["job_id"] == "j1" and "job_apply" in got["next"]
+
+
+def test_정의_점검은_읽기만_하고_한_종류로_좁힌다() -> None:
+    """ADR 0092 — 후보만 받는다. 위험 도구가 아니다(아무것도 안 바꾼다)."""
+    ctx = _ctx("Bearer t")
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "counts": {}}))
+    asyncio.run(server.ontology_check(ctx))
+    assert seen[-1].method == "GET" and seen[-1].url.path == "/api/ontology/check"
+    assert dict(seen[-1].url.params) == {}
+    asyncio.run(server.ontology_check(ctx, kind="empty_type"))
+    assert dict(seen[-1].url.params) == {"kind": "empty_type"}
+    assert "ontology_check" not in server.DESTRUCTIVE_TOOLS
 
 
 def test_지우기와_값까지_바꾸는_수정도_미리_보기가_기본이다() -> None:

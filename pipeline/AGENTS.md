@@ -66,6 +66,9 @@
 7. **검증** — `python sp_pipeline.py validate runs/...`. 오류가 0 이 될 때까지 고친다.
 8. **미리 보기** — `python sp_pipeline.py preview runs/...`. 결과(`preview.json`)를 사람에게
    요약해 보여 준다: 정의 변경 · 경고, 타입마다 새로/고침/그대로/오류, 오류 행과 이유.
+   정의의 경고에 **「비슷한 정의」** 줄(새 타입이 있는 타입과 이름이 같거나 뜻이 가까움) · **「같은 칸
+   다른 모양」** 줄이 있으면 적용 전에 사람에게 묻는다 — 같은 것이면 새 타입을 만들지 말고 있는 타입에
+   객체를 넣도록 `ontology.json` · `objects/` 를 고쳐 7 로 돌아간다.
 9. **사람이 확인한 뒤에만** `python sp_pipeline.py apply runs/...`. 미리 본 뒤 파일이 바뀌었으면
    도구가 거절한다 — 그때는 8 로 돌아간다.
 10. **넣은 뒤에 틀린 것을 알면** `python sp_pipeline.py runs` 로 판 번호를 찾고

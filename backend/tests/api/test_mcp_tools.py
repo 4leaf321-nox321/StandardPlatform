@@ -1336,6 +1336,21 @@ def test_원천이_잠근_정의는_그_원천의_이름으로_지운다(bot: Bo
     assert kind not in {one["slug"] for one in bot.call(server.ontology_schema)["types"]}
 
 
+def test_정의_가져오기는_비슷한_정의를_싣고_정의_점검은_후보를_준다(bot: Bot) -> None:
+    """ADR 0091 · 0092 — 기계가 사람에게 보일 것을 받는다."""
+    label = f"집진 설비 {uuid.uuid4().hex[:8]}"
+    had = _uniq("dust")
+    bot.call(server.ontology_import, {"types": [{"slug": had, "label": label}]}, apply=True)
+    twin = _uniq("dust")
+    plan = bot.call(server.ontology_import, {"types": [{"slug": twin, "label": label}]})
+    [found] = [one for one in plan["similar"] if one["slug"] == twin]
+    assert found["near"][0]["slug"] == had and found["near"][0]["why"] == "이름이 같음"
+
+    report = bot.call(server.ontology_check, kind="interface_candidate")
+    assert set(report["counts"]) <= {"interface_candidate"}
+    assert report["kinds"]["empty_type"] == "빈 타입"
+
+
 def test_종류_변경은_사람이_정한_대체_값으로_적용된다(bot: Bot) -> None:
     kind = _part_type(bot)
     light = bot.call(server.object_create, kind, label="볼트", properties={"w": "1,200"})

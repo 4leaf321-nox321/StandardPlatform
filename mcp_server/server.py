@@ -90,6 +90,7 @@ BASE_INSTRUCTIONS = (
     "화면 「내 정보」 에서 받는다\n"
     "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
     "  정의를 지운다                   ontology_delete (apply=false 로 먼저)\n"
+    "  지우거나 묶을 정의를 찾는다     ontology_check (후보만 — 정리는 미리 보기로)\n"
     "  속성 종류 · 고를 값 이름 · 승격  ontology_retype · ontology_rename_option · "
     "ontology_promote\n"
     "  정의를 그때로 되돌린다          ontology_restore\n"
@@ -1133,6 +1134,13 @@ async def ontology_import(
     생기고, 무엇이 바뀌고, **무엇을 조용히 잃는지**(경고). 사람이 그 계획을 읽고
     판단할 자리다.
 
+    **비슷한 정의**(`similar`, ADR 0091) — 계획이 새로 만드는 타입 · 관계 종류가 이미 있는
+    것과 이름이 같거나 뜻이 가까우면(`near[].why` · `score`), 새 속성이 다른 타입의 같은 키 ·
+    같은 이름 칸과 종류 · 단위가 다르면 함께 온다(`warnings` 에도 한 줄씩). **있으면 적용
+    전에 사람에게 묻는다** — 같은 것이면 새로 만들지 말고 있는 타입 · 관계 종류에 넣는다
+    (`협력사` 옆에 `공급사` 가 이미 있다). `similar_meaning` 이 `unavailable` · `off` 면
+    이름으로만 견준 것이다.
+
     **원천이 관리하는 정의면 `source` 를 적는다**(원천 잠금 — `managed_by`). 원천 시스템(PLM ·
     MES · datarelay 파이프라인 · 허브)이 데이터를 넣는 타입이면 `source="<원천 이름>"` — 그
     원천이 적재할 때 쓰는 이름(묶음의 `source` · 데이터 소스의 출처 이름)과 같게. 그러면 그
@@ -1305,6 +1313,27 @@ async def ontology_delete(
             + (f" · source={source}" if named else ""),
         }
     return got
+
+
+@tool()
+async def ontology_check(ctx: Context, kind: str | None = None) -> Any:
+    """**정의 점검** — 지우거나 묶을 후보(ADR 0092). 아무것도 안 바꾼다. 시스템 관리자만.
+
+    `items[]` 마다 `kind` · `label` · `reason`(왜 후보인가) · `next`(다음 걸음 — 어느 도구로
+    미리 보기를 하나):
+    `unused_field`(객체가 있는데 아무도 안 채우고 필수 · 지표 · 뷰 · 코어 · 데이터 소스
+    어디에도 안 쓰는 속성) · `interface_candidate`(같은 키 · 같은 종류의 속성이 여러 타입에
+    따로 — `types`) · `field_mismatch`(같은 키인데 타입마다 종류 · 단위가 다름) ·
+    `unused_option`(객체 20건 넘는 타입에서 아무도 안 고른 선택 값) · `empty_type` ·
+    `unused_relation`(만든 지 30일이 넘었는데 객체 · 관계가 없음) · `undescribed_core`(설명
+    없는 공개 타입). `kind` 로 한 종류만.
+
+    **후보일 뿐이다** — 목록을 사람에게 보이고, 지우는 것은 줄마다 `next` 의 미리 보기
+    (`ontology_delete` · `ontology_retype` · `ontology_import`)를 거쳐 사람이 정한다. 한꺼번에
+    지우지 않는다. `estimated` 면 큰 타입의 표본 어림이다(「약」 을 붙인다). `managed_by` 가
+    있으면 원천이 잠근 정의 — 그 원천이 보내는 중이면 비어 보여도 다음 적재가 채운다(그 원천에
+    먼저 확인한다)."""
+    return await _get(ctx, "/api/ontology/check", params={"kind": kind} if kind else None)
 
 
 def _property_owner(owner: str) -> str | None:

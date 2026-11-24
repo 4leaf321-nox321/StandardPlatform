@@ -433,9 +433,15 @@ def _side_label(kind: RelationType, side: str) -> str:
 
 
 def report(
-    db: Session, user: User, *, only: str | None = None, limit: int = LIMIT_DEFAULT
+    db: Session,
+    user: User,
+    *,
+    only: str | None = None,
+    limit: int = LIMIT_DEFAULT,
+    all_fields: bool = False,
 ) -> Report:
-    """타입마다 세고, 쓰는 곳으로 가중해 줄을 세운다. `only` 는 타입이나 인터페이스 slug."""
+    """타입마다 세고, 쓰는 곳으로 가중해 줄을 세운다. `only` 는 타입이나 인터페이스 slug.
+    `all_fields` 면 타입마다 빈 칸을 전부 싣는다(정의 점검 — ADR 0092)."""
     out = Report()
     every = list(
         db.scalars(
@@ -498,7 +504,7 @@ def report(
             sides=_sides(object_type, kinds, ends),
             uses=uses,
             estimate=probe.get(object_type.id, 0) * PROBE_FRACTION,
-            all_fields=bool(only),
+            all_fields=bool(only) or all_fields,
             projected=projected,
         )
         fill.waiting_relations = waiting.get(object_type.id, 0)

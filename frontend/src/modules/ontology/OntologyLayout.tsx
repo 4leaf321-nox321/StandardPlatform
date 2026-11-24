@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
-import { Boxes, LayoutList, Radio, Shapes, Share2, Upload } from 'lucide-react'
+import { Boxes, LayoutList, ListChecks, Radio, Shapes, Share2, Upload } from 'lucide-react'
 
 import { OntologyExportButton } from '@/modules/ontology/OntologyExportButton'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -77,6 +77,13 @@ const SECTIONS = [
     icon: Radio,
     count: (schema: OntologySchema | null) =>
       schema?.types.filter((one) => one.core).length || undefined,
+  },
+  {
+    // **정리할 것을 찾는 자리**(ADR 0092) — 아무것도 바꾸지 않고 후보만 센다. 맨 뒤다.
+    to: 'check',
+    label: '정의 점검',
+    icon: ListChecks,
+    count: () => undefined,
   },
 ]
 

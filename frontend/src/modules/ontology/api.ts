@@ -609,6 +609,42 @@ export interface DeletePlan {
   purge_deleted: number
 }
 
+/** 정의 점검의 한 줄 — 지우거나 묶을 **후보**(ADR 0092). 아무것도 안 바꾼다. */
+export interface CheckItem {
+  kind:
+    | 'unused_field'
+    | 'interface_candidate'
+    | 'field_mismatch'
+    | 'unused_option'
+    | 'empty_type'
+    | 'unused_relation'
+    | 'undescribed_core'
+  /** 타입 · 관계 종류의 slug — 인터페이스 후보 · 종류가 다른 같은 속성은 속성 키. */
+  slug: string
+  key: string | null
+  label: string
+  /** 왜 후보인가. */
+  reason: string
+  /** 다음 걸음(MCP 도구 이름으로) — 화면은 `action` 으로 미리 보기를 연다. */
+  next: string
+  types: string[]
+  count: number | null
+  /** 큰 타입의 표본 어림 — 표본에서 0건이어도 밖에 있을 수 있다. */
+  estimated: boolean
+  /** 원천이 잠근 정의 — 그 원천이 삭제하거나 잠금 해제 뒤에. */
+  managed_by: string
+  action: '' | 'delete_type' | 'delete_property' | 'delete_relation'
+}
+
+export interface OntologyCheck {
+  items: CheckItem[]
+  /** 종류마다 전체 수 — 종류마다 앞 100줄만 싣는다. */
+  counts: Record<string, number>
+  /** 종류 → 화면 이름. */
+  kinds: Record<string, string>
+  notes: string[]
+}
+
 export interface PropertyUsage {
   key: string
   label: string
@@ -674,6 +710,8 @@ export const ontologyApi = {
   /** `purgeDeleted` — 지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했다(ADR 0008). */
   removeType: (slug: string, purgeDeleted = false) =>
     api.delete<void>(`/ontology/types/${slug}${purgeDeleted ? '?purge_deleted=true' : ''}`),
+  /** 정의 점검 — 지우거나 묶을 후보(ADR 0092). 시스템 관리자. */
+  check: () => api.get<OntologyCheck>('/ontology/check'),
   deletePlan: (kind: DeletePlan['kind'], slug: string, key?: string) =>
     api.get<DeletePlan>(
       `/ontology/delete-plan?${new URLSearchParams({ kind, slug, ...(key ? { key } : {}) })}`,

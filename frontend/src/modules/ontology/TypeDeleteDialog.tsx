@@ -58,7 +58,8 @@ export function TypeDeleteDialog({ type, onDone, onClose }: TypeDeleteDialogProp
   )
 }
 
-function PlanText({ plan, error }: { plan: DeletePlan | null; error: Error | null }) {
+/** 삭제 미리 보기의 본문 — 정의 점검의 삭제 창도 같은 것을 읽는다. */
+export function PlanText({ plan, error }: { plan: DeletePlan | null; error: Error | null }) {
   if (error) return <ErrorNotice error={error} />
   if (!plan) return <p>삭제하면 무엇이 사라지는지 확인하는 중입니다…</p>
   if (plan.blocking.length > 0) {

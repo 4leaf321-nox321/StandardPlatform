@@ -441,6 +441,40 @@ class DeletePlanOut(BaseModel):
     원천이 제 정의를 지울 때는 `source` 에 같은 이름을 적는다(ADR 0090 보강)."""
 
 
+class CheckItemOut(BaseModel):
+    """정의 점검의 한 줄 — **지우거나 묶을 후보**(ADR 0092). 아무것도 안 바꾼다."""
+
+    kind: str
+    """`unused_field` · `interface_candidate` · `field_mismatch` · `unused_option` ·
+    `empty_type` · `unused_relation` · `undescribed_core`(이름은 `kinds`)."""
+    slug: str
+    """타입 · 관계 종류의 slug — 인터페이스 후보 · 종류가 다른 같은 속성은 속성 키."""
+    key: str | None = None
+    label: str
+    reason: str
+    """왜 후보인가 — 사람에게 그대로 보인다."""
+    next: str
+    """다음 걸음 — 무엇으로 확인하고 무엇으로 바꾸나(MCP 도구 이름으로)."""
+    types: list[str] = Field(default_factory=list)
+    count: int | None = None
+    estimated: bool = False
+    """큰 타입의 표본에서 센 어림 — 표본에서 0건이어도 밖에 있을 수 있다."""
+    managed_by: str = ""
+    """원천이 잠근 정의 — 그 원천이 `source` 로 지우거나 잠금 해제 뒤에 사람이."""
+    action: str = ""
+    """화면이 바로 여는 삭제 미리 보기 — `delete_type` · `delete_property` ·
+    `delete_relation` · 빈 값."""
+
+
+class OntologyCheckOut(BaseModel):
+    items: list[CheckItemOut]
+    counts: dict[str, int]
+    """종류마다 전체 수 — 종류마다 앞 100줄만 싣는다(`notes`)."""
+    kinds: dict[str, str]
+    """종류 → 화면 이름."""
+    notes: list[str]
+
+
 class ImplementPlanRequest(BaseModel):
     interface_slugs: list[str]
 
@@ -547,6 +581,29 @@ class ChangeOut(BaseModel):
     """이 변경을 부른 인터페이스 — 파일에 없던 타입의 속성이 인터페이스를 따라 바뀔 때."""
 
 
+class SimilarNearOut(BaseModel):
+    kind: str
+    """`type` · `relation_type` · `property`."""
+    slug: str
+    """속성이면 `<타입>.<키>`."""
+    label: str
+    why: str
+    """「이름이 같음」 · 「뜻이 가까움」 · 속성이면 그 칸의 모양(「숫자 · kg」)."""
+    score: float | None = None
+    """뜻의 가까움(0 ~ 1) — 이름이 같아서 든 것이면 비어 있다."""
+    pending: bool = False
+    """같은 파일이 함께 만드는 것(아직 없다)."""
+
+
+class SimilarOut(BaseModel):
+    kind: str
+    slug: str
+    label: str
+    shape: str = ""
+    """속성이면 이번 것의 모양."""
+    near: list[SimilarNearOut]
+
+
 class ImportPlanOut(BaseModel):
     """가져오기가 무엇을 할 것인가 — **적용 전에 보는 것.**
 
@@ -563,6 +620,13 @@ class ImportPlanOut(BaseModel):
     """적용하면 실패할 것. **하나라도 있으면 아무것도 안 바꾼다.**"""
     snapshot_id: uuid.UUID | None
     """적용 직전에 남긴 스냅샷. 되돌릴 때 쓴다."""
+    similar: list[SimilarOut] = Field(default_factory=list)
+    """**비슷한 정의**(ADR 0091) — 새로 만드는 타입 · 관계 종류가 이미 있는 것과 이름이 같거나
+    뜻이 가깝고, 새 속성이 다른 타입의 같은 칸과 모양이 다른 것. 미리 보기(`dry_run`)에서만
+    센다. 막지 않는다 — 같은 것이면 새로 만들지 말고 있는 것을 쓰도록 사람에게 묻는다."""
+    similar_meaning: str = "none"
+    """뜻으로 견주었나 — `ready` · `off`(꺼둔 설치) · `unavailable`(못 계산함 — 이름으로만,
+    까닭은 `warnings`) · `none`(새 타입 · 관계 종류가 없거나 미리 보기가 아님)."""
 
 
 class SnapshotOut(BaseModel):
