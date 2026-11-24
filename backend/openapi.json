@@ -5751,6 +5751,238 @@
         }
       }
     },
+    "/api/ontology/proposals": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Propose",
+        "description": "정의를 **적용 대신 제안**한다 — 시스템 관리자가 검토함에서 적용 · 거절한다.\n\n본문의 `schema` 는 정의 가져오기와 같다. 그 자리에서 계획(바뀌는 것 · 경고 · 비슷한 정의)을\n세어 함께 남긴다 — 계획에 오류가 있거나 바뀌는 것이 없으면 ONTOLOGY-107(고쳐서 다시).\n같은 사람이 같은 계획을 또 내면 있는 제안을 돌려준다(200, `created=false`).",
+        "operationId": "propose_api_ontology_proposals_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Proposals",
+        "description": "정의 제안 — 시스템 관리자는 전부, 그 밖은 자기가 낸 것만. 새것부터 200건.",
+        "operationId": "list_proposals_api_ontology_proposals_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(proposed|accepted|rejected|withdrawn|all)$",
+              "default": "proposed",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "mine",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "내가 낸 것만",
+              "default": false,
+              "title": "Mine"
+            },
+            "description": "내가 낸 것만"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProposalOut"
+                  },
+                  "title": "Response List Proposals Api Ontology Proposals Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/proposals/{proposal_id}": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Get Proposal",
+        "operationId": "get_proposal_api_ontology_proposals__proposal_id__get",
+        "parameters": [
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/proposals/{proposal_id}/replan": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Replan Proposal",
+        "description": "지금 정의로 계획을 다시 센다 — 그새 정의가 바뀌어 적용이 막혔을 때(ONTOLOGY-108).\n`replanned` 가 계획이 달라졌나다.",
+        "operationId": "replan_proposal_api_ontology_proposals__proposal_id__replan_post",
+        "parameters": [
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/proposals/{proposal_id}/withdraw": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Withdraw Proposal",
+        "description": "제안을 거둔다 — 제안한 사람 · 시스템 관리자.",
+        "operationId": "withdraw_proposal_api_ontology_proposals__proposal_id__withdraw_post",
+        "parameters": [
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Proposal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/groups": {
       "get": {
         "tags": [
@@ -7535,6 +7767,289 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/properties/{key}/rename-key": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Rename Property Key",
+        "description": "**속성 키 변경**(ADR 0093) — 정의 · 객체 값 · 타입 화면 설정 · 저장된 뷰 · 지표 ·\n장표 틀의 주소 · 데이터 소스 칸 대응 · 뜻으로 찾기 대상 · 그래프 지도 · 검토함의 기억을 한\n번에 바꾼다.\n\n`apply=false`(기본)면 계획: 바뀌는 자리와 건수(`places`), 바꿀 수 없는 바깥 자리와\n바꾼 뒤에도 깨지는 뷰 · 지표(`warnings`), 막는 것(`errors` — 문서 · 파일 속성, 공통\n속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 키 · 남은 저장값 …). 적용 직전 정의를\n스냅샷으로 남긴다. 객체의 `updated_at` 은 그대로이고, 이력은 이 전의 기록을 새 키로 읽는다.\n값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-105 — `…/rename-key/job` 으로 작업을 만든다.",
+        "operationId": "rename_property_key_api_ontology_types__slug__properties__key__rename_key_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/properties/{key}/rename-key/job": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Rename Property Key Job",
+        "description": "키 변경을 **작업으로** — 계획 작업을 만든다. 사람이 결과를 보고 `POST\n/api/jobs/{id}/apply` 로 적용한다(그 사이 바뀌었으면 지문이 막는다).",
+        "operationId": "rename_property_key_job_api_ontology_types__slug__properties__key__rename_key_job_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/move": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Move Type Objects",
+        "description": "**객체를 다른 타입으로 옮기기 · 타입 합치기**(ADR 0094) — 객체 id 를 그대로 둔 채 타입을\n바꾼다. 참조 칸 · 관계 · 첨부 · 문서 · 이력은 id 로 이어져 따라온다.\n\n`apply=false`(기본)면 계획: 칸 대응(`fields` — 같은 키 · 다른 키 · 새로 만들기 ·\n버림, 값 건수, 막는 까닭), 바뀌는 자리(`places`), 원 타입에 남는 것 · 빌 필수\n칸(`warnings`), 막는 것(`errors` — 모양이 다른 칸 · 겹치는 식별자(`merge_duplicates` 로\n병합) · 같은 별칭 · 식별자 정책 · 원천 잠금 · 데이터 소스가 넣는 중 …). 원 타입은 빈 채로\n남는다 — 삭제는 삭제 미리 보기로. 옮길 객체가 2만 건을 넘으면 ONTOLOGY-106 —\n`…/move/job`.",
+        "operationId": "move_type_objects_api_ontology_types__slug__move_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/move/job": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Move Type Objects Job",
+        "description": "옮기기를 **작업으로** — 계획 작업을 만든다. 결과를 보고 `POST /api/jobs/{id}/apply`.",
+        "operationId": "move_type_objects_job_api_ontology_types__slug__move_job_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/rename": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Rename Type Slug",
+        "description": "**타입 slug 변경**(ADR 0093) — 정의 · 참조 속성의 대상 · 관계 종류의 끝 · 화면\n설정의 트리 · 저장된 뷰 · 지표 · 장표 틀의 주소(`in.<slug>:<키>`) · 원 표와 맺은 관계 ·\n못 찾은 말 · 웹훅 · 검토함 · 알림 링크를 한 번에 바꾼다. 객체는 id 로 타입을 가리켜\n그대로다.\n\n`apply=false`(기본)면 계획(`places` · `warnings` · `errors`). 외부 공개 타입은 주소\n(`/api/core/<slug>`)가 바뀌므로 `accept_core`. 옛 주소(`/o/<옛 slug>`)로 열면 새 slug 를\n안내한다.",
+        "operationId": "rename_type_slug_api_ontology_types__slug__rename_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameOut"
                 }
               }
             }
@@ -44150,6 +44665,56 @@
         "type": "object",
         "title": "MetricSpec"
       },
+      "MoveFieldOut": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "values": {
+            "type": "integer",
+            "title": "Values"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "label",
+          "target",
+          "action",
+          "values",
+          "note",
+          "blocked"
+        ],
+        "title": "MoveFieldOut"
+      },
       "MoveIn": {
         "properties": {
           "rows": {
@@ -44203,6 +44768,161 @@
         "type": "object",
         "title": "MoveIn",
         "description": "옮기기 — **상대 동작**이다. 서버가 그때의 차례에 대고 적용하므로 차례 때문에 부딪치지\n않는다(그사이 남이 줄을 더하거나 지워도 409 가 아니다). 셋 중 하나:\n\n- 줄 한 칸: `{\"rows\": [줄], \"step\": \"up\" | \"down\"}` — 그 묶음 안의 이웃과 자리를\n  바꾼다(묶음 경계는 넘지 않는다)\n- 묶음 한 칸: `{\"group\": 묶음, \"step\": \"up\" | \"down\"}`\n- 줄을 다른 자리로: `{\"rows\": [줄…], \"to\": {\"group\": 묶음 | null, \"before\": 줄?, \"after\":\n  줄?, \"at\": \"start\" | \"end\"}}` — 여럿이면 지금 표의 차례대로 붙여 놓는다\n\n그사이 사라진 줄 · 묶음은 건너뛰고 응답의 `skipped` 에 적는다."
+      },
+      "MoveOut": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "live": {
+            "type": "integer",
+            "title": "Live"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/MoveFieldOut"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "places": {
+            "items": {
+              "$ref": "#/components/schemas/RenamePlaceOut"
+            },
+            "type": "array",
+            "title": "Places"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "core_consumers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Core Consumers"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          },
+          "moved": {
+            "type": "integer",
+            "title": "Moved",
+            "default": 0
+          },
+          "merged": {
+            "type": "integer",
+            "title": "Merged",
+            "default": 0
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "target",
+          "label",
+          "applied",
+          "objects",
+          "live",
+          "duplicates",
+          "fields",
+          "places",
+          "warnings",
+          "errors"
+        ],
+        "title": "MoveOut",
+        "description": "옮기면 **무엇이 어디로 가고 · 무엇이 남고 · 무엇이 막나**."
+      },
+      "MoveRequest": {
+        "properties": {
+          "to": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "To"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Mapping"
+          },
+          "merge_duplicates": {
+            "type": "boolean",
+            "title": "Merge Duplicates",
+            "default": false
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          },
+          "accept_core": {
+            "type": "boolean",
+            "title": "Accept Core",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "title": "MoveRequest",
+        "description": "객체를 다른 타입으로 옮기기(ADR 0094) — `apply=false`(기본)면 계획만."
       },
       "MoveTarget": {
         "properties": {
@@ -49819,6 +50539,177 @@
         "title": "PropertyUsage",
         "description": "**지우기 전에 무엇이 사라지는지.**\n\n\"정말 삭제하시겠습니까\" 만 묻는 창은 아무도 안 읽고 예를 누른다 — 읽을 것이\n없어서다. 속성 하나를 지우면 그 값이 전부 사라지므로, 몇 개인지 말해 준다."
       },
+      "ProposalOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "origin_ref": {
+            "type": "string",
+            "title": "Origin Ref"
+          },
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "token_name": {
+            "type": "string",
+            "title": "Token Name"
+          },
+          "proposed_by": {
+            "type": "string",
+            "title": "Proposed By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "planned_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Planned At"
+          },
+          "decided_by": {
+            "type": "string",
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decision_note": {
+            "type": "string",
+            "title": "Decision Note"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/app__modules__ontology__schemas__ImportPlanOut"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created",
+            "default": false
+          },
+          "replanned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replanned"
+          },
+          "review_link": {
+            "type": "string",
+            "title": "Review Link",
+            "default": "/review?kind=definition_proposal"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "status_label",
+          "summary",
+          "source",
+          "note",
+          "origin_ref",
+          "tool",
+          "token_name",
+          "proposed_by",
+          "created_at",
+          "planned_at",
+          "decided_by",
+          "decided_at",
+          "decision_note",
+          "snapshot_id",
+          "plan",
+          "fingerprint"
+        ],
+        "title": "ProposalOut"
+      },
+      "ProposalRequest": {
+        "properties": {
+          "schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Schema"
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^([a-z][a-z0-9_-]{0,39})?$",
+            "title": "Source",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Note",
+            "default": ""
+          },
+          "origin_ref": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Origin Ref",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema"
+        ],
+        "title": "ProposalRequest",
+        "description": "정의를 **적용 대신 제안**한다 — 시스템 관리자가 검토함에서 적용 · 거절한다."
+      },
       "PulseOut": {
         "properties": {
           "revision": {
@@ -53178,6 +54069,148 @@
           "to"
         ],
         "title": "RenameOptionRequest"
+      },
+      "RenameOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "to": {
+            "type": "string",
+            "title": "To"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "places": {
+            "items": {
+              "$ref": "#/components/schemas/RenamePlaceOut"
+            },
+            "type": "array",
+            "title": "Places"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "core_consumers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Core Consumers"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "slug",
+          "to",
+          "label",
+          "applied",
+          "objects",
+          "places",
+          "warnings",
+          "errors"
+        ],
+        "title": "RenameOut",
+        "description": "이름을 바꾸면 **무엇이 바뀌고(`places`) · 무엇을 알아야 하고(`warnings`) · 무엇이 막나\n(`errors`)**. 막는 것이 하나라도 있으면 적용하지 않는다."
+      },
+      "RenamePlaceOut": {
+        "properties": {
+          "what": {
+            "type": "string",
+            "title": "What"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "what",
+          "count"
+        ],
+        "title": "RenamePlaceOut"
+      },
+      "RenameRequest": {
+        "properties": {
+          "to": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "To"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          },
+          "accept_core": {
+            "type": "boolean",
+            "title": "Accept Core",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "to"
+        ],
+        "title": "RenameRequest",
+        "description": "속성 키 · 타입 slug 바꾸기(ADR 0093) — `apply=false`(기본)면 계획만."
       },
       "RenderOut": {
         "properties": {

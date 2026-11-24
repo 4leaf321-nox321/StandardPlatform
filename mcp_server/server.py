@@ -89,10 +89,14 @@ BASE_INSTRUCTIONS = (
     "  원천 파일을 한꺼번에(수만 줄)   정제 도구 키트(사용자 PC 의 MCP) — "
     "화면 「내 정보」 에서 받는다\n"
     "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
+    "  정의를 제안한다(관리자가 적용)  ontology_propose → ontology_proposals "
+    "(관리자가 아니면 · 사람이 확인할 정의)\n"
     "  정의를 지운다                   ontology_delete (apply=false 로 먼저)\n"
     "  지우거나 묶을 정의를 찾는다     ontology_check (후보만 — 정리는 미리 보기로)\n"
     "  속성 종류 · 고를 값 이름 · 승격  ontology_retype · ontology_rename_option · "
     "ontology_promote\n"
+    "  속성 키 · 타입 slug 바꾸기       ontology_rename (apply=false 로 먼저)\n"
+    "  같은 개념의 두 타입을 합치기     ontology_move (apply=false 로 먼저)\n"
     "  정의를 그때로 되돌린다          ontology_restore\n"
     "  이 설치에만 있는 기능           extensions_schema → extension_call\n"
     "\n"
@@ -363,6 +367,8 @@ DESTRUCTIVE_TOOLS = frozenset(
         "ontology_restore",  # 정의 전체를 그때로 되돌린다
         "ontology_retype",  # 속성 종류 변경 — 모든 객체의 값을 바꾼다
         "ontology_rename_option",  # 고를 값 이름 변경 — 모든 객체의 값을 바꾼다
+        "ontology_rename",  # 속성 키 · 타입 slug 변경 — 값 · 설정 · 주소를 한 번에 바꾼다
+        "ontology_move",  # 객체를 다른 타입으로 — 타입 전부의 객체가 옮겨 가고 병합된다
         "bulk_edit",  # 여러 객체의 한 칸을 한 값으로
         "bulk_edit_undo",
         "bundle_undo",  # 묶음으로 넣은 것을 걷어낸다
@@ -1173,11 +1179,65 @@ async def ontology_import(
     (출발이 원천) · `"dst"`(도착이 원천), 방향 있는 종류만. 원천 타입의 `"revision_key": "<속성
     키>"`(개정 칸 — 글자 · 고르기 · 숫자, 값 하나)가 바뀔 때만 파생물이 낡는다(없으면 수정
     시각으로 — 이름만 고쳐도 낡음). 개정 칸인 속성은 지우거나 종류를 못 바꾼다.
+    **시스템 관리자가 아니거나 토큰에 `ontology:write` 가 없으면(403)** `ontology_propose` 로
+    제안한다 — 관리자가 검토함에서 계획을 읽고 적용한다. 문서에서 뽑은 정의처럼 사람이 확인해야
+    할 것도 제안으로 낸다.
     자세한 것은 `get_guide("schema")`."""
     params = {"dry_run": "false" if apply else "true"}
     if source:
         params["source"] = source
     return await _post(ctx, "/api/ontology/import", schema, params=params)
+
+
+@tool()
+async def ontology_propose(
+    ctx: Context,
+    schema: dict[str, Any],
+    note: str = "",
+    origin_ref: str = "",
+    source: str = "",
+) -> Any:
+    """정의를 **적용 대신 제안**한다(ADR 0096) — 시스템 관리자가 검토함(「정의 제안」)에서
+    계획을 읽고 적용 · 거절한다. 아무것도 안 바꾼다. 로그인한 누구나 낸다(토큰은
+    `objects:write` 로).
+
+    `schema` 는 `ontology_import` 와 같은 모양이다. `note` 에 **근거**(어느 문서에서 무엇을
+    보고 — 검토자가 읽는다), `origin_ref` 에 근거 문서 이름 · 주소, 원천이 관리할 정의면
+    `source`.
+
+    응답은 제안(`id` · `status` · `summary`)과 그 자리에서 센 **계획**(`plan` — 바뀌는 것 ·
+    경고 · 비슷한 정의). **비슷한 정의(`plan.similar`)가 있으면 내기 전에 사람에게 묻는다**
+    — 같은 것이면 있는 타입에 넣도록 고쳐 다시 낸다. 계획에 오류가 있거나 바뀌는 것이
+    없으면 ONTOLOGY-0107 — 고쳐서 다시. 같은 계획을 또 내면 있는 제안이 온다
+    (`created=false`).
+
+    결과는 `ontology_proposals` 로 본다 — 적용(`accepted`) · 거절(`rejected`,
+    `decision_note`)."""
+    body: dict[str, Any] = {"schema": schema, "note": note, "origin_ref": origin_ref}
+    if source:
+        body["source"] = source
+    return await _post(ctx, "/api/ontology/proposals", body)
+
+
+@tool()
+async def ontology_proposals(
+    ctx: Context,
+    status: str = "proposed",
+    proposal_id: str = "",
+    mine: bool = False,
+) -> Any:
+    """정의 제안(ADR 0096) — `status`(`proposed` · `accepted` · `rejected` · `withdrawn` ·
+    `all`)의 목록, 또는 `proposal_id` 하나. 시스템 관리자는 전부, 그 밖은 자기가 낸 것만.
+
+    줄마다 `summary`(「타입 새로 2 · 속성 새로 12」) · `plan`(마지막으로 센 계획) · 누가 ·
+    언제 · 결정(`decided_by` · `decision_note`). 적용 · 거절은 검토함에서 사람이 한다 — 이
+    도구는 보기만 한다. 적용하면 `snapshot_id`(적용 직전 정의 — `ontology_restore` 로
+    되돌린다)."""
+    if proposal_id:
+        return await _get(ctx, f"/api/ontology/proposals/{proposal_id}")
+    return await _get(
+        ctx, "/api/ontology/proposals", {"status": status, "mine": str(mine).lower()}
+    )
 
 
 @tool()
@@ -1408,6 +1468,85 @@ async def ontology_retype(
     got = await _post(ctx, path, body)
     if isinstance(got, dict) and "ONTOLOGY-0067" in str(got.get("error", "")):
         # 값이 많은 타입(기록) — 요청 안에서 안 끝나 작업이 된다. 작업은 늘 계획부터다.
+        job = await _post(ctx, f"{path}/job", {**body, "apply": False})
+        return await _wait_job(ctx, job, JOB_WAIT_MAX)
+    return got
+
+
+@tool()
+async def ontology_rename(
+    ctx: Context,
+    kind: str,
+    slug: str,
+    to: str,
+    key: str | None = None,
+    apply: bool = False,
+    accept_core: bool = False,
+) -> Any:
+    """**키 · slug 바꾸기**(ADR 0093) — `kind="property"` 면 타입 `slug` 의 속성 키 `key` →
+    `to`, `kind="type"` 이면 타입 slug `slug` → `to`. 보이는 이름(label)은 `ontology_import` 로
+    바꾼다 — 이것은 주소 · 인자 · 내보내기에 박히는 이름이다. 시스템 관리자만.
+
+    `apply=False`(기본)면 계획: `places`(바뀌는 자리와 건수 — 객체 값 · 속성 정의 · 화면 설정
+    · 저장된 뷰 · 지표 · 장표 틀의 주소 · 데이터 소스 칸 대응 · 참조 속성의 대상 · 관계 종류의
+    끝 …), `warnings`(바꿀 수 없는 바깥 자리 — .env · 정제 키트 · 원천 레시피 · 수신 시스템 ·
+    문서 본문의 링크, 그리고 바꾼 뒤에도 깨지는 뷰 · 지표), `errors`(막는 것 — 문서 · 파일
+    속성, 공통 속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 이름 · 남은 저장값, 그 타입을 쥔
+    작업). **계획을 사람에게 보이고** 확인받은 뒤 `apply=True`. 공개 타입이면 `core_consumers`
+    를 보이고 `accept_core=True`.
+
+    키를 바꿀 때 값이 있는 객체가 2만 건을 넘으면 **작업이 된다**(계획 작업) — `result` 가
+    계획이다. 사람이 확인하면 `job_apply(job_id)`. 적용 뒤 이 도구 · 다른 도구를 부를 때는 새
+    이름을 쓴다(옛 slug 로 부르면 새 slug 를 말한다)."""
+    body = {"to": to, "apply": apply, "accept_core": accept_core}
+    if kind == "type":
+        return await _post(ctx, f"/api/ontology/types/{slug}/rename", body)
+    if kind != "property":
+        return {"error": f"kind 는 property · type 중 하나입니다: {kind}"}
+    if not key:
+        return {"error": "property 의 키를 바꾸려면 key(지금 키)가 있어야 합니다."}
+    path = f"/api/ontology/types/{slug}/properties/{key}/rename-key"
+    got = await _post(ctx, path, body)
+    if isinstance(got, dict) and "ONTOLOGY-0105" in str(got.get("error", "")):
+        # 값이 많은 타입 — 요청 안에서 안 끝나 작업이 된다. 작업은 늘 계획부터다.
+        job = await _post(ctx, f"{path}/job", {**body, "apply": False})
+        return await _wait_job(ctx, job, JOB_WAIT_MAX)
+    return got
+
+
+@tool()
+async def ontology_move(
+    ctx: Context,
+    slug: str,
+    to: str,
+    mapping: dict[str, str | None] | None = None,
+    merge_duplicates: bool = False,
+    apply: bool = False,
+    accept_core: bool = False,
+) -> Any:
+    """**객체를 다른 타입으로 옮기기 · 타입 합치기**(ADR 0094) — 타입 `slug` 의 객체
+    전부(지운 것 포함)를 타입 `to` 로. 객체 id 가 그대로라 참조 칸 · 관계 · 별칭 · 첨부 ·
+    이력이 따라온다. 같은 개념이 두 타입에 갈렸을 때(`협력사` · `공급사` — `similar` ·
+    `ontology_check` 가 찾는다). 시스템 관리자만.
+
+    `apply=False`(기본)면 계획: `fields`(칸 대응 — `same` 대상의 같은 키 · `map` 다른 키 ·
+    `create` 대상에 새로 · `drop` 버림, 값 건수, `blocked` 와 `note` 막는 까닭), `places`,
+    `warnings`(원 타입에 남는 뷰 · 지표 · 데이터 소스, 빌 필수 칸), `errors`. 대응을 바꾸려면
+    `mapping={"원 키": "대상 키" | null}` — **버림(null)은 사람이 정한 것만**. 모양이 다른 칸은
+    `ontology_retype` 로 먼저 맞춘다. 대상에 같은 식별자의 객체가 있으면 막힌다 — 같은 것이면
+    사람에게 확인받아 `merge_duplicates=True`(옮긴 뒤 대상의 객체로 병합). 계획을 사람에게
+    보이고 확인받은 뒤 `apply=True`. 원 타입은 빈 채로 남는다 — 정리는 `ontology_delete`.
+    옮길 객체가 2만 건을 넘으면 **작업이 된다**(계획 작업) — 확인 뒤 `job_apply(job_id)`."""
+    body = {
+        "to": to,
+        "mapping": mapping or {},
+        "merge_duplicates": merge_duplicates,
+        "apply": apply,
+        "accept_core": accept_core,
+    }
+    path = f"/api/ontology/types/{slug}/move"
+    got = await _post(ctx, path, body)
+    if isinstance(got, dict) and "ONTOLOGY-0106" in str(got.get("error", "")):
         job = await _post(ctx, f"{path}/job", {**body, "apply": False})
         return await _wait_job(ctx, job, JOB_WAIT_MAX)
     return got

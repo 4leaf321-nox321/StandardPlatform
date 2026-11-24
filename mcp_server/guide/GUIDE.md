@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-24c
+GUIDE_VERSION: 2026-11-25c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -19,9 +19,12 @@ GUIDE_VERSION: 2026-11-24c
 | **어느 타입에 있는지 모른다** | `search(q)` | `types[]` 가 타입별 건수. 타입을 알면 `objects_list` · `object_resolve` |
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
+| **정의를 제안하기**(시스템 관리자가 아니다 · 문서에서 뽑은 정의를 관리자가 확인해야 한다) | `ontology_propose(schema, note=, origin_ref=)` → 나중에 `ontology_proposals` | 아무것도 안 바꾼다. 관리자가 검토함에서 계획을 읽고 적용 · 거절한다. `note` 에 근거(어느 문서의 무엇)를 꼭 |
 | **표(엑셀 · CSV)로 기록 타입을 만들고 축에 잇기** | `table_infer(rows)` → 사람 확인 → `table_build` → `ontology_import` → `objects_import` | **시스템 관리자만.** 참조 후보를 스스로 확정하지 않는다 — `one` · `many` · `none` 과 못 찾은 견본을 보인다 |
 | 정의 정리 — 안 쓰는 속성 · 빈 타입 · 따로 있는 같은 속성 찾기 | `ontology_check()` → 줄마다 `next` 의 미리 보기 → 사람 확인 | **시스템 관리자만.** 후보일 뿐 — 목록을 사람에게 보이고 하나씩. 한꺼번에 지우지 않는다 |
 | 정의 지우기(묶음 · 타입 · 인터페이스 · 관계 종류 · 속성) | `ontology_delete(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** `blocking` 은 우회하지 않는다 — 먼저 할 일을 사람에게. 원천이 잠근 정의(`managed_by`)는 그 원천이 제 것을 치울 때만 `source=<그 이름>` |
+| 속성 키 · 타입 slug 바꾸기(`w` → `weight`, `part2` → `part`) | `ontology_rename(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** 보이는 이름은 `ontology_import` 의 label — 이것은 주소 · 인자에 박히는 이름이다. `warnings` 의 바깥 자리(키트 · 레시피 · 수신 시스템)를 사람에게 함께 |
+| 같은 개념의 두 타입 합치기(`협력사` 300건 → `공급사`) | `ontology_move(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** 칸 대응(`fields`)과 버림 · 겹치는 객체 병합은 **사람이 정한 것만** |
 | 속성 종류 변경 · 고를 값 이름 변경 · 코드표 승격 | `ontology_retype` · `ontology_rename_option` · `ontology_promote` — 모두 `apply=false` 먼저 | 저장값도 함께 바뀐다. 대체 값은 **사람이 정한 것만** |
 | 정의를 그때로 되돌리기 | `ontology_restore()` → 스냅샷 고르기 → `ontology_restore(id)` → 사람 확인 → `apply=true` | 그 뒤에 새로 만든 정의는 안 지운다 |
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
@@ -396,6 +399,64 @@ CAE · 제품 개발의 「무엇에서 만들어졌나」(도면 → 메시 →
 
 기록 타입(`usage="log"`)은 후보로 보이되 제안하지 않는다(`ref_note` 가 말한다). 원 표(부서 · 계정)는
 늘 본다.
+
+### 키 · slug 바꾸기 — `ontology_rename(kind, slug, to, key=)`
+
+AI 가 처음 만든 키(`w`) · slug(`part2`)가 굳으면 화면 주소 · MCP 인자 · 내보내기 · SPARQL 에 그대로
+남는다. **보이는 이름(label)** 만 바꾸려면 `ontology_import` 로 label 을 고친다 — 이 도구는 키 · slug
+자체다(ADR 0093). 시스템 관리자만.
+
+- `kind="property"`(`key` 필수) · `kind="type"`. 기본(`apply=false`)은 계획이다:
+  - `places` — 바뀌는 자리와 건수: 객체 값, 속성 정의, 타입 화면 설정(열 · 정렬 · 트리 · 롤업 ·
+    앞머리 · 개정 칸), 저장된 뷰 · 지표 · 장표 틀의 주소(`ref.vendor.country` · `in.part:vendor` 처럼
+    다른 타입을 지나는 것까지), 데이터 소스 칸 대응, 뜻으로 찾기 대상, 그래프 지도; slug 면 참조
+    속성의 대상 · 관계 종류의 끝 · 원 표와 맺은 관계 · 못 찾은 말 · 웹훅 · 검토함 · 알림 링크.
+  - `warnings` — **바꾸지 않는 바깥 자리**: `.env` 의 칸 목록, 정제 키트의 정의 · 칸 대응, 원천
+    (datarelay) 레시피, MCP · 스크립트가 옛 이름으로 부르는 곳, 공개 타입의 수신 시스템, 문서 본문의
+    링크. 「바꾼 뒤에도 깨집니다」 줄은 자동으로 못 바꾼 뷰 · 지표다.
+  - `errors` — 막는 것: 문서 · 파일 속성, 공통 속성(인터페이스에서), 원천이 잠근 정의, 원 표 타입,
+    확장이 쓰는 타입, RA 보고서 틀 칸, 이미 있는 이름 · 예전에 삭제한 속성의 값이 남은 키, 그 타입을
+    쥔 작업.
+- 계획을 사람에게 보이고(특히 `warnings` 의 바깥 자리) 확인받은 뒤 `apply=true`. 공개 타입이면
+  `core_consumers` 를 보이고 `accept_core=true`. 적용 직전 정의는 스냅샷으로 남는다.
+- 값이 있는 객체가 2만 건을 넘는 키 변경은 **작업**이 된다 — `result` 가 계획, 확인 뒤 `job_apply`.
+- 객체의 바뀐 때(`updated_at`)는 그대로고 계보 선도 낡지 않는다. 이력은 바꾸기 전 기록도 새 키로
+  보인다.
+- **적용 뒤에는 새 이름으로 부른다.** 옛 slug 로 부르면 「slug 가 … 로 바뀌었습니다」 가 온다.
+
+### 정의 제안 — `ontology_propose(schema, note=, origin_ref=, source=)`
+
+정의를 **적용 대신 제안**한다(ADR 0096). 시스템 관리자가 아니어도 낸다(토큰은 `objects:write`) — 관리자가
+검토함 「정의 제안」 에서 계획을 읽고 적용 · 거절한다. `ontology_import` 가 403(권한 · `ontology:write` 없음)이면
+이 길이다. 관리자라도 **문서에서 뽑은 정의처럼 다른 사람이 확인해야 할 것**은 제안으로 낸다.
+
+- `schema` 는 `ontology_import` 와 같다. `note` 에 근거(「공급 계약서 3건에서 협력사 · 국가가 반복」),
+  `origin_ref` 에 근거 문서 — 검토자가 읽는 것은 이것뿐이다.
+- 응답의 `plan` 이 그 자리에서 센 계획이다. **`plan.similar` 가 있으면 내기 전에 사람에게 묻는다** — 같은
+  개념이 이미 있으면 그 타입에 넣도록 고쳐 다시 낸다(다시 내면 새 제안, 같은 계획이면 있는 것).
+- 계획에 오류가 있거나 바뀌는 것이 없으면 ONTOLOGY-0107 — 고쳐서 다시. 한 사람이 열어 둘 수 있는 제안은 50건.
+- 결과는 `ontology_proposals(status=)` — `accepted`(적용, `snapshot_id`) · `rejected`(`decision_note` 가 까닭) ·
+  `proposed`(기다림). 적용 · 거절 · 「다시 셈」 은 사람이 검토함에서 한다 — 도구로 하지 않는다.
+- 적용은 관리자가 고른 때의 정의로 다시 센 계획이 **제안 때와 같을 때만** 된다. 그새 정의가 바뀌었으면 관리자가
+  「다시 셈」 해 새 계획을 읽고 다시 고른다.
+
+### 타입 합치기 — `ontology_move(slug, to, mapping=, merge_duplicates=)`
+
+같은 개념이 두 타입에 갈렸을 때(정의 가져오기의 `similar` · `ontology_check` 가 찾는다) 원 타입 `slug` 의 객체
+전부(지운 것 포함)를 대상 `to` 로 옮긴다(ADR 0094). **객체 id 가 그대로**라 참조 칸 · 관계 · 별칭 · 첨부 · 이력이
+따라온다. 시스템 관리자만.
+
+- 계획의 `fields` 가 칸 대응이다: `same`(대상의 같은 키) · `map`(대상의 다른 키 — 같은 이름이면 고른다) ·
+  `create`(대상에 정의를 베껴 새로) · `drop`(버림). 바꾸려면 `mapping={"원 키": "대상 키" | null}`.
+  **버림(null)은 사람이 정한 것만** — 값이 사라지고 되돌릴 수 없다.
+- `blocked` 인 칸 — 모양(종류 · 단위 · 값 하나/여러 값 · 가리키는 타입)이 다르거나 대상의 선택 값에 없는 값.
+  짐작해 버리지 말고 사람에게 보인다. 맞추는 길은 `ontology_retype`(값을 변환) · 대상의 선택 값 추가.
+- 대상에 **같은 식별자의 객체**가 있으면 막힌다. 같은 것이면 사람에게 확인받아 `merge_duplicates=true` — 옮긴
+  뒤 대상의 객체로 병합한다(참조 · 관계 · 별칭이 따라간다). 서로 다른 객체가 같은 별칭을 쓰면 막힌다.
+- 이 타입을 가리키던 참조 속성과 관계 종류의 끝은 대상으로 바뀐다. 원 타입에 걸린 뷰 · 지표 · 장표 틀 · 데이터
+  소스는 남는다(`warnings`) — 데이터 소스가 넣는 중이면 막힌다(다음 동기화가 다시 만든다).
+- 원 타입은 **빈 채로** 남는다 — 정리는 `ontology_delete("type", slug)` 미리 보기로.
+- 옮길 객체가 2만 건을 넘으면 작업이 된다 — `result` 가 계획, 확인 뒤 `job_apply`.
 
 ### 지우기 — `ontology_delete(kind, slug, key=)`
 

@@ -30,14 +30,17 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -615,3 +618,78 @@ class OntologySnapshot(Base):
 
     schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """그 시점의 그룹·타입·속성·관계 종류 전부."""
+
+
+#: 정의 제안의 상태(ADR 0096). 열린 것은 `proposed` 하나 — 나머지는 이력이다.
+PROPOSAL_STATUSES = ("proposed", "accepted", "rejected", "withdrawn")
+
+
+class OntologyProposal(Base):
+    """**정의 제안** — 적용 대신 쌓아 두고 시스템 관리자가 검토함에서 적용 · 거절한다
+    (ADR 0096).
+
+    바깥 AI 가 문서에서 뽑은 정의를 곧바로 넣으면 확인은 그 대화창의 한 사람뿐이다. 제안은
+    보낸 정의(`schema` — 정의 가져오기의 본문)와 **그때의 계획**(`plan`)과 계획의 지문을 함께
+    남긴다. 적용은 지금 정의로 다시 센 계획의 지문이 같을 때만 한다 — 그새 정의가 바뀌었으면
+    「다시 셈」 으로 새 계획을 보인다. 적용은 정의 가져오기와 같은 길(스냅샷 · 감사)이다.
+    """
+
+    __tablename__ = "ontology_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('proposed', 'accepted', 'rejected', 'withdrawn')", name="status"
+        ),
+        # 검토함 · 홈 「남은 일」 — 열린 것을 오래된 것부터.
+        Index(
+            "ix_ontology_proposals_open",
+            "created_at",
+            postgresql_where=text("status = 'proposed'"),
+        ),
+        Index("ix_ontology_proposals_by", "proposed_by_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="proposed", server_default="proposed"
+    )
+    schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """보낸 정의 — 정의 가져오기(`POST /api/ontology/import`)의 본문 그대로."""
+    source: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    """원천 잠금의 이름(`managed_by`, ADR 0087) — 가져오기의 `source` 와 같다."""
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """마지막으로 센 계획 — 정의 가져오기 미리 보기의 응답 모양(바뀌는 것 · 경고 · 오류 ·
+    비슷한 정의)."""
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """`plan` 의 지문 — 적용할 때 다시 센 계획과 견준다."""
+    planned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    summary: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    """「타입 새로 2 · 속성 새로 12」 — 목록 · 검토함의 한 줄."""
+    note: Mapped[str] = mapped_column(Text, default="", server_default="")
+    """**근거** — 왜 이 정의인가(어느 문서에서 무엇을 보고)."""
+    origin_ref: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    """근거 문서 · 대화 — 짧은 글(파일 이름 · 주소)."""
+    tool: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """MCP 도구 이름(`X-SP-Tool`, ADR 0078) — 사람이 화면에서 냈으면 빈 값."""
+    token_name: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    """토큰으로 냈으면 그 토큰의 이름 — 사람이 낸 것과 기계가 낸 것을 가른다."""
+    proposed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("ontology_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    """적용 직전에 남긴 스냅샷 — 되돌릴 자리."""

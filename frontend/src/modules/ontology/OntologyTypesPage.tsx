@@ -255,6 +255,7 @@ export default function OntologyTypesPage() {
           interfaces={schema?.interfaces ?? []}
           relationTypes={schema?.relation_types ?? []}
           systemSources={schema?.system_sources ?? []}
+          types={schema?.types ?? []}
           onClose={() => setEditing(null)}
           onChanged={reload}
         />

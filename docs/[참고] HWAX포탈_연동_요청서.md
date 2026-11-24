@@ -208,6 +208,7 @@ platforms:
 # {{NAME}} 등 StandardPlatform 계열 — 원래 이름(접두어 없이). 인스턴스가 늘어도 이대로
 "objects_delete", "object_merge", "object_restore", "attachment_remove", "relation_remove",
 "ontology_delete", "ontology_restore", "ontology_retype", "ontology_rename_option",
+"ontology_rename", "ontology_move",
 "bulk_edit", "bulk_edit_undo", "bundle_undo", "job_apply", "job_cancel", "filestore_gc",
 "review_decide", "extension_call", "review_undo", "config_delete", "jobs_purge",
 ```

@@ -38,7 +38,10 @@ from app.modules.ontology import (
     interfaces,
     linking,
     managed,
+    move,
+    planview,
     quantity,
+    rename,
     reset,
     retype,
     revision,
@@ -67,7 +70,6 @@ from app.modules.ontology.models import (
     RelationType,
 )
 from app.modules.ontology.schemas import (
-    ChangeOut,
     CheckItemOut,
     DefinitionUnlockOut,
     DeleteBlockOut,
@@ -82,6 +84,9 @@ from app.modules.ontology.schemas import (
     InferColumnOut,
     InferOut,
     InterfaceUsageOut,
+    MoveFieldOut,
+    MoveOut,
+    MoveRequest,
     NavGroupNode,
     NavGroupOut,
     NavGroupPatchRequest,
@@ -108,6 +113,9 @@ from app.modules.ontology.schemas import (
     RelationTypeWriteRequest,
     RenameOptionOut,
     RenameOptionRequest,
+    RenameOut,
+    RenamePlaceOut,
+    RenameRequest,
     ResetItemOut,
     ResetPlanOut,
     ResetRequest,
@@ -116,8 +124,6 @@ from app.modules.ontology.schemas import (
     RetypeSampleOut,
     RetypeTypeOut,
     RetypeValueOut,
-    SimilarNearOut,
-    SimilarOut,
     SnapshotOut,
     SystemSourceOut,
 )
@@ -2671,6 +2677,382 @@ def run_retype_job(
     return body
 
 
+# --- 속성 키 · 타입 slug 바꾸기(ADR 0093) ------------------------------------------
+
+
+def _rename_out(
+    plan: rename.Plan, *, applied: bool, snapshot_id: uuid.UUID | None = None
+) -> RenameOut:
+    return RenameOut(
+        kind=plan.kind,
+        slug=plan.slug,
+        key=plan.key,
+        to=plan.to,
+        label=plan.label,
+        applied=applied,
+        objects=plan.objects,
+        places=[RenamePlaceOut(what=one.what, count=one.count) for one in plan.places],
+        warnings=plan.warnings,
+        errors=plan.errors,
+        core_consumers=plan.core_consumers,
+        snapshot_id=snapshot_id,
+        fingerprint=rename.fingerprint(plan),
+    )
+
+
+def _same_name(old: str, new: str) -> None:
+    if old == new:
+        raise InvalidValue(code("ONTOLOGY", 104), f"지금 이름과 같습니다: {old}")
+
+
+def _rename_property(
+    db: Session,
+    user: User,
+    slug: str,
+    key: str,
+    payload: RenameRequest,
+    *,
+    inline: bool = True,
+    before_apply: Callable[[rename.Plan], None] | None = None,
+    progress: rename.Progress = None,
+    job_id: uuid.UUID | None = None,
+) -> RenameOut:
+    owner = _type(db, slug)
+    prop = _property(db, slug, key)
+    to = require_key(payload.to)
+    _same_name(prop.key, to)
+    plan = rename.plan_property(
+        db, owner, prop, to, consumers=_core_consumers(db, owner), skip_job=job_id
+    )
+    if not payload.apply or plan.errors:
+        if not plan.errors:
+            large = prop.data_type == "object_ref" and plan.objects > rename.INLINE_OBJECTS
+            plan.warnings.extend(rename.residual(db, plan, large_ref=large))
+        db.rollback()
+        return _rename_out(plan, applied=False)
+    if inline and plan.objects > rename.INLINE_OBJECTS:
+        path = f"/api/ontology/types/{slug}/properties/{key}/rename-key"
+        raise Conflict(
+            code("ONTOLOGY", 105),
+            f"값이 있는 객체가 {rename.INLINE_OBJECTS:,}건을 넘습니다 — 키 변경을 작업으로 "
+            f"돌립니다(POST {path}/job). 계획을 본 뒤 적용합니다.",
+            details={"limit": rename.INLINE_OBJECTS, "job_path": f"{path}/job"},
+        )
+    if before_apply is not None:
+        before_apply(plan)
+    _require_core_accepted(db, owner, accepted=payload.accept_core, what="속성 키 변경")
+    old = prop.key
+    snapshot = _snapshot(db, user, reason=f"키 변경 직전: {slug}.{old}")
+    rename.apply_edits(db, plan)
+    rename.move_values(db, owner, old, to, total=plan.objects, progress=progress)
+    owner.updated_at = datetime.now(UTC)
+    # **이력이 이 기록을 읽는다**(`objects/history.py`) — 이 전의 값 기록은 새 키로 읽힌다.
+    record_audit(
+        db,
+        action="ontology.property.rename",
+        actor=user,
+        target_table="object_types",
+        target_id=owner.id,
+        target_label=f"{slug}.{old}",
+        changes={"from": old, "to": to, "objects": plan.objects},
+    )
+    db.commit()
+    return _rename_out(plan, applied=True, snapshot_id=snapshot.id)
+
+
+@router.post("/types/{slug}/properties/{key}/rename-key", response_model=RenameOut)
+def rename_property_key(
+    slug: str,
+    key: str,
+    payload: RenameRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RenameOut:
+    """**속성 키 변경**(ADR 0093) — 정의 · 객체 값 · 타입 화면 설정 · 저장된 뷰 · 지표 ·
+    장표 틀의 주소 · 데이터 소스 칸 대응 · 뜻으로 찾기 대상 · 그래프 지도 · 검토함의 기억을 한
+    번에 바꾼다.
+
+    `apply=false`(기본)면 계획: 바뀌는 자리와 건수(`places`), 바꿀 수 없는 바깥 자리와
+    바꾼 뒤에도 깨지는 뷰 · 지표(`warnings`), 막는 것(`errors` — 문서 · 파일 속성, 공통
+    속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 키 · 남은 저장값 …). 적용 직전 정의를
+    스냅샷으로 남긴다. 객체의 `updated_at` 은 그대로이고, 이력은 이 전의 기록을 새 키로 읽는다.
+    값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-105 — `…/rename-key/job` 으로 작업을 만든다."""
+    return _rename_property(db, user, slug, key, payload)
+
+
+@router.post(
+    "/types/{slug}/properties/{key}/rename-key/job", response_model=JobOut, status_code=202
+)
+def rename_property_key_job(
+    slug: str,
+    key: str,
+    payload: RenameRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """키 변경을 **작업으로** — 계획 작업을 만든다. 사람이 결과를 보고 `POST
+    /api/jobs/{id}/apply` 로 적용한다(그 사이 바뀌었으면 지문이 막는다)."""
+    _property(db, slug, key)
+    _same_name(key, require_key(payload.to))
+    job = job_services.enqueue(
+        db,
+        kind="ontology_rename",
+        params={
+            "slug": slug,
+            "key": key,
+            "request": payload.model_dump(mode="json", exclude={"apply"}),
+            "needs_scope": "ontology:write",
+        },
+        user=user,
+        workspace_id=None,
+        input_file=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
+
+
+def run_rename_job(
+    db: Session,
+    user: User,
+    params: dict[str, Any],
+    progress: rename.Progress,
+    *,
+    job_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """작업(`ontology_rename`)의 몸 — 화면과 **같은 함수**. 적용이면 미리 본 계획의 지문이 지금
+    계획과 같아야 쓴다."""
+    payload = RenameRequest(**params.get("request", {}), apply=bool(params.get("apply")))
+    wanted = params.get("fingerprint")
+
+    def guard(planned: rename.Plan) -> None:
+        if wanted and rename.fingerprint(planned) != wanted:
+            raise Conflict(
+                code("JOBS", 20),
+                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 바꿨습니다. 아무것도 바꾸지 "
+                "않았으니 다시 계획을 보고 적용하세요.",
+            )
+
+    result = _rename_property(
+        db,
+        user,
+        str(params.get("slug") or ""),
+        str(params.get("key") or ""),
+        payload,
+        inline=False,
+        before_apply=guard,
+        progress=progress,
+        job_id=job_id,
+    )
+    return result.model_dump(mode="json")
+
+
+def _move_out(
+    plan: move.Plan,
+    *,
+    applied: bool,
+    snapshot_id: uuid.UUID | None = None,
+    done: dict[str, int] | None = None,
+) -> MoveOut:
+    return MoveOut(
+        source=plan.source,
+        target=plan.target,
+        label=plan.label,
+        applied=applied,
+        objects=plan.objects,
+        live=plan.live,
+        duplicates=plan.duplicates,
+        fields=[MoveFieldOut(**dataclasses.asdict(one)) for one in plan.fields],
+        places=[RenamePlaceOut(what=one.what, count=one.count) for one in plan.places],
+        warnings=plan.warnings,
+        errors=plan.errors,
+        core_consumers=plan.core_consumers,
+        snapshot_id=snapshot_id,
+        moved=(done or {}).get("moved", 0),
+        merged=(done or {}).get("merged", 0),
+        fingerprint=move.fingerprint(plan),
+    )
+
+
+def _move_type(
+    db: Session,
+    user: User,
+    slug: str,
+    payload: MoveRequest,
+    *,
+    inline: bool = True,
+    before_apply: Callable[[move.Plan], None] | None = None,
+    progress: rename.Progress = None,
+    job_id: uuid.UUID | None = None,
+) -> MoveOut:
+    source = _type(db, slug)
+    target = _type(db, payload.to)
+    plan = move.plan(
+        db,
+        source,
+        target,
+        mapping=payload.mapping,
+        merge_duplicates=payload.merge_duplicates,
+        consumers=_core_consumers(db, source),
+        skip_job=job_id,
+    )
+    if not payload.apply or plan.errors:
+        db.rollback()
+        return _move_out(plan, applied=False)
+    if inline and plan.objects > move.INLINE_OBJECTS:
+        path = f"/api/ontology/types/{slug}/move"
+        raise Conflict(
+            code("ONTOLOGY", 106),
+            f"옮길 객체가 {move.INLINE_OBJECTS:,}건을 넘습니다 — 작업으로 돌립니다(POST "
+            f"{path}/job). 계획을 본 뒤 적용합니다.",
+            details={"limit": move.INLINE_OBJECTS, "job_path": f"{path}/job"},
+        )
+    if before_apply is not None:
+        before_apply(plan)
+    _require_core_accepted(db, source, accepted=payload.accept_core, what="객체 옮기기")
+    snapshot = _snapshot(db, user, reason=f"옮기기 직전: {source.slug} → {target.slug}")
+    done = move.apply(db, user, source, target, plan, progress=progress)
+    now = datetime.now(UTC)
+    for row in (source, target):
+        row.updated_at = now
+    # **이력이 이 기록을 읽는다**(`objects/history.py`) — 옮기기 전의 값 기록은 대상의
+    # 키로 읽힌다.
+    record_audit(
+        db,
+        action="ontology.type.move",
+        actor=user,
+        target_table="object_types",
+        target_id=target.id,
+        target_label=f"{source.slug} → {target.slug}",
+        changes={"from": source.slug, "to": target.slug, "keys": plan.keys, **done},
+    )
+    db.commit()
+    return _move_out(plan, applied=True, snapshot_id=snapshot.id, done=done)
+
+
+@router.post("/types/{slug}/move", response_model=MoveOut)
+def move_type_objects(
+    slug: str,
+    payload: MoveRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> MoveOut:
+    """**객체를 다른 타입으로 옮기기 · 타입 합치기**(ADR 0094) — 객체 id 를 그대로 둔 채 타입을
+    바꾼다. 참조 칸 · 관계 · 첨부 · 문서 · 이력은 id 로 이어져 따라온다.
+
+    `apply=false`(기본)면 계획: 칸 대응(`fields` — 같은 키 · 다른 키 · 새로 만들기 ·
+    버림, 값 건수, 막는 까닭), 바뀌는 자리(`places`), 원 타입에 남는 것 · 빌 필수
+    칸(`warnings`), 막는 것(`errors` — 모양이 다른 칸 · 겹치는 식별자(`merge_duplicates` 로
+    병합) · 같은 별칭 · 식별자 정책 · 원천 잠금 · 데이터 소스가 넣는 중 …). 원 타입은 빈 채로
+    남는다 — 삭제는 삭제 미리 보기로. 옮길 객체가 2만 건을 넘으면 ONTOLOGY-106 —
+    `…/move/job`."""
+    return _move_type(db, user, slug, payload)
+
+
+@router.post("/types/{slug}/move/job", response_model=JobOut, status_code=202)
+def move_type_objects_job(
+    slug: str,
+    payload: MoveRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """옮기기를 **작업으로** — 계획 작업을 만든다. 결과를 보고 `POST /api/jobs/{id}/apply`."""
+    _type(db, slug)
+    _type(db, payload.to)
+    job = job_services.enqueue(
+        db,
+        kind="ontology_move",
+        params={
+            "slug": slug,
+            "type_slug": payload.to,
+            "request": payload.model_dump(mode="json", exclude={"apply"}),
+            "needs_scope": "ontology:write",
+        },
+        user=user,
+        workspace_id=None,
+        input_file=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
+
+
+def run_move_job(
+    db: Session,
+    user: User,
+    params: dict[str, Any],
+    progress: rename.Progress,
+    *,
+    job_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """작업(`ontology_move`)의 몸 — 화면과 같은 함수. 적용이면 지문이 같아야 쓴다."""
+    payload = MoveRequest(**params.get("request", {}), apply=bool(params.get("apply")))
+    wanted = params.get("fingerprint")
+
+    def guard(planned: move.Plan) -> None:
+        if wanted and move.fingerprint(planned) != wanted:
+            raise Conflict(
+                code("JOBS", 20),
+                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 바꿨습니다. 아무것도 바꾸지 "
+                "않았으니 다시 계획을 보고 적용하세요.",
+            )
+
+    result = _move_type(
+        db,
+        user,
+        str(params.get("slug") or ""),
+        payload,
+        inline=False,
+        before_apply=guard,
+        progress=progress,
+        job_id=job_id,
+    )
+    return result.model_dump(mode="json")
+
+
+@router.post("/types/{slug}/rename", response_model=RenameOut)
+def rename_type_slug(
+    slug: str,
+    payload: RenameRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RenameOut:
+    """**타입 slug 변경**(ADR 0093) — 정의 · 참조 속성의 대상 · 관계 종류의 끝 · 화면
+    설정의 트리 · 저장된 뷰 · 지표 · 장표 틀의 주소(`in.<slug>:<키>`) · 원 표와 맺은 관계 ·
+    못 찾은 말 · 웹훅 · 검토함 · 알림 링크를 한 번에 바꾼다. 객체는 id 로 타입을 가리켜
+    그대로다.
+
+    `apply=false`(기본)면 계획(`places` · `warnings` · `errors`). 외부 공개 타입은 주소
+    (`/api/core/<slug>`)가 바뀌므로 `accept_core`. 옛 주소(`/o/<옛 slug>`)로 열면 새 slug 를
+    안내한다."""
+    owner = _type(db, slug)
+    to = require_slug(payload.to, what="타입 slug")
+    _same_name(slug, to)
+    _refuse_reserved(to, what="타입")
+    plan = rename.plan_type(db, owner, to, consumers=_core_consumers(db, owner))
+    if not payload.apply or plan.errors:
+        if not plan.errors:
+            plan.warnings.extend(rename.residual(db, plan, large_ref=False))
+        db.rollback()
+        return _rename_out(plan, applied=False)
+    _require_core_accepted(db, owner, accepted=payload.accept_core, what="타입 slug 변경")
+    snapshot = _snapshot(db, user, reason=f"slug 변경 직전: {slug}")
+    rename.apply_edits(db, plan)
+    rename.type_side_tables(db, slug, to)
+    owner.updated_at = datetime.now(UTC)
+    record_audit(
+        db,
+        action="ontology.type.rename",
+        actor=user,
+        target_table="object_types",
+        target_id=owner.id,
+        target_label=slug,
+        changes={"from": slug, "to": to},
+    )
+    db.commit()
+    return _rename_out(plan, applied=True, snapshot_id=snapshot.id)
+
+
 def _promote_out(
     plan: codebook.PromotePlan, *, applied: bool, snapshot_id: uuid.UUID | None
 ) -> PromoteOut:
@@ -3173,34 +3555,7 @@ def _snapshot(db: Session, user: User, *, reason: str) -> OntologySnapshot:
     return importer.take_snapshot(db, user, reason=reason)
 
 
-def _plan_out(
-    prepared: importer.Plan,
-    *,
-    applied: bool,
-    snapshot_id: uuid.UUID | None,
-    found: similar.Found | None = None,
-) -> ImportPlanOut:
-    return ImportPlanOut(
-        applied=applied,
-        changes=[
-            ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields, via=c.via)
-            for c in prepared.changes
-        ],
-        warnings=prepared.warnings + (found.lines() if found else []),
-        errors=prepared.errors,
-        snapshot_id=snapshot_id,
-        similar=[
-            SimilarOut(
-                kind=one.kind,
-                slug=one.slug,
-                label=one.label,
-                shape=one.shape,
-                near=[SimilarNearOut(**dataclasses.asdict(near)) for near in one.near],
-            )
-            for one in (found.items if found else [])
-        ],
-        similar_meaning=found.meaning if found else "none",
-    )
+_plan_out = planview.plan_out
 
 
 @router.post("/infer", response_model=InferOut)
@@ -3347,13 +3702,7 @@ def import_schema(
     )
 
 
-#: 원천 잠금 없이 새 정의를 세운다는 경고 — 기계(토큰)가 부를 때만(ADR 0087).
-UNLOCKED_WARNING = (
-    "source 없이 새 정의({names})를 생성합니다 — 원천 잠금(managed_by)이 없어 화면 · 파일 · "
-    "MCP 로 누구나 수정할 수 있고, 원천이 다시 적재하면 사람이 수정한 값을 덮어씁니다. 원천 "
-    "시스템이 관리하는 정의면 source=<원천 이름>(묶음 가져오기의 source · 원천이 적재할 때 "
-    "쓰는 이름과 같게)으로 다시 보내세요. 이 설치에서 직접 관리할 정의면 그대로 두어도 됩니다."
-)
+UNLOCKED_WARNING = planview.UNLOCKED_WARNING
 
 
 def _unlocked(
@@ -3364,14 +3713,9 @@ def _unlocked(
     사람이 자기 정의를 만드는 것까지 경고하면 그 경고는 곧 안 읽힌다."""
     if source or getattr(request.state, "token_scopes", None) is None:
         return out
-    made = [
-        one.slug
-        for one in prepared.changes
-        if one.action == "create" and one.kind in ("type", "relation_type", "interface")
-    ]
-    if made:
-        shown = ", ".join(made[:5]) + (f" 외 {len(made) - 5}개" if len(made) > 5 else "")
-        out.warnings.append(UNLOCKED_WARNING.format(names=shown))
+    warning = planview.unlocked_warning(prepared)
+    if warning:
+        out.warnings.append(warning)
     return out
 
 

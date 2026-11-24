@@ -34,10 +34,14 @@ TOOLS = {
     "search",
     "ontology_schema",
     "ontology_import",
+    "ontology_propose",
+    "ontology_proposals",
     "table_infer",
     "table_build",
     "ontology_delete",
     "ontology_check",
+    "ontology_rename",
+    "ontology_move",
     "ontology_retype",
     "ontology_rename_option",
     "ontology_promote",
@@ -296,6 +300,75 @@ def test_미리_보기가_기본이다() -> None:
     assert seen[0].url.path == "/api/jobs"
     assert b'name="kind"' in seen[0].content and b"objects_import" in seen[0].content
     assert got["job_id"] == "j1" and "job_apply" in got["next"]
+
+
+def test_키_slug_바꾸기는_계획이_기본이고_값이_많으면_작업이_된다() -> None:
+    """ADR 0093 — 위험 도구(한 번의 적용이 여러 곳을 바꾼다)이고, 미리 보기가 기본이다."""
+    ctx = _ctx("Bearer t")
+    seen = _serve(lambda _r: httpx.Response(200, json={"applied": False, "places": []}))
+    asyncio.run(server.ontology_rename(ctx, "property", "part", "weight", key="w"))
+    assert seen[-1].url.path == "/api/ontology/types/part/properties/w/rename-key"
+    assert json.loads(seen[-1].content) == {
+        "to": "weight",
+        "apply": False,
+        "accept_core": False,
+    }
+    asyncio.run(server.ontology_rename(ctx, "type", "part2", "part", apply=True))
+    assert seen[-1].url.path == "/api/ontology/types/part2/rename"
+    assert json.loads(seen[-1].content)["apply"] is True
+    count = len(seen)
+    assert "error" in asyncio.run(server.ontology_rename(ctx, "property", "part", "x"))
+    assert "error" in asyncio.run(server.ontology_rename(ctx, "relation", "r", "x"))
+    assert len(seen) == count, "모르는 것은 보내지 않는다"
+    assert "ontology_rename" in server.DESTRUCTIVE_TOOLS
+
+    def big(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/rename-key"):
+            return httpx.Response(
+                409, json={"error": {"code": "APP-ONTOLOGY-0105", "message": "작업으로"}}
+            )
+        if request.url.path.endswith("/rename-key/job"):
+            return httpx.Response(202, json={"id": "j1", "status": "queued"})
+        return httpx.Response(200, json={"id": "j1", "status": "done", "result": {}})
+
+    seen = _serve(big)
+    got = asyncio.run(
+        server.ontology_rename(ctx, "property", "part", "weight", key="w", apply=True)
+    )
+    job = next(one for one in seen if one.url.path.endswith("/rename-key/job"))
+    assert json.loads(job.content)["apply"] is False, "작업은 늘 계획부터다"
+    assert got["job_id"] == "j1"
+
+
+def test_타입_옮기기는_계획이_기본이고_많으면_작업이_된다() -> None:
+    """ADR 0094 — 위험 도구, 미리 보기가 기본, 2만 건이 넘으면 계획 작업."""
+    ctx = _ctx("Bearer t")
+    seen = _serve(lambda _r: httpx.Response(200, json={"applied": False, "fields": []}))
+    asyncio.run(server.ontology_move(ctx, "vendor", "supplier", mapping={"w": "weight"}))
+    assert seen[-1].url.path == "/api/ontology/types/vendor/move"
+    assert json.loads(seen[-1].content) == {
+        "to": "supplier",
+        "mapping": {"w": "weight"},
+        "merge_duplicates": False,
+        "apply": False,
+        "accept_core": False,
+    }
+    assert "ontology_move" in server.DESTRUCTIVE_TOOLS
+
+    def big(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/move"):
+            return httpx.Response(
+                409, json={"error": {"code": "APP-ONTOLOGY-0106", "message": "작업으로"}}
+            )
+        if request.url.path.endswith("/move/job"):
+            return httpx.Response(202, json={"id": "j2", "status": "queued"})
+        return httpx.Response(200, json={"id": "j2", "status": "done", "result": {}})
+
+    seen = _serve(big)
+    got = asyncio.run(server.ontology_move(ctx, "vendor", "supplier", apply=True))
+    job = next(one for one in seen if one.url.path.endswith("/move/job"))
+    assert json.loads(job.content)["apply"] is False
+    assert got["job_id"] == "j2"
 
 
 def test_정의_점검은_읽기만_하고_한_종류로_좁힌다() -> None:
@@ -2655,3 +2728,32 @@ def test_Origin_만_다른_곳은_따로_적고_아무것도_안_적으면_검�
     off = server.transport_security({"MCP_HOST": "0.0.0.0"})
     assert off.enable_dns_rebinding_protection is False
     assert _verdict(off, "anything.example", origin="https://anything.example") == 200
+
+
+def test_정의_제안은_적용하지_않고_쌓는다() -> None:
+    """ADR 0096 — 관리자가 아니어도 낸다. 적용 · 거절은 검토함에서 사람이."""
+    seen = _serve(lambda _r: httpx.Response(201, json={"id": "p1", "status": "proposed"}))
+    asyncio.run(
+        server.ontology_propose(
+            _ctx("Bearer t"),
+            {"types": [{"slug": "vendor", "label": "협력사"}]},
+            note="계약서 3건",
+            origin_ref="계약서.docx",
+        )
+    )
+    assert seen[0].method == "POST" and seen[0].url.path == "/api/ontology/proposals"
+    body = json.loads(seen[0].content)
+    assert body == {
+        "schema": {"types": [{"slug": "vendor", "label": "협력사"}]},
+        "note": "계약서 3건",
+        "origin_ref": "계약서.docx",
+    }
+    assert "ontology_propose" not in server.DESTRUCTIVE_TOOLS
+
+    seen = _serve(lambda _r: httpx.Response(200, json=[]))
+    asyncio.run(server.ontology_proposals(_ctx("Bearer t"), status="rejected", mine=True))
+    assert seen[0].url.path == "/api/ontology/proposals"
+    assert seen[0].url.params["status"] == "rejected" and seen[0].url.params["mine"] == "true"
+    seen = _serve(lambda _r: httpx.Response(200, json={"id": "p1"}))
+    asyncio.run(server.ontology_proposals(_ctx("Bearer t"), proposal_id="p1"))
+    assert seen[0].url.path == "/api/ontology/proposals/p1"

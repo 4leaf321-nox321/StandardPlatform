@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
-import { Boxes, LayoutList, ListChecks, Radio, Shapes, Share2, Upload } from 'lucide-react'
+import { Boxes, Inbox, LayoutList, ListChecks, Radio, Shapes, Share2, Upload } from 'lucide-react'
 
 import { OntologyExportButton } from '@/modules/ontology/OntologyExportButton'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -83,6 +83,13 @@ const SECTIONS = [
     to: 'check',
     label: '정의 점검',
     icon: ListChecks,
+    count: () => undefined,
+  },
+  {
+    // **적용 대신 쌓인 정의**(ADR 0096) — 계획 전부를 읽는 자리. 적용 · 거절은 검토함에서.
+    to: 'proposals',
+    label: '정의 제안',
+    icon: Inbox,
     count: () => undefined,
   },
 ]

@@ -609,6 +609,70 @@ export interface DeletePlan {
   purge_deleted: number
 }
 
+/** 키 · slug 바꾸기의 계획 · 결과(ADR 0093) — 막는 것(`errors`)이 있으면 적용하지 않는다. */
+export interface RenameOut {
+  kind: 'property' | 'type'
+  slug: string
+  key: string | null
+  to: string
+  label: string
+  applied: boolean
+  /** 값을 옮길 객체 수(키) — 2만 건이 넘으면 작업으로. */
+  objects: number
+  /** 바뀌는 자리와 건수. */
+  places: { what: string; count: number }[]
+  /** 바꾸지 않는 바깥 자리 · 바꾼 뒤에도 깨지는 뷰 · 지표. */
+  warnings: string[]
+  errors: string[]
+  core_consumers: string[]
+  snapshot_id: string | null
+}
+
+/** 객체를 다른 타입으로 옮기기(ADR 0094)의 칸 대응 한 줄. */
+export interface MoveField {
+  source: string
+  label: string
+  target: string | null
+  /** `same` 대상의 같은 키 · `map` 다른 키 · `create` 대상에 새로 · `drop` 버림. */
+  action: 'same' | 'map' | 'create' | 'drop'
+  values: number
+  note: string
+  blocked: boolean
+}
+
+export interface MoveOut {
+  source: string
+  target: string
+  label: string
+  applied: boolean
+  objects: number
+  live: number
+  duplicates: number
+  fields: MoveField[]
+  places: { what: string; count: number }[]
+  warnings: string[]
+  errors: string[]
+  core_consumers: string[]
+  snapshot_id: string | null
+  moved: number
+  merged: number
+}
+
+export interface MoveRequest {
+  to: string
+  /** 원 키 → 대상 키(null 이면 버림). 적지 않은 키는 서버가 고른다. */
+  mapping: Record<string, string | null>
+  merge_duplicates: boolean
+  apply: boolean
+  accept_core: boolean
+}
+
+export interface RenameRequest {
+  to: string
+  apply: boolean
+  accept_core: boolean
+}
+
 /** 정의 점검의 한 줄 — 지우거나 묶을 **후보**(ADR 0092). 아무것도 안 바꾼다. */
 export interface CheckItem {
   kind:
@@ -675,6 +739,35 @@ export interface ResetPlan {
 /** 잠금을 푸는 정의의 종류 — API 의 경로 이름 그대로. */
 export type UnlockKind = 'types' | 'relation-types' | 'interfaces'
 
+/** 정의 제안(ADR 0096) — 적용 대신 쌓고, 시스템 관리자가 검토함에서 적용 · 거절한다. */
+export interface OntologyProposal {
+  id: string
+  status: 'proposed' | 'accepted' | 'rejected' | 'withdrawn'
+  status_label: string
+  /** 「타입 새로 2 · 속성 새로 12」. */
+  summary: string
+  source: string
+  /** 근거 — 왜 이 정의인가. */
+  note: string
+  origin_ref: string
+  /** MCP 도구 이름 — 화면에서 냈으면 빈 값. */
+  tool: string
+  token_name: string
+  proposed_by: string
+  created_at: string
+  planned_at: string
+  decided_by: string
+  decided_at: string | null
+  decision_note: string
+  snapshot_id: string | null
+  /** 마지막으로 센 계획 — 제안 때, 또는 「다시 셈」 때. */
+  plan: ImportPlan
+  fingerprint: string
+  created: boolean
+  replanned: boolean | null
+  review_link: string
+}
+
 export const ontologyApi = {
   /** **자기 설명적 스키마.** 화면도 MCP 도 이 하나를 읽는다. */
   schema: () => api.get<OntologySchema>('/ontology/schema'),
@@ -710,6 +803,24 @@ export const ontologyApi = {
   /** `purgeDeleted` — 지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했다(ADR 0008). */
   removeType: (slug: string, purgeDeleted = false) =>
     api.delete<void>(`/ontology/types/${slug}${purgeDeleted ? '?purge_deleted=true' : ''}`),
+  /** 속성 키 변경(ADR 0093) — 값이 있는 객체가 많으면 적용이 ONTOLOGY-0105, 작업으로. */
+  renameKey: (slug: string, key: string, body: RenameRequest) =>
+    api.post<RenameOut>(`/ontology/types/${slug}/properties/${key}/rename-key`, body),
+  renameKeyJob: (slug: string, key: string, body: RenameRequest) =>
+    api.post<Job>(`/ontology/types/${slug}/properties/${key}/rename-key/job`, body),
+  /** 타입 slug 변경(ADR 0093). */
+  renameType: (slug: string, body: RenameRequest) =>
+    api.post<RenameOut>(`/ontology/types/${slug}/rename`, body),
+  /** 객체를 다른 타입으로 옮기기(ADR 0094) — 많으면 적용이 ONTOLOGY-0106, 작업으로. */
+  moveType: (slug: string, body: MoveRequest) =>
+    api.post<MoveOut>(`/ontology/types/${slug}/move`, body),
+  proposals: (status: OntologyProposal['status'] | 'all' = 'proposed') =>
+    api.get<OntologyProposal[]>(`/ontology/proposals?status=${status}`),
+  replanProposal: (id: string) => api.post<OntologyProposal>(`/ontology/proposals/${id}/replan`),
+  withdrawProposal: (id: string) =>
+    api.post<OntologyProposal>(`/ontology/proposals/${id}/withdraw`),
+  moveTypeJob: (slug: string, body: MoveRequest) =>
+    api.post<Job>(`/ontology/types/${slug}/move/job`, body),
   /** 정의 점검 — 지우거나 묶을 후보(ADR 0092). 시스템 관리자. */
   check: () => api.get<OntologyCheck>('/ontology/check'),
   deletePlan: (kind: DeletePlan['kind'], slug: string, key?: string) =>

@@ -475,6 +475,90 @@ class OntologyCheckOut(BaseModel):
     notes: list[str]
 
 
+class RenameRequest(BaseModel):
+    """속성 키 · 타입 slug 바꾸기(ADR 0093) — `apply=false`(기본)면 계획만."""
+
+    to: str = Field(min_length=1, max_length=64)
+    apply: bool = False
+    accept_core: bool = False
+    """외부 공개 타입이면 수신 시스템에 통보했음을 확인 — 없으면 적용을 막는다."""
+
+
+class RenamePlaceOut(BaseModel):
+    what: str
+    count: int
+
+
+class RenameOut(BaseModel):
+    """이름을 바꾸면 **무엇이 바뀌고(`places`) · 무엇을 알아야 하고(`warnings`) · 무엇이 막나
+    (`errors`)**. 막는 것이 하나라도 있으면 적용하지 않는다."""
+
+    kind: str
+    """`property` · `type`."""
+    slug: str
+    key: str | None = None
+    to: str
+    label: str
+    applied: bool
+    objects: int
+    """값을 옮길 객체 수(속성) — 2만 건이 넘으면 작업으로(`…/rename-key/job`)."""
+    places: list[RenamePlaceOut]
+    warnings: list[str]
+    errors: list[str]
+    core_consumers: list[str] = Field(default_factory=list)
+    snapshot_id: uuid.UUID | None = None
+    fingerprint: str = ""
+    """계획의 지문 — 작업의 적용이 「미리 본 것과 같은가」 를 본다."""
+
+
+class MoveRequest(BaseModel):
+    """객체를 다른 타입으로 옮기기(ADR 0094) — `apply=false`(기본)면 계획만."""
+
+    to: str = Field(min_length=1, max_length=64)
+    """대상 타입 slug."""
+    mapping: dict[str, str | None] = Field(default_factory=dict)
+    """원 타입의 키 → 대상의 키(`null` 이면 그 값을 버린다). 적지 않은 키는 같은 키 → 같은
+    이름 → 새로 만들기 차례로 고른다."""
+    merge_duplicates: bool = False
+    """대상에 같은 식별자의 객체가 있으면 옮긴 뒤 그 객체로 병합한다."""
+    apply: bool = False
+    accept_core: bool = False
+
+
+class MoveFieldOut(BaseModel):
+    source: str
+    label: str
+    target: str | None
+    action: str
+    """`same` · `map` · `create` · `drop`."""
+    values: int
+    note: str
+    blocked: bool
+
+
+class MoveOut(BaseModel):
+    """옮기면 **무엇이 어디로 가고 · 무엇이 남고 · 무엇이 막나**."""
+
+    source: str
+    target: str
+    label: str
+    applied: bool
+    objects: int
+    """옮길 객체(지운 것 포함) — 2만 건이 넘으면 작업으로(`…/move/job`)."""
+    live: int
+    duplicates: int
+    """대상에 같은 식별자가 있는 객체."""
+    fields: list[MoveFieldOut]
+    places: list[RenamePlaceOut]
+    warnings: list[str]
+    errors: list[str]
+    core_consumers: list[str] = Field(default_factory=list)
+    snapshot_id: uuid.UUID | None = None
+    moved: int = 0
+    merged: int = 0
+    fingerprint: str = ""
+
+
 class ImplementPlanRequest(BaseModel):
     interface_slugs: list[str]
 
@@ -869,3 +953,52 @@ class ResetPlanOut(BaseModel):
 class ResetRequest(BaseModel):
     apply: bool = False
     confirm: str = ""
+
+
+# --- 정의 제안(ADR 0096) ------------------------------------------------------
+
+
+class ProposalRequest(BaseModel):
+    """정의를 **적용 대신 제안**한다 — 시스템 관리자가 검토함에서 적용 · 거절한다."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_: dict[str, Any] = Field(alias="schema")
+    """정의 가져오기(`POST /api/ontology/import`)의 본문 그대로."""
+    source: str = Field(default="", pattern=r"^([a-z][a-z0-9_-]{0,39})?$")
+    """원천 잠금의 이름 — 가져오기의 `source` 와 같다(ADR 0087)."""
+    note: str = Field(default="", max_length=4000)
+    """**근거** — 왜 이 정의인가(어느 문서에서 무엇을 보고). 검토자가 읽는다."""
+    origin_ref: str = Field(default="", max_length=300)
+    """근거 문서 · 대화 — 파일 이름 · 주소."""
+
+
+class ProposalOut(BaseModel):
+    id: uuid.UUID
+    status: str
+    """`proposed` · `accepted` · `rejected` · `withdrawn`."""
+    status_label: str
+    summary: str
+    """「타입 새로 2 · 속성 새로 12」."""
+    source: str
+    note: str
+    origin_ref: str
+    tool: str
+    """MCP 도구 이름 — 화면에서 냈으면 빈 값."""
+    token_name: str
+    proposed_by: str
+    created_at: datetime
+    planned_at: datetime
+    decided_by: str
+    decided_at: datetime | None
+    decision_note: str
+    snapshot_id: uuid.UUID | None
+    plan: ImportPlanOut
+    """마지막으로 센 계획 — 제안 때, 또는 「다시 셈」 때."""
+    fingerprint: str
+    created: bool = False
+    """이 요청이 새로 만들었나 — 같은 사람이 같은 계획을 또 내면 있는 것을 돌려준다(거짓)."""
+    replanned: bool | None = None
+    """「다시 셈」 의 응답에서 — 계획이 달라졌나."""
+    review_link: str = "/review?kind=definition_proposal"
+    """적용 · 거절하는 곳(시스템 관리자)."""

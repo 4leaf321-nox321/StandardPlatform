@@ -194,6 +194,8 @@ _contents: list[ContentProvider] = []
 _temporal: list[TemporalProvider] = []
 _attachment_owners: dict[str, AttachmentOwnerProvider] = {}
 _profile: list[Callable[[Session], list[ProfileFact]]] = []
+#: 확장이 코드 · 설정에서 slug · 키를 글자로 쓰는 타입 — slug → 까닭(ADR 0093).
+_type_guards: list[Callable[[Session], dict[str, str]]] = []
 
 
 # 셋 다 **같은 것을 두 번 넣어도 안전하다.** `create_app()` 은 시험에서 두 번
@@ -215,6 +217,23 @@ def register_profile_facts(provider: Callable[[Session], list[ProfileFact]]) -> 
     """플랫폼 자기소개의 자동 요약에 한 갈래를 더한다(ADR 0019)."""
     if provider not in _profile:
         _profile.append(provider)
+
+
+def register_type_guard(provider: Callable[[Session], dict[str, str]]) -> None:
+    """확장이 **글자로 쥔 타입**을 알린다 — `{slug: 까닭}`. 이름 바꾸기(속성 키 · 타입
+    slug)가 그 타입을 막는다(ADR 0093).
+
+    **등록하지 않으면 안 뜬다** — 확장이 `tools` 같은 키를 코드에 박아 두었는데 사람이 그 키를
+    바꾸면, 확장은 다음 부름에서야 빈 칸을 읽고 그 까닭은 아무 데도 안 남는다."""
+    if provider not in _type_guards:
+        _type_guards.append(provider)
+
+
+def guarded_types(db: Session) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for provider in _type_guards:
+        out.update(provider(db))
+    return out
 
 
 def count_text(n: int) -> str:

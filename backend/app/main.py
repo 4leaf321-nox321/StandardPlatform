@@ -62,6 +62,8 @@ from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.objects import watches as objects_watches
 from app.modules.ontology import profile as ontology_profile
+from app.modules.ontology import proposal_review as ontology_proposal_review
+from app.modules.ontology import proposal_routes as ontology_proposal_routes
 from app.modules.ontology import routes as ontology_routes
 from app.modules.rdf import routes as rdf_routes
 from app.modules.review import links as review_links
@@ -149,6 +151,8 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(coreapi_routes.router)
     # 메타모델과 그 객체. **도메인이 아니라 메커니즘이다**(ADR 0005) —
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
+    # 정의 제안(ADR 0096) — 정의 라우터와 경로가 겹치지 않지만 먼저 둔다(`/ontology/{…}`).
+    router.include_router(ontology_proposal_routes.router)
     router.include_router(ontology_routes.router)
     # 문서(ADR 0053) — 객체 라우터보다 먼저(`/{type}/{id}/…` 의 넓은 경로에 먹히지 않게).
     router.include_router(objects_documents.router)
@@ -244,9 +248,12 @@ def _register_extensions() -> None:
         *objects_review.PROVIDERS,
         *objects_lineage_review.PROVIDERS,
         *objects_proposal_review.PROVIDERS,
+        *ontology_proposal_review.PROVIDERS,
         *review_links.PROVIDERS,
     ):
         review_registry.register(provider)
+    # **정의 제안**(ADR 0096) — 적용할 수 있는 사람(시스템 관리자)의 홈에 수를 띄운다.
+    extensions.register_maintenance(ontology_proposal_review.maintenance)
     # **제안된 관계**(ADR 0042) — AI · 규칙이 남긴 것을 아무도 안 열면 영영 제안으로 남는다.
     # 확정할 수 있는 사람의 홈에 수를 띄우고, 누르면 검토함의 그 종류로 간다.
     extensions.register_maintenance(objects_proposals.maintenance)
@@ -296,6 +303,9 @@ def _register_extensions() -> None:
     # 데이터를 넣는 것과 무게가 다르다 — 한 범위로 묶으면 「객체만 넣게」 하려던
     # 토큰이 타입까지 지울 수 있다.
     scopes.register_write_scope("/api/ontology", "ontology:write")
+    # **정의 제안은 객체 범위다**(ADR 0096) — 정의를 바꾸지 않고 쌓기만 한다. `ontology:write`
+    # 가 없는 사람의 AI 도 제안을 낸다. 적용은 시스템 관리자가 검토함(`/api/review`)에서.
+    scopes.register_write_scope("/api/ontology/proposals", "objects:write")
     scopes.register_write_scope("/api/objects", "objects:write")
     # 묶음은 객체를 쓴다. 정의가 들면 라우트가 ontology:write 를 더 묻는다.
     scopes.register_write_scope("/api/bundles", "objects:write")

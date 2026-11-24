@@ -213,10 +213,26 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
     workspaces = _workspace_names(db, rows)
     hidden = _hidden_ends(db, viewer, rows)
     runs = _runs_of(db, row, rows)
+    # **키를 바꾼 속성**(ADR 0093) — 바꾸기 전의 기록은 옛 키로 적혀 있다. 거꾸로 가며
+    # 그 변경을 지날 때마다 옛 키 → 지금 키를 더해, 그 전 기록을 지금 키로 읽는다(값
+    # 기록은 고치지 않는다).
+    renames = _renames(db, row.type_id)
+    # **다른 타입에서 옮겨 온 객체**(ADR 0094) — 옮기기 전 기록(이름표 `<원 타입>:…`)은 원
+    # 타입의 키로 적혀 있다. 그 기록은 옮기기의 칸 대응으로 읽는다.
+    moves = _moves(db, row.type_id)
+    alias: dict[str, str] = {}
     out: list[Entry] = []
     for entry in reversed(rows):
         is_object = entry.target_table == "objects"
+        while renames and entry.created_at < renames[0][0]:
+            _, old, new = renames.pop(0)
+            alias[old] = alias.get(new, new)
         changes = entry.changes or {}
+        for at, origin, keys in moves:
+            if entry.created_at < at and (entry.target_label or "").startswith(f"{origin}:"):
+                changes = _translated(changes, keys)
+        if alias:
+            changes = _translated(changes, alias)
         snapshot: Snapshot | None = None
         if entry.action == "object.document":
             # 문서의 판 — 속성 값은 그대로라 그 시점의 값을 붙이지 않는다(눌러도 열 것이 없다).
@@ -327,6 +343,61 @@ def _runs_of(
             "trace_url": trace_url,
         }
     return out
+
+
+def _renames(db: Session, type_id: uuid.UUID) -> list[tuple[datetime, str, str]]:
+    """그 타입의 속성 키 변경(`ontology.property.rename`) — 최근 것이 앞."""
+    rows = db.execute(
+        select(AuditEntry.created_at, AuditEntry.changes)
+        .where(
+            AuditEntry.action == "ontology.property.rename",
+            AuditEntry.target_table == "object_types",
+            AuditEntry.target_id == type_id,
+        )
+        .order_by(AuditEntry.created_at.desc(), AuditEntry.id.desc())
+    )
+    return [
+        (at, str(changes["from"]), str(changes["to"]))
+        for at, changes in rows
+        if isinstance(changes, dict) and changes.get("from") and changes.get("to")
+    ]
+
+
+def _moves(db: Session, type_id: uuid.UUID) -> list[tuple[datetime, str, dict[str, str]]]:
+    """이 타입으로 옮겨 온 것(`ontology.type.move`) — (때, 원 타입, 원 키 → 대상 키)."""
+    rows = db.execute(
+        select(AuditEntry.created_at, AuditEntry.changes).where(
+            AuditEntry.action == "ontology.type.move",
+            AuditEntry.target_table == "object_types",
+            AuditEntry.target_id == type_id,
+        )
+    )
+    out: list[tuple[datetime, str, dict[str, str]]] = []
+    for at, changes in rows:
+        if not isinstance(changes, dict) or not changes.get("from"):
+            continue
+        keys = {
+            str(src): str(dst)
+            for src, dst in (changes.get("keys") or {}).items()
+            if isinstance(dst, str)
+        }
+        out.append((at, str(changes["from"]), keys))
+    return out
+
+
+def _translated(changes: dict[str, Any], alias: dict[str, str]) -> dict[str, Any]:
+    """속성 기록의 옛 키를 지금 키로 — `before` · `after` 의 칸과 `keys` 목록."""
+    prop = changes.get("properties")
+    if not isinstance(prop, dict):
+        return changes
+    moved: dict[str, Any] = dict(prop)
+    for side in ("before", "after"):
+        values = prop.get(side)
+        if isinstance(values, dict):
+            moved[side] = {alias.get(key, key): value for key, value in values.items()}
+    if isinstance(prop.get("keys"), list):
+        moved["keys"] = [alias.get(key, key) for key in prop["keys"]]
+    return {**changes, "properties": moved}
 
 
 def _properties_before(now: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:

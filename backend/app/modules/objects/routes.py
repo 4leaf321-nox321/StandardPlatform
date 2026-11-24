@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, NoReturn
 
 from fastapi import (
     APIRouter,
@@ -208,7 +208,7 @@ from app.modules.objects.services import (
     require_refs_exist,
     require_unique_properties,
 )
-from app.modules.ontology import datascope, managed
+from app.modules.ontology import datascope, managed, rename
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
@@ -249,15 +249,21 @@ def _type(db: Session, slug: str) -> ObjectType:
                 "가져오기 · 트리 · 저장된 뷰는 구현 타입의 목록에서 하세요.",
                 details={"interface": slug},
             )
-        raise NotFound(code("OBJECTS", 10), f"타입을 찾을 수 없습니다: {slug}")
+        _type_not_found(db, slug)
     return row
+
+
+def _type_not_found(db: Session, slug: str) -> NoReturn:
+    """없는 타입 — slug 를 바꾼 것이면 새 slug 를 말한다(ADR 0093, 옛 주소 · 북마크)."""
+    message, details = rename.not_found_message(db, slug)
+    raise NotFound(code("OBJECTS", 10), message, details=details or None)
 
 
 def _scope(db: Session, slug: str) -> Scope:
     """읽기의 범위 — 타입이면 그 타입, 인터페이스면 구현 타입 전부(ADR 0006)."""
     found = scopes.find(db, slug)
     if found is None:
-        raise NotFound(code("OBJECTS", 10), f"타입을 찾을 수 없습니다: {slug}")
+        _type_not_found(db, slug)
     return found
 
 

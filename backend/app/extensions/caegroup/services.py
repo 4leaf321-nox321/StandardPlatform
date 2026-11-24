@@ -1956,6 +1956,20 @@ def capacity_bulk(
     return results
 
 
+def held_types(db: Session) -> dict[str, str]:
+    """이 확장이 글자로 쥔 타입(ADR 0093) — 설정의 시험 항목 · 시뮬레이션과 도구 · 부서 타입.
+    설정 줄이 없으면 만들지 않는다(읽기만)."""
+    row = db.get(CaeDtSetting, 1)
+    slugs = {TOOL_SLUG, DEPT_SLUG, SIM_ONLY_SLUG}
+    if row is not None:
+        slugs |= {one for one in (row.subject_type_slug, row.agent_type_slug) if one}
+    reason = (
+        "확장 caegroup(디지털 트윈 역량)이 설정 · 코드에서 이 타입의 slug 와 키를 씁니다 — "
+        "바꾸면 확장이 빈 칸을 읽습니다. 확장 설정을 먼저 바꾸십시오."
+    )
+    return {slug: reason for slug in slugs}
+
+
 def maintenance(db: Session, user: User) -> list[extension_points.MaintenanceItem]:
     """홈의 「남은 일」 — **대시보드를 열어야만 보이는 자료는 안 채워진다.**
 

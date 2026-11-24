@@ -19,6 +19,7 @@ import { useState } from 'react'
 import { ontologyApi } from '@/modules/ontology/api'
 import { isDetached } from '@/modules/ontology/kinds'
 import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
+import { RenameDialog } from '@/modules/ontology/RenameDialog'
 import { RetypeDialog, retypeChoices } from '@/modules/ontology/RetypeDialog'
 import type { DataType, ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -119,6 +120,18 @@ export function PropertyEditDialog({
             ? '문서 속성은 본문이 문서 표에 있어 종류를 변경하지 않습니다.'
             : '파일 속성은 값이 첨부라 종류를 변경하지 않습니다.'
           : null
+  /** 키 변경을 못 하는 까닭(ADR 0093) — 공통 속성 · 원천 잠금 · 문서 · 파일, 인터페이스 쪽. */
+  const renameBlocked: string | null = !property
+    ? null
+    : isInterface
+      ? '공통 속성의 키는 지금은 변경하지 않습니다 — 구현 타입 전부의 저장값이 함께 바뀌어야 합니다.'
+      : locked
+        ? `인터페이스 ${boundTo} 의 공통 속성이라 키를 여기서 변경하지 않습니다.`
+        : owner.row.managed_by
+          ? `${owner.row.managed_by} 가 관리하는 정의라 여기서 변경하지 않습니다.`
+          : property.data_type === 'document' || property.data_type === 'file'
+            ? '문서 · 파일 속성의 키는 첨부 · 판 표가 쥐고 있어 변경하지 않습니다.'
+            : null
 
   const [key, setKey] = useState(property?.key ?? '')
   const [label, setLabel] = useState(property?.label ?? '')
@@ -149,6 +162,7 @@ export function PropertyEditDialog({
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [retyping, setRetyping] = useState(false)
+  const [renaming, setRenaming] = useState(false)
   /** 바깥에 열린 타입이면 **누가 읽을 수 있는지** — 아무도 안 쓴다고 여기고 누르지 않게. */
   const [opened, setOpened] = useState<string[] | null>(null)
   const [usage, setUsage] = useState<number | null>(null)
@@ -266,15 +280,31 @@ export function PropertyEditDialog({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="prop-key">키</Label>
-                    <Input
-                      id="prop-key"
-                      value={key}
-                      readOnly={editing}
-                      disabled={editing}
-                      placeholder="vendor"
-                      className="font-mono"
-                      onChange={(event) => setKey(event.target.value)}
-                    />
+                    <div className="flex gap-2">
+                      <Input
+                        id="prop-key"
+                        value={key}
+                        readOnly={editing}
+                        disabled={editing}
+                        placeholder="vendor"
+                        className="font-mono"
+                        onChange={(event) => setKey(event.target.value)}
+                      />
+                      {editing && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={Boolean(renameBlocked)}
+                          title={renameBlocked ?? undefined}
+                          onClick={() => setRenaming(true)}
+                        >
+                          키 변경
+                        </Button>
+                      )}
+                    </div>
+                    {editing && renameBlocked && (
+                      <p className="text-muted-foreground text-xs">{renameBlocked}</p>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="prop-label">이름</Label>
@@ -651,6 +681,20 @@ export function PropertyEditDialog({
         </DialogContent>
       </Dialog>
 
+      {renaming && property && (
+        <RenameDialog
+          kind="property"
+          slug={owner.row.slug}
+          propertyKey={property.key}
+          label={`${owner.row.label} · ${property.label}`}
+          onDone={() => {
+            // 이 창이 들고 있는 정의는 옛 키다 — 「저장」 을 누르면 옛 키로 보낸다.
+            onChanged()
+            onClose()
+          }}
+          onClose={() => setRenaming(false)}
+        />
+      )}
       {retyping && property && (
         <RetypeDialog
           owner={owner}

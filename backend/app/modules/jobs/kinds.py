@@ -1180,6 +1180,31 @@ def ontology_retype(work: Work) -> dict[str, Any]:
     return ontology_routes.run_retype_job(work.db, user, work.params, work.progress)
 
 
+def ontology_rename(work: Work) -> dict[str, Any]:
+    """속성 키 변경 — 값이 있는 객체가 많은 타입(ADR 0093). 계획 → 사람 확정 → 적용.
+    화면과 **같은 함수**(`ontology.routes.run_rename_job`)를 부른다."""
+    user = _user(work)
+    if not user.is_system_admin:
+        raise Forbidden(code("JOBS", 21), "키 변경은 시스템 관리자만 합니다.")
+    from app.modules.ontology import routes as ontology_routes
+
+    return ontology_routes.run_rename_job(
+        work.db, user, work.params, work.progress, job_id=work.job.id
+    )
+
+
+def ontology_move(work: Work) -> dict[str, Any]:
+    """객체를 다른 타입으로 옮기기(ADR 0094) — 계획 → 사람 확정 → 적용. 화면과 같은 함수."""
+    user = _user(work)
+    if not user.is_system_admin:
+        raise Forbidden(code("JOBS", 21), "객체 옮기기는 시스템 관리자만 합니다.")
+    from app.modules.ontology import routes as ontology_routes
+
+    return ontology_routes.run_move_job(
+        work.db, user, work.params, work.progress, job_id=work.job.id
+    )
+
+
 def objects_rewrite(work: Work) -> dict[str, Any]:
     """병합 · 참조 비우고 지우기 — 가리키는 기록이 많은 객체(인기 모델은 10만 건). 요청 경로와
     같은 검사 · 같은 함수(`objects.routes.run_rewrite_job`)."""
@@ -1265,6 +1290,10 @@ register(Kind("objects_rewrite", "병합 · 참조 비우고 지우기", False, 
 register(
     Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype, admin_only=True)
 )
+register(
+    Kind("ontology_rename", "속성 키 변경", False, True, ontology_rename, admin_only=True)
+)
+register(Kind("ontology_move", "객체 옮기기", False, True, ontology_move, admin_only=True))
 register(Kind("relations_import", "관계 일괄 입력", True, True, relations_import, public=True))
 register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import))
 register(Kind("bundle_undo", "묶음 되돌리기", False, True, bundle_undo))

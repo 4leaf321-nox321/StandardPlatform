@@ -1351,6 +1351,64 @@ def test_정의_가져오기는_비슷한_정의를_싣고_정의_점검은_후�
     assert report["kinds"]["empty_type"] == "빈 타입"
 
 
+def test_키와_slug_는_계획을_보고_바꾸고_옛_slug_는_새_slug_를_말한다(bot: Bot) -> None:
+    """ADR 0093 — 기계가 사람에게 보일 계획을 받고, 적용 뒤에는 새 이름으로 부른다."""
+    kind = _part_type(bot)
+    bolt = bot.call(server.object_create, kind, label="볼트", properties={"w": "3"})
+    plan = bot.call(server.ontology_rename, "property", kind, "weight", key="w")
+    assert plan["applied"] is False and plan["objects"] == 1, plan
+    done = bot.call(server.ontology_rename, "property", kind, "weight", key="w", apply=True)
+    assert done["applied"] is True
+    got = bot.call(server.object_get, kind, bolt["id"])
+    assert got["object"]["properties"] == {"weight": "3"}
+
+    new_slug = _uniq("component")
+    bot.call(server.ontology_rename, "type", kind, new_slug, apply=True)
+    with pytest.raises(ToolError, match=new_slug):
+        bot.call(server.object_get, kind, bolt["id"])
+    assert bot.call(server.object_get, new_slug, bolt["id"])["object"]["label"] == "볼트"
+
+
+def test_같은_개념의_두_타입을_계획을_보고_합친다(bot: Bot) -> None:
+    """ADR 0094 — 칸 대응을 보고 옮긴다. 원 타입은 빈 채로 남는다."""
+    source, target = _part_type(bot), _part_type(bot)
+    bolt = bot.call(server.object_create, source, label="볼트", properties={"w": "3"})
+    plan = bot.call(server.ontology_move, source, target)
+    assert plan["applied"] is False and plan["errors"] == [], plan
+    assert {one["source"]: one["action"] for one in plan["fields"]}["w"] == "same"
+    done = bot.call(server.ontology_move, source, target, apply=True)
+    assert done["applied"] is True and done["moved"] == 1
+    got = bot.call(server.object_get, target, bolt["id"])
+    assert got["object"]["properties"] == {"w": "3"}
+
+
+def test_구성원의_AI_는_정의를_제안하고_결과를_본다(
+    client: TestClient, member: Signed, bot: Bot
+) -> None:
+    """ADR 0096 — `ontology:write` 없는 토큰으로 낸다. 도구는 적용하지 않는다."""
+    made = client.post(
+        "/api/auth/tokens",
+        json={"name": _uniq("proposer"), "scopes": ["read", "objects:write"]},
+        headers=member.headers,
+    )
+    assert made.status_code == 201, made.text
+    proposer = Bot(made.json()["token"])
+    slug = _uniq("vendor")
+    schema = {"types": [{"slug": slug, "label": "협력사", "key_policy": "optional"}]}
+    with pytest.raises(ToolError, match="ontology:write"):
+        proposer.call(server.ontology_import, schema, apply=True)
+    got = proposer.call(
+        server.ontology_propose, schema, note="계약서 3건", origin_ref="계약서.docx"
+    )
+    assert got["status"] == "proposed" and got["summary"] == "타입 새로 1", got
+    assert got["tool"] == "ontology_propose", "MCP 가 실은 도구 이름이 남는다"
+    listed = proposer.call(server.ontology_proposals)
+    assert [one["id"] for one in listed if one["id"] == got["id"]] == [got["id"]]
+    one = proposer.call(server.ontology_proposals, proposal_id=got["id"])
+    assert one["plan"]["changes"][0]["slug"] == slug
+    assert slug not in {t["slug"] for t in bot.call(server.ontology_schema)["types"]}
+
+
 def test_종류_변경은_사람이_정한_대체_값으로_적용된다(bot: Bot) -> None:
     kind = _part_type(bot)
     light = bot.call(server.object_create, kind, label="볼트", properties={"w": "1,200"})

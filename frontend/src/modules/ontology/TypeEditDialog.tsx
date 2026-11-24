@@ -15,6 +15,8 @@ import { useState } from 'react'
 
 import { ListViewEditor, prefixFields } from '@/modules/ontology/ListViewEditor'
 import { MapHubKeyField } from '@/modules/ontology/MapHubKeyField'
+import { MoveDialog } from '@/modules/ontology/MoveDialog'
+import { RenameDialog } from '@/modules/ontology/RenameDialog'
 import { SectionViewEditor } from '@/modules/ontology/SectionViewEditor'
 import { TypeDeleteDialog } from '@/modules/ontology/TypeDeleteDialog'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -71,6 +73,8 @@ interface Props {
   relationTypes: RelationType[]
   /** 투영이 비출 수 있는 원 표. 스키마가 준다 — 등록 안 된 표는 고를 수 없다. */
   systemSources?: SystemSource[]
+  /** 객체를 옮겨 갈 수 있는 타입(ADR 0094) — 없으면 「다른 타입으로 옮기기」 가 안 선다. */
+  types?: { slug: string; label: string; kind_class?: string }[]
   onClose: () => void
   onChanged: () => void
 }
@@ -81,9 +85,12 @@ export function TypeEditDialog({
   interfaces = [],
   relationTypes,
   systemSources = [],
+  types = [],
   onClose,
   onChanged,
 }: Props) {
+  /** 옮겨 갈 수 있는 타입 — 자기 자신과 원 표를 비추는 타입은 뺀다. */
+  const movable = types.filter((one) => one.slug !== type.slug && one.kind_class !== 'system')
   const [label, setLabel] = useState(type.label)
   const [icon, setIcon] = useState(type.icon || 'LayoutGrid')
   const [description, setDescription] = useState(type.description)
@@ -114,6 +121,8 @@ export function TypeEditDialog({
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [moving, setMoving] = useState(false)
 
   async function save() {
     setError(null)
@@ -195,10 +204,16 @@ export function TypeEditDialog({
                   </h3>
                   <div className="space-y-1.5">
                     <Label>slug</Label>
-                    <Input value={type.slug} readOnly disabled className="font-mono" />
+                    <div className="flex gap-2">
+                      <Input value={type.slug} readOnly disabled className="font-mono" />
+                      <Button type="button" variant="outline" onClick={() => setRenaming(true)}>
+                        slug 변경
+                      </Button>
+                    </div>
                     <p className="text-muted-foreground text-xs">
-                      <b>바꿀 수 없습니다.</b> 주소(<code>/o/{type.slug}</code>
-                      )와 관계·MCP 도구 이름이 여기 물려 있어, 바꾸면 그 셋이 조용히 어긋납니다.
+                      저장으로 바뀌지 않습니다. 주소(<code>/o/{type.slug}</code>)와 관계 · 뷰 ·
+                      지표의 주소 · MCP 인자가 여기 물려 있어 — 「slug 변경」 이 바뀌는 자리를 먼저
+                      보여 줍니다.
                     </p>
                   </div>
 
@@ -488,9 +503,16 @@ export function TypeEditDialog({
           </Tabs>
 
           <DialogFooter className="justify-between sm:justify-between">
-            <Button variant="ghost" onClick={() => setRemoving(true)} disabled={saving}>
-              삭제
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setRemoving(true)} disabled={saving}>
+                삭제
+              </Button>
+              {movable.length > 0 && type.kind_class !== 'system' && (
+                <Button variant="ghost" onClick={() => setMoving(true)} disabled={saving}>
+                  다른 타입으로 옮기기
+                </Button>
+              )}
+            </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={onClose} disabled={saving}>
                 취소
@@ -506,6 +528,30 @@ export function TypeEditDialog({
         </DialogContent>
       </Dialog>
 
+      {moving && (
+        <MoveDialog
+          type={type}
+          targets={movable}
+          onDone={() => {
+            onChanged()
+            onClose()
+          }}
+          onClose={() => setMoving(false)}
+        />
+      )}
+      {renaming && (
+        <RenameDialog
+          kind="type"
+          slug={type.slug}
+          label={type.label}
+          onDone={() => {
+            // 이 창이 들고 있는 정의는 옛 slug 다 — 닫고 다시 읽는다.
+            onChanged()
+            onClose()
+          }}
+          onClose={() => setRenaming(false)}
+        />
+      )}
       {removing && (
         <TypeDeleteDialog
           type={type}
