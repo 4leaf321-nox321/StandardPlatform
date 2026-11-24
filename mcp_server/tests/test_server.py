@@ -306,6 +306,8 @@ def test_지우기와_값까지_바꾸는_수정도_미리_보기가_기본이�
     asyncio.run(server.ontology_delete(ctx, "property", "part", key="w"))
     assert seen[-1].method == "GET" and seen[-1].url.path == "/api/ontology/delete-plan"
     assert dict(seen[-1].url.params) == {"kind": "property", "slug": "part", "key": "w"}
+    asyncio.run(server.ontology_delete(ctx, "property", "part", key="w", source="relay"))
+    assert seen[-1].method == "GET" and seen[-1].url.params["source"] == "relay"
 
     asyncio.run(server.ontology_retype(ctx, "equip", "maker", "enum", owner="interface"))
     assert seen[-1].url.path == "/api/ontology/interfaces/equip/properties/maker/retype"
@@ -349,6 +351,14 @@ def test_지우기와_값까지_바꾸는_수정도_미리_보기가_기본이�
     assert seen[-1].url.params["purge_deleted"] == "true"
     asyncio.run(server.ontology_delete(ctx, "group", "g", apply=True, purge_deleted=True))
     assert "purge_deleted" not in seen[-1].url.params
+
+    # 원천 이름은 계획 · 적용 둘 다에 실린다 — 잠금이 없는 묶음에는 안 싣는다(ADR 0090 보강).
+    asyncio.run(server.ontology_delete(ctx, "type", "part", apply=True, source="relay"))
+    assert seen[-1].url.params["source"] == "relay"
+    asyncio.run(server.ontology_delete(ctx, "group", "g", apply=True, source="relay"))
+    assert "source" not in seen[-1].url.params
+    asyncio.run(server.ontology_delete(ctx, "relation_type", "uses", apply=True))
+    assert "source" not in seen[-1].url.params
 
     # 모르는 것은 보내지 않는다 — 짐작해서 다른 자리로 보내면 엉뚱한 것이 지워진다.
     count = len(seen)

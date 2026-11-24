@@ -8,6 +8,8 @@ PLM 기준정보는 허브 플랫폼이 원천(PLM)에서 받아 쌍둥이 플�
   넣기 · 여럿 고치기 · 데이터 소스 동기화, 그 관계 종류의 줄, 정의(타입 · 속성 · 관계 종류 ·
   인터페이스) 고치기.
 - 막지 않는 것: 이 설치의 관계가 그 객체를 **가리키는 것**(참여 과제 · 근거 문서), 지켜보기.
+- 원천 자신은 연다: 그 원천의 이름(`source`)을 단 적재 · 삭제 표식(ADR 0090), 정의 삭제(같은
+  ADR 의 보강 — `DELETE …?source=`).
 """
 
 from __future__ import annotations
@@ -63,3 +65,30 @@ def require_definition_editable(row: ObjectType | RelationType | ObjectInterface
             f"{owner} 에서 고친 뒤 받으세요.",
             details={"managed_by": owner},
         )
+
+
+def require_definition_deletable(
+    row: ObjectType | RelationType | ObjectInterface, *, source: str = ""
+) -> None:
+    """정의(와 그 속성)를 지울 때 — **잠근 원천의 이름으로 부르면 지운다.**
+
+    원천이 보낸 정의는 그 원천만 고친다. 고치기는 다시 보내면 되지만, 지우기는 보내서 할 길이
+    없다 — 그래서 지우는 경로가 `source` 를 받는다(ADR 0090 보강). 이름이 다르거나 없으면 같은
+    오류로 막는다. 사람은 화면의 「잠금 해제」 로 푼 뒤 지운다."""
+    owner = owner_of(row)
+    if owner and owner != source:
+        raise Conflict(
+            code("ONTOLOGY", 82),
+            f"{row.label}은(는) {owner} 가 관리하는 정의라 여기서 삭제하지 않습니다 — "
+            f"{owner} 가 원천 이름(source)을 적어 삭제하거나, 시스템 관리자가 「잠금 해제」 "
+            "한 뒤 삭제하십시오.",
+            details={"managed_by": owner},
+        )
+
+
+def deleted_by_source(
+    row: ObjectType | RelationType | ObjectInterface, source: str
+) -> str | None:
+    """잠근 원천의 이름으로 지웠으면 감사 기록에 남길 까닭 — 잠금을 넘은 일이라 따로 적는다."""
+    owner = owner_of(row)
+    return f"원천({owner})의 이름으로 삭제" if owner and owner == source else None

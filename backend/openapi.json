@@ -6046,6 +6046,18 @@
               "title": "Purge Deleted"
             },
             "description": "지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했는지(ADR 0008)"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
           }
         ],
         "responses": {
@@ -6250,6 +6262,18 @@
               "type": "string",
               "title": "Slug"
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
           }
         ],
         "responses": {
@@ -6401,6 +6425,18 @@
               "type": "string",
               "title": "Slug"
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
           }
         ],
         "responses": {
@@ -6775,6 +6811,18 @@
               "type": "string",
               "title": "Key"
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
           }
         ],
         "responses": {
@@ -7101,6 +7149,18 @@
               "title": "Accept Core"
             },
             "description": "외부 공개 타입의 속성 삭제를 확인했는지 여부"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
           }
         ],
         "responses": {
@@ -7925,6 +7985,18 @@
               ],
               "title": "Key"
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다",
+              "default": "",
+              "title": "Source"
+            },
+            "description": "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
           }
         ],
         "responses": {
@@ -35048,6 +35120,11 @@
             "type": "integer",
             "title": "Purge Deleted",
             "default": 0
+          },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
           }
         },
         "type": "object",

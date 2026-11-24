@@ -216,3 +216,108 @@ def test_잠금을_풀면_사람이_지우고_원천이_다시_보내면_다시_
     bundle_import(client, admin, {**bundle, "source": SOURCE, "apply": True})
     types = client.get("/api/ontology/types", headers=admin.headers).json()
     assert next(one for one in types if one["slug"] == tool)["managed_by"] == SOURCE
+
+
+def _reason(db: Session, action: str, label: str) -> str | None:
+    return db.scalars(
+        select(AuditEntry.reason).where(
+            AuditEntry.action == action, AuditEntry.target_label == label
+        )
+    ).one()
+
+
+def test_정의_삭제는_잠근_원천의_이름으로_부르면_잠금을_넘고_다른_이름은_막는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """보강 — 정의 삭제 · 미리 보기가 `source` 를 받는다. 다른 막는 것은 그대로다."""
+    w = _world(client, admin)
+    tool, company, competes = w["tool"], w["company"], w["competes"]
+    plan = "/api/ontology/delete-plan"
+
+    # 이름 없이 · 다른 이름으로는 지금처럼 막는다 — 미리 보기가 잠근 원천을 싣는다.
+    for named in ({}, {"source": "other"}):
+        got = client.get(
+            plan, params={"kind": "type", "slug": tool, **named}, headers=admin.headers
+        )
+        body = got.json()
+        assert body["managed_by"] == SOURCE and body["allowed"] is False, body
+        assert body["blocking"][0]["code"].endswith("ONTOLOGY-0082")
+        assert "잠금 해제" in body["blocking"][0]["message"]
+    refused = client.delete(
+        f"/api/ontology/types/{company}/properties/country",
+        params={"source": "other"},
+        headers=admin.headers,
+    )
+    assert refused.status_code == 409 and "ONTOLOGY-0082" in refused.text, refused.text
+
+    # 원천의 이름이면 잠금은 넘지만 객체가 남은 타입은 그대로 막는다.
+    named = {"source": SOURCE}
+    body = client.get(
+        plan, params={"kind": "type", "slug": tool, **named}, headers=admin.headers
+    ).json()
+    assert [one["code"][-4:] for one in body["blocking"]] == ["0038"], body
+
+    # 속성은 주인 타입의 잠금을 본다.
+    dropped = client.delete(
+        f"/api/ontology/types/{company}/properties/country",
+        params=named,
+        headers=admin.headers,
+    )
+    assert dropped.status_code == 204, dropped.text
+    assert _reason(db, "ontology.property.delete", f"{company}.country") == (
+        f"원천({SOURCE})의 이름으로 삭제"
+    )
+
+    # 원천이 객체를 삭제 표식으로 먼저 지운다 — 그 뒤 지운 객체만 남으면 영구 삭제 확인과 함께.
+    graves = [
+        {"type_slug": tool, "key": "T-1", "action": "delete"},
+        {"type_slug": tool, "key": "T-2", "action": "delete"},
+        {"type_slug": company, "key": "C-1", "action": "delete"},
+    ]
+    edge = [{"type_slug": tool, "src": "T-1", "relation": competes, "dst": "T-2"}]
+    assert _graves(client, admin, graves, edge, apply=True)["applied"] is True
+    body = client.get(
+        plan, params={"kind": "type", "slug": tool, **named}, headers=admin.headers
+    ).json()
+    assert body["allowed"] is True and body["purge_deleted"] == 2, body
+    gone = client.delete(
+        f"/api/ontology/types/{tool}",
+        params={**named, "purge_deleted": "true"},
+        headers=admin.headers,
+    )
+    assert gone.status_code == 204, gone.text
+    assert _reason(db, "ontology.type.delete", tool) == (
+        f"원천({SOURCE})의 이름으로 삭제 · 지운 객체 2개 영구 삭제"
+    )
+
+    # 관계 종류도 — 맺힌 선은 툴과 함께 영구 삭제됐다.
+    blocked = client.delete(f"/api/ontology/relation-types/{competes}", headers=admin.headers)
+    assert blocked.status_code == 409 and "ONTOLOGY-0082" in blocked.text, blocked.text
+    removed = client.delete(
+        f"/api/ontology/relation-types/{competes}", params=named, headers=admin.headers
+    )
+    assert removed.status_code == 204, removed.text
+    assert _reason(db, "ontology.relation_type.delete", competes) == (
+        f"원천({SOURCE})의 이름으로 삭제"
+    )
+    slugs = {
+        one["slug"] for one in client.get("/api/ontology/types", headers=admin.headers).json()
+    }
+    assert tool not in slugs and company in slugs
+
+
+def test_잠금이_없는_정의는_원천_이름을_적어도_평소의_삭제와_같다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    hand = _make_type(client, admin, label="손으로 만든 타입")
+    plan = client.get(
+        "/api/ontology/delete-plan",
+        params={"kind": "type", "slug": hand, "source": SOURCE},
+        headers=admin.headers,
+    ).json()
+    assert plan["allowed"] is True and plan["managed_by"] == "", plan
+    gone = client.delete(
+        f"/api/ontology/types/{hand}", params={"source": SOURCE}, headers=admin.headers
+    )
+    assert gone.status_code == 204, gone.text
+    assert _reason(db, "ontology.type.delete", hand) is None

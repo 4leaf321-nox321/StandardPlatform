@@ -136,7 +136,14 @@ router = APIRouter(prefix="/ontology", tags=["ontology"])
 
 
 def _audit(
-    db: Session, user: User, *, action: str, table: str, row_id: uuid.UUID, label: str
+    db: Session,
+    user: User,
+    *,
+    action: str,
+    table: str,
+    row_id: uuid.UUID,
+    label: str,
+    reason: str | None = None,
 ) -> None:
     """**메타모델 변경도 감사 대상이다.** 속성 하나가 화면의 모양을 바꾸고, 값이
     안 보이게 만든다 — 그것이 언제 누구 손에 바뀌었는지 물을 자리가 있어야 한다."""
@@ -147,7 +154,15 @@ def _audit(
         target_table=table,
         target_id=row_id,
         target_label=label,
+        reason=reason,
     )
+
+
+#: 정의 삭제의 `source` — 잠근 원천이 제 정의를 지울 때(ADR 0090 보강).
+DELETE_SOURCE = (
+    "원천 이름 — 그 정의를 잠근 원천(`managed_by`)이 제 정의를 지울 때만 적는다. 같으면 원천 "
+    "잠금을 넘어 지우고 감사 기록에 남긴다. 다르면 지금처럼 막는다"
+)
 
 
 @dataclasses.dataclass
@@ -162,6 +177,8 @@ class _Deletion:
     """
 
     label: str
+    managed_by: str = ""
+    """잠근 원천(속성이면 그 주인의) — 미리 보기가 그대로 싣는다(ADR 0090 보강)."""
     blocking: list[AppError] = dataclasses.field(default_factory=list)
     removes: list[str] = dataclasses.field(default_factory=list)
     keeps: list[str] = dataclasses.field(default_factory=list)
@@ -774,9 +791,9 @@ def _check_type_choices(payload: ObjectTypeWriteRequest) -> None:
     require_choice(payload.usage, USAGES, what="축 · 기록")
 
 
-def _type_deletion(db: Session, row: ObjectType) -> _Deletion:
-    found = _Deletion(label=row.label)
-    found.check(lambda: managed.require_definition_editable(row))
+def _type_deletion(db: Session, row: ObjectType, *, source: str = "") -> _Deletion:
+    found = _Deletion(label=row.label, managed_by=managed.owner_of(row))
+    found.check(lambda: managed.require_definition_deletable(row, source=source))
     if row.core:
         # **끄는 것 자체가 알리는 행동이다.** 열린 채로 지우면 남의 동기화가 404 를 받고,
         # 그쪽은 그것이 「잠깐 장애」 인지 「없어진 것」 인지 구별할 수 없다.
@@ -934,6 +951,7 @@ def delete_type(
         default=False,
         description="지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했는지(ADR 0008)",
     ),
+    source: str = Query(default="", description=DELETE_SOURCE),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -948,8 +966,9 @@ def delete_type(
     타입을 RESTRICT 로 붙든다. 되돌릴 수 없으니 `purge_deleted` 로 확인을 받는다(ADR 0008).
     """
     row = _type(db, slug)
-    found = _type_deletion(db, row)
+    found = _type_deletion(db, row, source=source)
     found.require()
+    by_source = managed.deleted_by_source(row, source)
     doomed = found.doomed
     if doomed.objects and not purge_deleted:
         raise Conflict(
@@ -979,7 +998,15 @@ def delete_type(
             if doomed.objects
             else None
         ),
-        reason=f"지운 객체 {doomed.objects}개 영구 삭제" if doomed.objects else None,
+        reason=" · ".join(
+            one
+            for one in (
+                by_source,
+                f"지운 객체 {doomed.objects}개 영구 삭제" if doomed.objects else None,
+            )
+            if one
+        )
+        or None,
     )
     # 속성 정의는 FK 가 없다(가리키는 표가 둘이라 걸 수 없다) — 여기서 함께 지운다.
     # 안 지우면 같은 slug 로 타입을 다시 만들 때 **옛 속성이 되살아난다.**
@@ -1224,9 +1251,9 @@ def update_relation_type(
     return _relation_types_out(db, [row])[0]
 
 
-def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
-    found = _Deletion(label=row.label)
-    found.check(lambda: managed.require_definition_editable(row))
+def _relation_type_deletion(db: Session, row: RelationType, *, source: str = "") -> _Deletion:
+    found = _Deletion(label=row.label, managed_by=managed.owner_of(row))
+    found.check(lambda: managed.require_definition_deletable(row, source=source))
     # 선은 두 표에 있다 — 양끝이 객체면 `object_relations`, 한쪽이 원 표(계정 · 부서)면
     # `object_links`. 뒤쪽을 안 세서, 계정 → 과제 같은 관계 종류는 맺힌 선이 있어도 지워졌고
     # 그 선은 이름 없이 남았다(2026-10-08).
@@ -1269,6 +1296,7 @@ def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
 @router.delete("/relation-types/{slug}", status_code=204)
 def delete_relation_type(
     slug: str,
+    source: str = Query(default="", description=DELETE_SOURCE),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -1282,7 +1310,7 @@ def delete_relation_type(
     옛 속성이 되살아난다. 그 종류의 **제안된 관계**도 함께 지운다(ADR 0042 — 작업 거리다).
     """
     row = _relation_type(db, slug)
-    _relation_type_deletion(db, row).require()
+    _relation_type_deletion(db, row, source=source).require()
     _snapshot(db, user, reason=f"삭제 직전: 관계 종류 {slug}")
     _audit(
         db,
@@ -1291,6 +1319,7 @@ def delete_relation_type(
         table="relation_types",
         row_id=row.id,
         label=slug,
+        reason=managed.deleted_by_source(row, source),
     )
     db.query(PropertyDef).filter(
         PropertyDef.owner_kind == "relation", PropertyDef.owner_id == row.id
@@ -1506,9 +1535,9 @@ def interface_usage(
     return _interface_usage(db, slug)
 
 
-def _interface_deletion(db: Session, row: ObjectInterface) -> _Deletion:
-    found = _Deletion(label=row.label)
-    found.check(lambda: managed.require_definition_editable(row))
+def _interface_deletion(db: Session, row: ObjectInterface, *, source: str = "") -> _Deletion:
+    found = _Deletion(label=row.label, managed_by=managed.owner_of(row))
+    found.check(lambda: managed.require_definition_deletable(row, source=source))
     usage = _interface_usage(db, row.slug)
     blocking = [
         *(f"구현 타입 {one}" for one in usage.implementers),
@@ -1535,6 +1564,7 @@ def _interface_deletion(db: Session, row: ObjectInterface) -> _Deletion:
 @router.delete("/interfaces/{slug}", status_code=204)
 def delete_interface(
     slug: str,
+    source: str = Query(default="", description=DELETE_SOURCE),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -1545,7 +1575,7 @@ def delete_interface(
     정의도 함께 지운다 — **구현 타입의 속성은 남는다**(그 타입의 것이다).
     """
     row = _interface(db, slug)
-    _interface_deletion(db, row).require()
+    _interface_deletion(db, row, source=source).require()
     _snapshot(db, user, reason=f"삭제 직전: 인터페이스 {slug}")
     _audit(
         db,
@@ -1554,6 +1584,7 @@ def delete_interface(
         table="object_interfaces",
         row_id=row.id,
         label=slug,
+        reason=managed.deleted_by_source(row, source),
     )
     db.query(PropertyDef).filter(
         PropertyDef.owner_kind == "interface", PropertyDef.owner_id == row.id
@@ -1803,10 +1834,10 @@ def interface_property_usage(
 
 
 def _interface_property_deletion(
-    db: Session, owner: ObjectInterface, row: PropertyDef
+    db: Session, owner: ObjectInterface, row: PropertyDef, *, source: str = ""
 ) -> _Deletion:
-    found = _Deletion(label=f"{owner.label} · {row.label}")
-    found.check(lambda: managed.require_definition_editable(owner))
+    found = _Deletion(label=f"{owner.label} · {row.label}", managed_by=managed.owner_of(owner))
+    found.check(lambda: managed.require_definition_deletable(owner, source=source))
     found.removes.append("공통 속성 정의")
     if views.prune_field(owner.list_view or {}, row.key) != (owner.list_view or {}):
         found.removes.append("인터페이스 목록의 열")
@@ -1823,6 +1854,7 @@ def _interface_property_deletion(
 def delete_interface_property(
     slug: str,
     key: str,
+    source: str = Query(default="", description=DELETE_SOURCE),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -1830,7 +1862,7 @@ def delete_interface_property(
     타입에서 고칠 수 있다."""
     owner = _interface(db, slug)
     row = _interface_property(db, slug, key)
-    _interface_property_deletion(db, owner, row).require()
+    _interface_property_deletion(db, owner, row, source=source).require()
     _snapshot(db, user, reason=f"삭제 직전: 공통 속성 {slug}.{key}")
     owner.list_view = views.prune_field(owner.list_view or {}, key)
     _touch(owner)
@@ -1841,6 +1873,7 @@ def delete_interface_property(
         table="property_defs",
         row_id=row.id,
         label=f"{slug}.{key}",
+        reason=managed.deleted_by_source(owner, source),
     )
     db.delete(row)
     db.commit()
@@ -2704,9 +2737,11 @@ def property_usage(
     )
 
 
-def _property_deletion(db: Session, owner: ObjectType, row: PropertyDef) -> _Deletion:
-    found = _Deletion(label=f"{owner.label} · {row.label}")
-    found.check(lambda: managed.require_definition_editable(owner))
+def _property_deletion(
+    db: Session, owner: ObjectType, row: PropertyDef, *, source: str = ""
+) -> _Deletion:
+    found = _Deletion(label=f"{owner.label} · {row.label}", managed_by=managed.owner_of(owner))
+    found.check(lambda: managed.require_definition_deletable(owner, source=source))
     found.check(lambda: _refuse_bound(db, owner.slug, row.key, what="삭제하지 않습니다"))
     # 개정 칸이면 막는다(ADR 0041) — 지우면 그 타입을 원천으로 둔 파생물의 판정이 흔들린다.
     found.check(lambda: revision.require_not_revision(owner, row.key, what="삭제할"))
@@ -2737,11 +2772,11 @@ def _property_deletion(db: Session, owner: ObjectType, row: PropertyDef) -> _Del
 
     found.warnings.extend(retype.breaking(db, drop))
     field = f"properties.{row.key}"
-    for source in db.scalars(select(DataSource).where(DataSource.type_id == owner.id)):
-        columns = (source.mapping or {}).get("columns") or []
+    for feed in db.scalars(select(DataSource).where(DataSource.type_id == owner.id)):
+        columns = (feed.mapping or {}).get("columns") or []
         if any(isinstance(one, dict) and one.get("target") == field for one in columns):
             found.warnings.append(
-                f"데이터 소스 「{source.name}」 이 이 속성에 넣습니다 — 지운 뒤에는 그 열의 "
+                f"데이터 소스 「{feed.name}」 이 이 속성에 넣습니다 — 지운 뒤에는 그 열의 "
                 "대응을 고치세요(안 고치면 다음 동기화가 그 열을 넣을 곳이 없습니다)."
             )
     # 막지는 않는다 — 확인을 받는다(`accept_core`). 그 확인은 삭제 경로가 따로 묻는다.
@@ -2779,6 +2814,7 @@ def delete_property(
     accept_core: bool = Query(
         default=False, description="외부 공개 타입의 속성 삭제를 확인했는지 여부"
     ),
+    source: str = Query(default="", description=DELETE_SOURCE),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -2790,7 +2826,7 @@ def delete_property(
     """
     row = _property(db, slug, key)
     owner = _type(db, slug)
-    _property_deletion(db, owner, row).require()
+    _property_deletion(db, owner, row, source=source).require()
     _require_core_accepted(db, owner, accepted=accept_core, what="이 속성 삭제")
     _snapshot(db, user, reason=f"삭제 직전: 속성 {slug}.{key}")
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
@@ -2808,6 +2844,7 @@ def delete_property(
         table="property_defs",
         row_id=row.id,
         label=f"{slug}.{key}",
+        reason=managed.deleted_by_source(owner, source),
     )
     db.delete(row)
     db.commit()
@@ -3317,6 +3354,7 @@ def delete_plan(
     kind: DeleteKind,
     slug: str,
     key: str | None = None,
+    source: str = Query(default="", description=DELETE_SOURCE),
     _: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> DeletePlanOut:
@@ -3334,18 +3372,20 @@ def delete_plan(
     if kind == "group":
         found = _group_deletion(db, _group(db, slug))
     elif kind == "type":
-        found = _type_deletion(db, _type(db, slug))
+        found = _type_deletion(db, _type(db, slug), source=source)
     elif kind == "relation_type":
-        found = _relation_type_deletion(db, _relation_type(db, slug))
+        found = _relation_type_deletion(db, _relation_type(db, slug), source=source)
     elif kind == "interface":
-        found = _interface_deletion(db, _interface(db, slug))
+        found = _interface_deletion(db, _interface(db, slug), source=source)
     elif kind == "property":
         assert key is not None
-        found = _property_deletion(db, _type(db, slug), _property(db, slug, key))
+        found = _property_deletion(
+            db, _type(db, slug), _property(db, slug, key), source=source
+        )
     else:
         assert key is not None
         found = _interface_property_deletion(
-            db, _interface(db, slug), _interface_property(db, slug, key)
+            db, _interface(db, slug), _interface_property(db, slug, key), source=source
         )
     return DeletePlanOut(
         kind=kind,
@@ -3361,6 +3401,7 @@ def delete_plan(
         warnings=found.warnings,
         core_consumers=found.core_consumers,
         purge_deleted=found.doomed.objects,
+        managed_by=found.managed_by,
     )
 
 

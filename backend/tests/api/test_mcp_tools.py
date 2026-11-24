@@ -1314,6 +1314,28 @@ def test_정의_지우기는_미리_보기가_먼저고_지운_것은_스냅샷�
         bot.call(server.ontology_delete, "table", kind)
 
 
+def test_원천이_잠근_정의는_그_원천의_이름으로_지운다(bot: Bot) -> None:
+    """ADR 0090 보강 — 계획이 잠근 원천(`managed_by`)을 싣고, 같은 `source` 면 지운다."""
+    kind = _uniq("relayed")
+    bot.call(
+        server.ontology_import,
+        {"types": [{"slug": kind, "label": "받은 타입"}]},
+        apply=True,
+        source="relay-y",
+    )
+    plan = bot.call(server.ontology_delete, "type", kind)
+    assert plan["managed_by"] == "relay-y" and plan["allowed"] is False, plan
+    assert plan["blocking"][0]["code"].endswith("ONTOLOGY-0082")
+    with pytest.raises(ToolError, match="ONTOLOGY-0082"):
+        bot.call(server.ontology_delete, "type", kind, apply=True, source="relay-z")
+
+    named = bot.call(server.ontology_delete, "type", kind, source="relay-y")
+    assert named["allowed"] is True, named
+    gone = bot.call(server.ontology_delete, "type", kind, apply=True, source="relay-y")
+    assert gone["ok"] is True and "source=relay-y" in gone["message"]
+    assert kind not in {one["slug"] for one in bot.call(server.ontology_schema)["types"]}
+
+
 def test_종류_변경은_사람이_정한_대체_값으로_적용된다(bot: Bot) -> None:
     kind = _part_type(bot)
     light = bot.call(server.object_create, kind, label="볼트", properties={"w": "1,200"})

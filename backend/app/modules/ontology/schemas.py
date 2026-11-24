@@ -436,6 +436,9 @@ class DeletePlanOut(BaseModel):
     purge_deleted: int = 0
     """타입이 지운 객체만 남겼으면 그 수 — 0 이 아니면 함께 **영구 삭제**되고 되돌릴 수 없다.
     삭제 요청에 `purge_deleted=true` 를 함께 보내야 한다(ADR 0008)."""
+    managed_by: str = ""
+    """그 정의를 잠근 원천(속성이면 주인 타입 · 인터페이스의) — 비어 있으면 잠금이 없다. 그
+    원천이 제 정의를 지울 때는 `source` 에 같은 이름을 적는다(ADR 0090 보강)."""
 
 
 class ImplementPlanRequest(BaseModel):

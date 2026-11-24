@@ -1257,6 +1257,7 @@ async def ontology_delete(
     apply: bool = False,
     accept_core: bool = False,
     purge_deleted: bool = False,
+    source: str = "",
 ) -> Any:
     """정의 하나를 **지운다.** `kind` 는 `group`(묶음) · `type` · `interface` ·
     `relation_type` · `property`(타입의 속성) · `interface_property`(공통 속성) — 속성
@@ -1273,16 +1274,25 @@ async def ontology_delete(
     **영구 삭제**되고 되돌릴 수 없으니, `removes` 를 사람에게 보이고 확인받아
     `purge_deleted=True`(ADR 0008). 외부 공개 타입의 속성은 `core_consumers` 를 보이고
     통보를 확인받아 `accept_core=True`. 지우기 직전 정의는 스냅샷으로 남는다 — 되살리기는
-    `ontology_restore`(객체는 스냅샷에 없다)."""
+    `ontology_restore`(객체는 스냅샷에 없다).
+
+    **원천이 잠근 정의**(계획의 `managed_by` — datarelay · 허브)는 그 원천만 지운다. 그 원천이
+    제 정의를 치울 때(시험으로 보낸 것 · 연동을 끊은 것) `source="<그 원천 이름>"` 을 적으면
+    잠금을 넘어 지우고 감사 기록에 「원천(…)의 이름으로 삭제」 가 남는다 — 계획도 같은
+    `source` 로 본다. 이름이 다르면 지금처럼 막는다. **잠금을 넘으려고 원천 이름을 빌리지
+    않는다** — 원천이 아직 보내는 정의면 다음 적재가 되살린다. `managed_by` 를 사람에게 보이고
+    그 원천의 것을 치우는 일임을 확인받은 뒤에만 적는다. 그 타입의 객체는 원천의 삭제 표식
+    (`action: "delete"`)으로 먼저 지운다(`bundle_import`)."""
     if kind not in _DELETE_PATHS:
         return {"error": f"kind 는 {' · '.join(_DELETE_PATHS)} 중 하나입니다: {kind}"}
     if kind.endswith("property") and not key:
         return {"error": f"{kind} 를 지우려면 key(속성 키)가 있어야 합니다."}
+    named = {"source": source} if source and kind != "group" else {}
     if not apply:
-        asked = {"kind": kind, "slug": slug, **({"key": key} if key else {})}
+        asked = {"kind": kind, "slug": slug, **({"key": key} if key else {}), **named}
         return await _get(ctx, "/api/ontology/delete-plan", params=asked)
     path = _DELETE_PATHS[kind].format(slug=slug, key=key)
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = dict(named)
     if accept_core and kind == "property":
         params["accept_core"] = "true"
     if purge_deleted and kind == "type":
@@ -1291,7 +1301,8 @@ async def ontology_delete(
     if isinstance(got, dict) and got.get("ok"):
         return {
             "ok": True,
-            "message": f"지웠습니다 — {kind} {slug}{f'.{key}' if key else ''}",
+            "message": f"지웠습니다 — {kind} {slug}{f'.{key}' if key else ''}"
+            + (f" · source={source}" if named else ""),
         }
     return got
 
