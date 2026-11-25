@@ -227,7 +227,7 @@ jobs:
             printf '# 저장소를 받는 PC 에서 (Windows PowerShell 도 같다)\n'
             printf 'curl -LO %s/%s\n'        "$dl" "$base"
             printf 'curl -LO %s/%s.sha256\n' "$dl" "$base"
-            printf 'scp %s <계정>@<서버>:~/\n' "$base"
+            printf 'scp %s %s.sha256 <계정>@<서버>:~/\n' "$base" "$base"
             printf '\n# 서버에서\n'
             printf 'ssh <계정>@<서버>\n'
             printf 'sha256sum -c %s.sha256\n' "$base"
