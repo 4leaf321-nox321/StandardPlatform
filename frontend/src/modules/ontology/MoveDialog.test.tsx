@@ -47,7 +47,7 @@ function plan(over: Record<string, unknown> = {}) {
       },
     ],
     places: [{ what: '옮길 객체(지운 것 포함)', count: 300 }],
-    warnings: ['옮긴 뒤 협력사은(는) 빈 타입으로 남습니다'],
+    warnings: ['옮긴 뒤 「협력사」 타입은 빈 채로 남습니다'],
     errors: [],
     core_consumers: [],
     snapshot_id: null,

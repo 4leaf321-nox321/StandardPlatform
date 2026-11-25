@@ -101,4 +101,31 @@ describe('다른 타입의 객체로 건너가기', () => {
     expect(objectApi.profile).not.toHaveBeenCalledWith('base_model', 's1')
     expect(screen.queryByText(/객체를 찾을 수 없습니다/)).not.toBeInTheDocument()
   })
+
+  it.each([
+    ['slug 가 바뀐 타입', { renamed_to: 'sku' }, 's1'],
+    ['다른 타입으로 옮긴 객체', { moved_to: 'sku', object_id: 's1' }, 's1'],
+    ['옮긴 뒤 병합된 객체', { moved_to: 'sku', object_id: 's2' }, 's2'],
+  ])('옛 주소는 새 주소로 간다 — %s', async (_what, details, newId) => {
+    objectApi.profile.mockImplementation((typeSlug: string, objectId: string) =>
+      typeSlug === 'sku' && objectId === newId
+        ? Promise.resolve(profileOf(newId, 'sku', 'SM-F400A', '판매 모델'))
+        : Promise.reject(
+            new ApiError(404, {
+              error: { code: 'APP-OBJECTS-0160', message: '옮겨졌습니다', details },
+            }),
+          ),
+    )
+    ontologyApi.schema.mockResolvedValue({ types: [{ slug: 'sku', label: '판매 모델' }] })
+    const { default: ObjectProfilePage } = await import('@/modules/objects/ObjectProfilePage')
+    render(
+      <MemoryRouter initialEntries={['/o/old_type/s1']}>
+        <Routes>
+          <Route path="/o/:typeSlug/:objectId" element={<ObjectProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByRole('heading', { name: /SM-F400A/ })).toBeInTheDocument()
+    expect(objectApi.profile).toHaveBeenLastCalledWith('sku', newId)
+  })
 })

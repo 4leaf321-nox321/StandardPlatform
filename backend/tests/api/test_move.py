@@ -169,6 +169,14 @@ def test_옮기면_칸_참조_관계_별칭이_따라오고_원_타입은_비고
     ).one()
     assert audit.changes["keys"] == {"w": "weight"}
 
+    # 옛 주소 — 즐겨찾기 · 알림 링크가 404 로 끝나지 않게 어디로 갔는지 말한다.
+    old = client.get(f"/api/objects/{vendor}/{w['acme']}", headers=admin.headers)
+    assert old.status_code == 404 and "OBJECTS-0160" in old.text, old.text
+    assert old.json()["error"]["details"] == {"moved_to": supplier, "object_id": w["acme"]}
+    # 옮긴 일이 없는 타입의 주소로는 넘기지 않는다(타입을 잘못 적은 주소).
+    wrong = client.get(f"/api/objects/{w['part']}/{w['acme']}", headers=admin.headers)
+    assert wrong.status_code == 404 and wrong.json()["error"]["details"] == {}, wrong.text
+
     history = client.get(f"/api/objects/{supplier}/{w['acme']}/history", headers=admin.headers)
     assert history.status_code == 200, history.text
     snapshots = [one["snapshot"] for one in history.json() if one.get("snapshot")]
@@ -235,6 +243,9 @@ def test_겹치는_식별자는_병합하고_서로_다른_객체의_같은_별�
     assert merged.json()["errors"] == [] and merged.json()["duplicates"] == 1
     done = _move(client, admin, vendor, supplier, merge_duplicates=True, apply=True).json()
     assert done["applied"] is True and done["merged"] == 1, done
+    # 옮긴 뒤 병합된 객체의 옛 주소는 이긴 쪽으로.
+    old = client.get(f"/api/objects/{vendor}/{w['acme']}", headers=admin.headers)
+    assert old.json()["error"]["details"] == {"moved_to": supplier, "object_id": twin["id"]}
     # 부품의 참조 칸은 병합된 대상 객체를 가리킨다.
     bolt = _object(client, admin, w["part"], w["bolt"])
     assert bolt["properties"]["maker"] == twin["id"]
@@ -267,3 +278,36 @@ def test_많으면_작업으로_옮긴다(
     done = finish_job(client, admin, applied.json())
     assert done["status"] == "done" and done["result"]["moved"] == 2, done
     assert _object(client, admin, supplier, w["beta"])["label"] == "베타"
+
+
+def test_큰_타입은_계획도_작업으로_센다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2,000만 건이면 계획을 세는 데도 1분 안팎 — 요청 안에서는 앞단의 시간 제한에 걸린다.
+    화면 · MCP 는 이 코드를 받으면 작업으로 계획을 센다."""
+    from app.modules.ontology import rename
+
+    w = _world(client, admin)
+    monkeypatch.setattr(rename, "PLAN_INLINE_OBJECTS", 1)
+    moving = _move(client, admin, w["vendor"], w["supplier"])
+    assert moving.status_code == 409 and "ONTOLOGY-0106" in moving.text, moving.text
+    path = moving.json()["error"]["details"]["job_path"]
+    job = client.post(path, json={"to": w["supplier"]}, headers=admin.headers)
+    assert job.status_code == 202, job.text
+    plan = finish_job(client, admin, job.json())
+    assert plan["status"] == "done" and plan["result"]["objects"] == 2, plan
+
+    renaming = client.post(
+        f"/api/ontology/types/{w['vendor']}/properties/w/rename-key",
+        json={"to": "weight_kg"},
+        headers=admin.headers,
+    )
+    assert renaming.status_code == 409 and "ONTOLOGY-0105" in renaming.text, renaming.text
+    job = client.post(
+        renaming.json()["error"]["details"]["job_path"],
+        json={"to": "weight_kg"},
+        headers=admin.headers,
+    )
+    assert job.status_code == 202, job.text
+    plan = finish_job(client, admin, job.json())
+    assert plan["status"] == "done" and plan["result"]["applied"] is False, plan

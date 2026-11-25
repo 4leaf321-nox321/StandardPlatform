@@ -17,6 +17,8 @@ import { useEffect } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { ApiError } from '@/shared/api/client'
+
 const objectApi = vi.hoisted(() => ({
   list: vi.fn(),
   fields: vi.fn(),
@@ -114,6 +116,51 @@ describe('타입 목록', () => {
     objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
     objectApi.fields.mockResolvedValue([])
     workspaceApi.list.mockResolvedValue([])
+  })
+
+  it('slug 가 바뀐 타입의 옛 주소는 새 주소를 안내한다 — 저절로 옮기지 않는다(ADR 0093)', async () => {
+    objectApi.fields.mockImplementation((slug: string) =>
+      slug === 'part2'
+        ? Promise.reject(
+            new ApiError(404, {
+              error: {
+                code: 'APP-OBJECTS-0010',
+                message: '타입을 찾을 수 없습니다',
+                details: { renamed_to: 'part' },
+              },
+            }),
+          )
+        : Promise.resolve([]),
+    )
+    const { default: ObjectListPage } = await import('@/modules/objects/ObjectListPage')
+    render(
+      <MemoryRouter initialEntries={['/o/part2?q=볼트']}>
+        <Routes>
+          <Route path="/o/:typeSlug" element={<ObjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('slug가 바뀐 타입입니다')).toBeInTheDocument()
+    expect(screen.queryByText('없는 타입입니다')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '새 주소로 열기' })).toHaveAttribute(
+      'href',
+      '/o/part?q=볼트',
+    )
+  })
+
+  it('정말 없는 타입이면 없다고 말한다', async () => {
+    objectApi.fields.mockRejectedValue(
+      new ApiError(404, { error: { code: 'APP-OBJECTS-0010', message: '없음' } }),
+    )
+    const { default: ObjectListPage } = await import('@/modules/objects/ObjectListPage')
+    render(
+      <MemoryRouter initialEntries={['/o/ghost']}>
+        <Routes>
+          <Route path="/o/:typeSlug" element={<ObjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('없는 타입입니다')).toBeInTheDocument()
   })
 
   it('관리하는 부서가 없으면 「생성」 · 「일괄 입력」 이 안 선다', async () => {

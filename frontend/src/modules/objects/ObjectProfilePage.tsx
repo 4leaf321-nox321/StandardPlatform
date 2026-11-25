@@ -145,6 +145,19 @@ function ObjectProfile() {
     if (mergedInto) navigate(`/o/${typeSlug}/${mergedInto}`, { replace: true })
   }, [mergedInto, navigate, typeSlug])
 
+  // slug 가 바뀐 타입(ADR 0093) · 다른 타입으로 옮긴 객체(ADR 0094)의 옛 주소 — 새 주소로 간다.
+  const gone = profile.error instanceof ApiError ? profile.error.details : {}
+  const newType =
+    typeof gone.renamed_to === 'string'
+      ? gone.renamed_to
+      : typeof gone.moved_to === 'string'
+        ? gone.moved_to
+        : null
+  const newId = typeof gone.object_id === 'string' ? gone.object_id : objectId
+  useEffect(() => {
+    if (newType) navigate(`/o/${newType}/${newId}`, { replace: true })
+  }, [newType, newId, navigate])
+
   // **인터페이스 주소로 열었으면 객체의 실제 타입으로 간다**(ADR 0006) — 「설비」 를 가리키는
   // 칸에서 누르면 이 주소가 된다. 고치기 · 이력 · 연도는 타입의 길이라 주소가 타입이어야 한다.
   // 응답이 **지금 주소의 객체**일 때만 본다 — 다른 객체의 응답으로 옮기면 그 타입에 이 id 를 붙인

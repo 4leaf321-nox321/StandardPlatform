@@ -2705,6 +2705,20 @@ def _same_name(old: str, new: str) -> None:
         raise InvalidValue(code("ONTOLOGY", 104), f"지금 이름과 같습니다: {old}")
 
 
+def _too_big_to_plan(db: Session, owner: ObjectType) -> bool:
+    """계획도 작업으로 보낼 만큼 큰 타입인가 — 타입별 수의 요약을 읽는다(객체를 안 센다)."""
+    return typecounts.counts(db).get(owner.id, 0) > rename.PLAN_INLINE_OBJECTS
+
+
+def _plan_as_job(number: int, path: str, limit: int) -> Conflict:
+    return Conflict(
+        code("ONTOLOGY", number),
+        f"객체가 {limit:,}건을 넘는 타입이라 계획도 작업으로 셉니다(POST {path}/job) — 계획을 "
+        "본 뒤 적용합니다.",
+        details={"limit": limit, "job_path": f"{path}/job"},
+    )
+
+
 def _rename_property(
     db: Session,
     user: User,
@@ -2721,6 +2735,9 @@ def _rename_property(
     prop = _property(db, slug, key)
     to = require_key(payload.to)
     _same_name(prop.key, to)
+    path = f"/api/ontology/types/{slug}/properties/{key}/rename-key"
+    if inline and _too_big_to_plan(db, owner):
+        raise _plan_as_job(105, path, rename.PLAN_INLINE_OBJECTS)
     plan = rename.plan_property(
         db, owner, prop, to, consumers=_core_consumers(db, owner), skip_job=job_id
     )
@@ -2731,7 +2748,6 @@ def _rename_property(
         db.rollback()
         return _rename_out(plan, applied=False)
     if inline and plan.objects > rename.INLINE_OBJECTS:
-        path = f"/api/ontology/types/{slug}/properties/{key}/rename-key"
         raise Conflict(
             code("ONTOLOGY", 105),
             f"값이 있는 객체가 {rename.INLINE_OBJECTS:,}건을 넘습니다 — 키 변경을 작업으로 "
@@ -2887,6 +2903,9 @@ def _move_type(
 ) -> MoveOut:
     source = _type(db, slug)
     target = _type(db, payload.to)
+    path = f"/api/ontology/types/{slug}/move"
+    if inline and _too_big_to_plan(db, source):
+        raise _plan_as_job(106, path, rename.PLAN_INLINE_OBJECTS)
     plan = move.plan(
         db,
         source,
@@ -2900,7 +2919,6 @@ def _move_type(
         db.rollback()
         return _move_out(plan, applied=False)
     if inline and plan.objects > move.INLINE_OBJECTS:
-        path = f"/api/ontology/types/{slug}/move"
         raise Conflict(
             code("ONTOLOGY", 106),
             f"옮길 객체가 {move.INLINE_OBJECTS:,}건을 넘습니다 — 작업으로 돌립니다(POST "

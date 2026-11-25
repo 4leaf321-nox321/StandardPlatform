@@ -434,7 +434,7 @@ def plan(
             "받습니다."
         )
     out.warnings.append(
-        f"옮긴 뒤 {source.label}은(는) 빈 타입으로 남습니다 — 정리하려면 삭제 미리 보기로."
+        f"옮긴 뒤 「{source.label}」 타입은 빈 채로 남습니다 — 정리하려면 삭제 미리 보기로."
     )
     return out
 

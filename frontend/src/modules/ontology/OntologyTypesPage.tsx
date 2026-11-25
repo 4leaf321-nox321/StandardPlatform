@@ -364,8 +364,8 @@ function NewTypeForm({
         타입 생성
       </Button>
       <p className="text-muted-foreground w-full text-xs">
-        slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(
-        <code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구 이름이 여기 물립니다. <b>기록</b>(시장 서비스
+        slug 는 주소(<code>/o/&lt;slug&gt;</code>)와 관계·MCP 인자가 여기 물립니다 — 나중에는 타입
+        수정 창의 <b>「slug 변경」</b> 으로 바뀌는 자리를 보고 변경합니다. <b>기록</b>(시장 서비스
         건 · 시험 결과처럼 축을 가리키며 쌓이는 것)은 통합 검색에서 건수로, 축의 상세 · 그래프에서는
         「가리키는 기록」 의 수로 섭니다.
       </p>

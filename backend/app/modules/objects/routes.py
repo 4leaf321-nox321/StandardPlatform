@@ -29,6 +29,7 @@ from starlette.datastructures import QueryParams
 from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.audit.models import AuditEntry
 from app.modules.datasources import services as datasource_services
 from app.modules.files import services as files_services
 from app.modules.files.models import Attachment
@@ -3106,6 +3107,58 @@ def _profile_type(db: Session, slug: str, object_id: uuid.UUID) -> ObjectType:
     return kind
 
 
+def _raise_if_moved(
+    db: Session, user: User, object_type: ObjectType, object_id: uuid.UUID
+) -> None:
+    """**다른 타입으로 옮긴 객체의 옛 주소**(ADR 0094)면 어디로 갔는지 말한다 — 즐겨찾기 ·
+    알림 · 붙여 둔 링크가 404 로 끝나지 않게. 옮긴 일이 있는 타입만(감사 기록) — 타입을 잘못
+    적은 주소까지 넘기지 않는다. 옮긴 뒤 병합됐으면 이긴 쪽으로. 보이는 것만 말한다."""
+    here = db.execute(
+        select(ObjectInstance, ObjectType.slug)
+        .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+        .where(
+            ObjectInstance.id == object_id,
+            ObjectInstance.type_id != object_type.id,
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+    ).first()
+    if here is None:
+        return
+    row, slug = here
+    moved = db.scalar(
+        select(AuditEntry.id)
+        .where(
+            AuditEntry.action == "ontology.type.move",
+            AuditEntry.target_id == row.type_id,
+            AuditEntry.target_label.startswith(f"{object_type.slug} → ", autoescape=True),
+        )
+        .limit(1)
+    )
+    if moved is None:
+        return
+    target_id = row.id
+    if row.deleted_at is not None:
+        winner = (
+            db.scalar(
+                select(ObjectInstance).where(
+                    ObjectInstance.id == row.merged_into_id,
+                    ObjectInstance.deleted_at.is_(None),
+                    visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                )
+            )
+            if row.merged_into_id is not None
+            else None
+        )
+        if winner is None:
+            return
+        target_id = winner.id
+    raise NotFound(
+        code("OBJECTS", 160),
+        f"이 객체는 타입 「{slug}」 로 옮겨졌습니다(주소 /o/{slug}/{target_id}).",
+        details={"moved_to": slug, "object_id": str(target_id)},
+    ) from None
+
+
 @router.get("/{type_slug}/{object_id}", response_model=ObjectProfileOut)
 def object_profile(
     type_slug: str,
@@ -3165,6 +3218,7 @@ def object_profile(
                     f"{merged.label}은 {target.label}에 합쳐졌습니다.",
                     details={"merged_into": str(target.id), "type_slug": object_type.slug},
                 ) from None
+        _raise_if_moved(db, user, object_type, object_id)
         raise
 
     attachments = list(

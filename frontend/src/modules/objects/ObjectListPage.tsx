@@ -9,7 +9,13 @@
 
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom'
 import { BarChart3, Download, FileUp, Images, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
@@ -43,6 +49,7 @@ import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { AsOfPicker } from '@/modules/objects/AsOfPicker'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
 import { yearChoices, yearFromParams } from '@/modules/objects/urlYear'
+import { ApiError } from '@/shared/api/client'
 import { canBeDerived, hasStaleOnly, withStaleOnly } from '@/modules/objects/lineage'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { canCreateObject, isAnyManager } from '@/shared/auth/roles'
@@ -313,6 +320,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   const [bulkDeleting, setBulkDeleting] = useState(false)
   /** 이어진 것 너머의 칸 — 조건 고르개가 자기 칸 아래에 붙인다. */
   const linked = useResource(() => objectApi.fields(typeSlug), [typeSlug])
+  const location = useLocation()
   /** 되돌릴 묶음 — 일괄 수정을 적용한 직후 「복원」 로 연다. */
   const [undoBatch, setUndoBatch] = useState<string | null>(null)
   // 소유 부서를 바꿀 때 고를 것 — **내가 관리하는 부서만** 서버가 받아 준다. 목록은
@@ -462,6 +470,30 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
 
   if (schema.error) return <ErrorNotice error={schema.error} />
   if (schema.data && !type) {
+    // slug 가 바뀐 타입의 옛 주소(ADR 0093) — 서버가 새 slug 를 말한다. 저절로 옮기지 않고
+    // 안내한다(그 slug 를 새 타입이 다시 쓰면 같은 주소가 다른 것이 된다 — 즐겨찾기를 고치게).
+    // 답을 기다리는 동안 「없는 타입」 을 깜빡이지 않는다.
+    const renamedTo =
+      linked.error instanceof ApiError && typeof linked.error.details.renamed_to === 'string'
+        ? linked.error.details.renamed_to
+        : null
+    if (renamedTo) {
+      return (
+        <EmptyState
+          title="slug가 바뀐 타입입니다"
+          hint={
+            <>
+              <code>{typeSlug}</code> 은(는) <code>{renamedTo}</code> (으)로 바뀌었습니다 — 즐겨찾기 ·
+              공유한 주소를 수정하세요.{' '}
+              <Link className="underline" to={`/o/${renamedTo}${location.search}`}>
+                새 주소로 열기
+              </Link>
+            </>
+          }
+        />
+      )
+    }
+    if (linked.loading) return null
     return (
       <EmptyState
         title="없는 타입입니다"
