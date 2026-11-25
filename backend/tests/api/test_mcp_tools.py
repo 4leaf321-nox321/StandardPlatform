@@ -1383,7 +1383,7 @@ def test_같은_개념의_두_타입을_계획을_보고_합친다(bot: Bot) -> 
 
 
 def test_구성원의_AI_는_정의를_제안하고_결과를_본다(
-    client: TestClient, member: Signed, bot: Bot
+    client: TestClient, admin: Signed, member: Signed, bot: Bot
 ) -> None:
     """ADR 0096 — `ontology:write` 없는 토큰으로 낸다. 도구는 적용하지 않는다."""
     made = client.post(
@@ -1400,13 +1400,32 @@ def test_구성원의_AI_는_정의를_제안하고_결과를_본다(
     got = proposer.call(
         server.ontology_propose, schema, note="계약서 3건", origin_ref="계약서.docx"
     )
-    assert got["status"] == "proposed" and got["summary"] == "타입 새로 1", got
+    assert got["status"] == "proposed" and got["summary"] == f"타입 새로 1({slug})", got
     assert got["tool"] == "ontology_propose", "MCP 가 실은 도구 이름이 남는다"
     listed = proposer.call(server.ontology_proposals)
     assert [one["id"] for one in listed if one["id"] == got["id"]] == [got["id"]]
     one = proposer.call(server.ontology_proposals, proposal_id=got["id"])
     assert one["plan"]["changes"][0]["slug"] == slug
     assert slug not in {t["slug"] for t in bot.call(server.ontology_schema)["types"]}
+
+    # 시스템 관리자의 토큰(ontology:write 까지)이어도 도구로는 정하지 못한다 — 사람만.
+    item = next(
+        one
+        for one in client.get(
+            "/api/review/items",
+            params={"kind": "definition_proposal"},
+            headers=admin.headers,
+        ).json()["items"]
+        if one["id"] == got["id"]
+    )
+    decision = {
+        "kind": "definition_proposal",
+        "item_id": got["id"],
+        "action": "choose",
+        "value": item["choices"][0]["value"],
+    }
+    tried = bot.call(server.review_decide, decisions=[decision])
+    assert tried["counts"].get("blocked") == 1 and not tried["counts"].get("apply"), tried
 
 
 def test_종류_변경은_사람이_정한_대체_값으로_적용된다(bot: Bot) -> None:

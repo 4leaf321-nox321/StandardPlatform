@@ -14,8 +14,8 @@
   사람이 읽은 계획과 다른 것이 적용되면 안 된다. 적용은 정의 가져오기와 같은 길이다
   (스냅샷 · `importer.apply` · 감사 `ontology.import`).
 - **권한**: 제안은 로그인한 누구나(토큰은 `objects:write` — `ontology:write` 가 없어도),
-  적용 · 거절은 시스템 관리자(검토함 `definition_proposal`). 제안한 사람은 자기 제안을
-  철회 · 다시 셈한다.
+  적용 · 거절은 시스템 관리자의 **사람 세션**(검토함 `definition_proposal`) — 토큰은 어느
+  범위여도 못 한다(`_require_person`). 제안한 사람은 자기 제안을 철회 · 다시 셈한다.
 
 검토함 제공자는 `proposal_review.py`, 경로는 `proposal_routes.py`.
 """
@@ -35,6 +35,7 @@ from app.modules.ontology import importer, planview, similar
 from app.modules.ontology.models import OntologyProposal, OntologySnapshot
 from app.shared.audit import record as record_audit
 from app.shared.errors import Conflict, Forbidden, NotFound, code
+from app.shared.request_context import get_actor_token
 
 STATUS_LABELS = {
     "proposed": "제안",
@@ -185,6 +186,17 @@ def require_owner_or_admin(user: User, row: OntologyProposal) -> None:
         raise Forbidden(code("ONTOLOGY", 111), "제안한 사람과 시스템 관리자만 할 수 있습니다.")
 
 
+def _require_person() -> None:
+    """적용 · 거절 · 다시 열기는 **사람이** 한다 — 검토함이 토큰을 막고(`human_only`), 여기가
+    두 번째 겹이다. 워커(사람이 넣은 작업)에는 토큰이 없다."""
+    if get_actor_token() is not None:
+        raise Forbidden(
+            code("ONTOLOGY", 112),
+            "정의 제안의 적용 · 거절은 사람이 검토함 화면에서 합니다 — 토큰(AI · "
+            "스크립트)으로는 하지 않습니다.",
+        )
+
+
 def replan(db: Session, user: User, row: OntologyProposal) -> bool:
     """지금 정의로 계획을 다시 센다 — 달라졌나. **부르는 쪽이 커밋한다.** 오류가 생겨도 남긴다
     (그 계획을 보고 거절하게)."""
@@ -230,6 +242,7 @@ def accept(
     db: Session, user: User, row: OntologyProposal, *, note: str = ""
 ) -> OntologySnapshot:
     """적용 — 지금 계획의 지문이 제안 때와 같을 때만. **부르는 쪽이 커밋한다.**"""
+    _require_person()
     denied, _prepared = blocker(db, row)
     if denied is not None:
         raise Conflict(
@@ -273,6 +286,7 @@ def accept(
 
 
 def reject(db: Session, user: User, row: OntologyProposal, *, note: str = "") -> None:
+    _require_person()
     require_open(row)
     row.status = "rejected"
     row.decided_by_id = user.id
@@ -307,6 +321,8 @@ def withdraw(db: Session, user: User, row: OntologyProposal) -> None:
 
 def reopen(db: Session, user: User, row: OntologyProposal, *, apply: bool) -> tuple[bool, str]:
     """거절을 되돌린다 — 다시 열린 제안으로(검토함의 복원)."""
+    if apply:
+        _require_person()
     if row.status != "rejected":
         return False, "그 제안의 상태가 그 사이 바뀌었습니다 — 복원할 것이 없음."
     if apply:

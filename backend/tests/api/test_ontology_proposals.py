@@ -5,6 +5,8 @@
 - 적용은 지금 다시 센 계획의 지문이 제안 때와 같을 때만 — 그새 정의가 바뀌었으면 막고
   「다시 셈」. 적용은 정의 가져오기와 같은 길(스냅샷 · 감사 `ontology.import`).
 - 거절은 되돌린다(다시 엶). 제안한 사람은 철회한다.
+- **사람만 정한다** — 토큰은 어느 범위여도 적용 · 거절 · 복원을 못 한다. 「적용」 의 값은 그
+  줄에 실린 계획의 지문을 들어, 읽은 뒤 「다시 셈」 이 계획을 바꿨으면 옛 값은 막힌다.
 """
 
 from __future__ import annotations
@@ -12,12 +14,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditEntry
 from app.modules.ontology.models import OntologyProposal
+from app.shared.errors import Conflict
 from tests.api.conftest import Signed, maintenance_counts
 
 KIND = "definition_proposal"
@@ -66,7 +70,19 @@ def _items(client: TestClient, who: Signed) -> dict[str, dict[str, Any]]:
     return {one["id"]: one for one in got.json()["items"] if one["kind"] == KIND}
 
 
-def _plan(client: TestClient, who: Signed, item_id: str, value: str) -> dict[str, Any]:
+def _value(client: TestClient, who: Signed, item_id: str, name: str) -> str:
+    """그 항목의 후보 값 — 「적용」 은 읽은 계획의 지문이 묶여 있어(`accept:<지문>`) 항목에서
+    읽는다."""
+    item = _items(client, who)[item_id]
+    return next(
+        str(one["value"]) for one in item["choices"] if one["value"].split(":")[0] == name
+    )
+
+
+def _plan(
+    client: TestClient, who: Signed | dict[str, str], item_id: str, value: str
+) -> dict[str, Any]:
+    headers = who.headers if isinstance(who, Signed) else who
     planned = client.post(
         "/api/review/plan",
         json={
@@ -75,14 +91,14 @@ def _plan(client: TestClient, who: Signed, item_id: str, value: str) -> dict[str
                 {"kind": KIND, "item_id": item_id, "action": "choose", "value": value}
             ],
         },
-        headers=who.headers,
+        headers=headers,
     )
     assert planned.status_code == 200, planned.text
     return dict(planned.json())
 
 
 def _decide(client: TestClient, who: Signed, item_id: str, value: str) -> dict[str, Any]:
-    plan = _plan(client, who, item_id, value)
+    plan = _plan(client, who, item_id, _value(client, who, item_id, value))
     applied = client.post(
         "/api/review/apply",
         json={"decisions": plan["decisions"], "fingerprint": plan["fingerprint"]},
@@ -127,7 +143,7 @@ def test_구성원의_AI_가_제안하고_관리자가_검토함에서_적용한
     assert made.status_code == 201, made.text
     body = made.json()
     assert body["status"] == "proposed" and body["created"] is True
-    assert body["summary"] == "타입 새로 1 · 속성 새로 1"
+    assert body["summary"] == f"타입 새로 1({slug}) · 속성 새로 1"
     assert body["tool"] == "ontology_propose" and body["token_name"].startswith("proposal-")
     assert body["plan"]["errors"] == [] and body["plan"]["applied"] is False
     assert any("source 없이 새 정의" in one for one in body["plan"]["warnings"]), body
@@ -152,11 +168,16 @@ def test_구성원의_AI_가_제안하고_관리자가_검토함에서_적용한
     denied = client.get("/api/review/items", params={"kind": KIND}, headers=member.headers)
     assert denied.status_code == 403, denied.text
     item = _items(client, admin)[body["id"]]
-    assert [one["value"] for one in item["choices"]] == ["accept", "replan", "reject"]
+    assert [one["value"] for one in item["choices"]] == [
+        f"accept:{body['fingerprint'][:16]}",
+        "replan",
+        "reject",
+    ]
     assert item["recommended"] is None and item["confidence"] is None
     assert any("계약서-2026.docx" in line for line in item["evidence"])
     assert any("AI 도구 ontology_propose" in line for line in item["evidence"])
-    assert any(f"타입 새로: {slug}" in line for line in item["evidence"])
+    assert f"타입 새로: {slug}" in item["evidence"], "줄은 검토함이 「 · 」 로 잇는다"
+    assert item["type_slug"] == slug and item["type_label"] == slug, "아직 없는 타입"
 
     done = _decide(client, admin, body["id"], "accept")
     assert done["counts"].get("done") == 1, done
@@ -201,7 +222,8 @@ def test_그새_정의가_바뀌면_적용을_막고_다시_셈하면_새_계획
     )
     assert direct.status_code == 200 and direct.json()["applied"] is True, direct.text
 
-    plan = _plan(client, admin, proposal["id"], "accept")
+    value = _value(client, admin, proposal["id"], "accept")
+    plan = _plan(client, admin, proposal["id"], value)
     outcome = next(one for one in plan["outcomes"] if one["item_id"] == proposal["id"])
     assert outcome["status"] == "blocked" and "다시 셈" in outcome["message"], outcome
 
@@ -209,9 +231,10 @@ def test_그새_정의가_바뀌면_적용을_막고_다시_셈하면_새_계획
     assert replanned["counts"].get("done") == 1, replanned
     row = _row(db, proposal["id"])
     assert row.status == "proposed" and row.fingerprint != proposal["fingerprint"]
-    assert row.summary == "속성 새로 1"
+    assert row.summary == f"속성 새로 1({slug}.grade)"
     item = _items(client, admin)[proposal["id"]]
-    assert item["question"] == "정의 제안 「속성 새로 1」 을(를) 적용할까요?"
+    assert item["question"] == f"정의 제안 「속성 새로 1({slug}.grade)」 을(를) 적용할까요?"
+    assert item["type_slug"] == slug and item["type_label"] == "협력사"
 
     done = _decide(client, admin, proposal["id"], "accept")
     assert done["counts"].get("done") == 1, done
@@ -282,3 +305,112 @@ def test_오류가_있거나_바뀌는_것이_없으면_받지_않는다(
 
     unknown = _propose(client, member, {"schema": {"typez": []}})
     assert unknown.status_code == 409 and "ONTOLOGY-0070" in unknown.text, unknown.text
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [["read", "objects:write"], ["read", "objects:write", "ontology:write"]],
+)
+def test_토큰은_어느_범위여도_적용_거절_복원을_못_한다(
+    client: TestClient, admin: Signed, member: Signed, db: Session, scopes: list[str]
+) -> None:
+    """0.4.104 의 구멍 — 검토함의 쓰기 범위는 `objects:write` 라, 정의를 못 바꾸는 토큰이
+    제안을 내고 스스로 적용해 정의를 바꿨다."""
+    slug = f"vendor_{_hex()}"
+    headers = _token(client, admin, scopes)
+    made = _propose(client, headers, {"schema": _schema(slug)})
+    assert made.status_code == 201, made.text
+    pid = made.json()["id"]
+    for name in ("accept", "replan", "reject"):
+        value = _value(client, admin, pid, name)
+        plan = _plan(client, headers, pid, value)
+        outcome = plan["outcomes"][0]
+        assert outcome["status"] == "blocked" and "사람이 화면에서" in outcome["message"], (
+            outcome
+        )
+        sent = client.post(
+            "/api/review/apply",
+            json={"decisions": plan["decisions"], "fingerprint": plan["fingerprint"]},
+            headers=headers,
+        )
+        assert sent.status_code == 200 and not sent.json()["counts"].get("done"), sent.text
+        # 사람이 미리 본 지문을 토큰이 들고 와도 — 막힌 계획이라 지문이 다르다.
+        seen = _plan(client, admin, pid, value)
+        stolen = client.post(
+            "/api/review/apply",
+            json={"decisions": seen["decisions"], "fingerprint": seen["fingerprint"]},
+            headers=headers,
+        )
+        assert stolen.status_code == 409, stolen.text
+    assert _row(db, pid).status == "proposed"
+    assert slug not in _type_slugs(client, admin)
+
+    # 사람이 거절한 것을 토큰이 복원하지 못한다.
+    rejected = _decide(client, admin, pid, "reject")
+    undo = f"/api/review/batches/{rejected['batch_id']}/undo"
+    tried = client.post(undo, json={"apply": True}, headers=headers)
+    assert tried.status_code == 200 and tried.json()["counts"] == {"blocked": 1}, tried.text
+    assert _row(db, pid).status == "rejected"
+    # 자동 확인도 서지 않는다.
+    auto = client.put(
+        f"/api/review/auto/{KIND}",
+        json={"enabled": True, "threshold": 0.95},
+        headers=admin.headers,
+    )
+    assert auto.status_code == 422, auto.text
+    listed = client.get("/api/review/auto", headers=admin.headers).json()
+    assert KIND not in {one["kind"] for one in listed}
+
+
+def test_작업으로_간_적용도_토큰이_넣은_것이면_막는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """워커에는 요청이 없다 — 넣을 때 적어 둔 `by_token` 으로 가른다."""
+    from app.modules.accounts.models import User
+    from app.modules.review import services
+
+    slug = f"vendor_{_hex()}"
+    pid = _propose(client, admin, {"schema": _schema(slug)}).json()["id"]
+    value = _value(client, admin, pid, "accept")
+    seen = _plan(client, admin, pid, value)
+    user = db.scalars(select(User).where(User.is_system_admin.is_(True))).first()
+    assert user is not None
+    params = {
+        "decisions": seen["decisions"],
+        "fingerprint": seen["fingerprint"],
+        "mode": "selected",
+        "threshold": None,
+    }
+    with pytest.raises(Conflict):
+        services.run_job(db, user, {**params, "by_token": True}, lambda *_: None)
+    db.rollback()
+    assert _row(db, pid).status == "proposed"
+    done = services.run_job(db, user, {**params, "by_token": False}, lambda *_: None)
+    assert done["counts"]["done"] == 1, done
+    assert slug in _type_slugs(client, admin)
+
+
+def test_읽은_뒤_계획이_다시_세어졌으면_옛_값으로_적용하지_않는다(
+    client: TestClient, admin: Signed, member: Signed, db: Session
+) -> None:
+    """관리자가 계획을 읽은 뒤 정의가 바뀌고 낸 쪽이 「다시 셈」 — 읽은 값은 막힌다."""
+    slug = f"vendor_{_hex()}"
+    grade = [{"key": "grade", "label": "등급", "data_type": "text"}]
+    made = _propose(client, member, {"schema": _schema(slug, extra=grade)}).json()
+    read = _value(client, admin, made["id"], "accept")
+    direct = client.post(
+        "/api/ontology/import",
+        params={"dry_run": "false"},
+        json=_schema(slug),
+        headers=admin.headers,
+    )
+    assert direct.status_code == 200, direct.text
+    again = client.post(f"/api/ontology/proposals/{made['id']}/replan", headers=member.headers)
+    assert again.status_code == 200 and again.json()["replanned"] is True, again.text
+
+    outcome = _plan(client, admin, made["id"], read)["outcomes"][0]
+    assert outcome["status"] == "blocked" and "다시 세어져" in outcome["message"], outcome
+    bare = _plan(client, admin, made["id"], "accept")["outcomes"][0]
+    assert bare["status"] == "blocked" and "지문이 없습니다" in bare["message"], bare
+    done = _decide(client, admin, made["id"], "accept")
+    assert done["counts"].get("done") == 1, done

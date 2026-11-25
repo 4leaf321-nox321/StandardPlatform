@@ -24,7 +24,7 @@ import uuid
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -64,6 +64,12 @@ from app.shared.errors import AppError, code
 from app.shared.pagination import clamp_limit
 
 router = APIRouter(prefix="/review", tags=["review"])
+
+
+def _by_token(request: Request) -> bool:
+    """토큰(기계 자격)이 보낸 요청인가 — 사람 세션에는 범위가 없다(`shared/auth.py`). 사람만
+    정하는 종류(`Provider.human_only`)를 가르는 데 쓴다."""
+    return getattr(request.state, "token_scopes", None) is not None
 
 
 def _query(filters: ReviewFilterIn) -> services.Query:
@@ -279,6 +285,7 @@ def _outcome_out(one: services.Outcome) -> ReviewOutcomeOut:
 @router.post("/plan", response_model=ReviewPlanOut)
 def review_plan(
     payload: ReviewPlanRequest,
+    request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ReviewPlanOut:
@@ -302,6 +309,7 @@ def review_plan(
         query=_query(payload.filters),
         threshold=payload.threshold,
         action=payload.action,
+        by_token=_by_token(request),
     )
     by_kind: dict[str, ReviewKindPlanOut] = {}
     for one in planned.outcomes:
@@ -351,6 +359,7 @@ def review_plan(
 @router.post("/apply", response_model=ReviewApplyOut)
 def review_apply(
     payload: ReviewApplyRequest,
+    request: Request,
     response: Response,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
@@ -365,7 +374,8 @@ def review_apply(
     if not payload.decisions:
         raise AppError(code("REVIEW", 4), "적용할 결정이 없습니다.", status=422)
     decisions = _decisions(payload.decisions)
-    planned = services.plan(db, user, decisions)
+    by_token = _by_token(request)
+    planned = services.plan(db, user, decisions, by_token=by_token)
     # 작업에 넣기 전에도 본다 — 다른 계획을 작업으로 보내 놓고 실패를 늦게 알리지 않게.
     services.require_same(planned, payload.fingerprint)
     if services.needs_job(planned):
@@ -376,6 +386,7 @@ def review_apply(
             payload.fingerprint,
             mode=payload.mode,
             threshold=payload.threshold,
+            by_token=by_token,
         )
         response.status_code = 202
         return ReviewApplyOut(
@@ -394,6 +405,7 @@ def review_apply(
         mode=payload.mode,
         threshold=payload.threshold,
         planned=planned,
+        by_token=by_token,
     )
     return ReviewApplyOut(
         applied=True,
@@ -531,6 +543,7 @@ def review_batches(
 def review_undo(
     batch_id: uuid.UUID,
     payload: ReviewUndoRequest,
+    request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ReviewUndoOut:
@@ -539,7 +552,9 @@ def review_undo(
     별칭 후보는 대기로). **병합은 복원이 없다** — 그 줄은 「막힘」 으로 서고 까닭을 말한다.
     그 뒤에 누가 또 고친 줄은 덮어쓰지 않는다."""
     services.require_viewer(db, user)
-    lines = services.undo_batch(db, user, batch_id, apply=payload.apply)
+    lines = services.undo_batch(
+        db, user, batch_id, apply=payload.apply, by_token=_by_token(request)
+    )
     counts: dict[str, Any] = {}
     for line in lines:
         counts[line.status] = counts.get(line.status, 0) + 1

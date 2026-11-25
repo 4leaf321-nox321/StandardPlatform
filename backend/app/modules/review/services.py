@@ -651,11 +651,24 @@ def _blocked(decision: Decision, message: str, item: Item | None = None) -> Outc
     )
 
 
+def human_only_message(provider: registry.Provider) -> str:
+    return (
+        f"「{provider.label}」 은(는) 사람이 화면에서 정합니다 — 토큰(AI · 스크립트)으로는 "
+        "결정하지 않습니다."
+    )
+
+
 def plan(
-    db: Session, user: User, decisions: list[Decision], progress: Progress | None = None
+    db: Session,
+    user: User,
+    decisions: list[Decision],
+    progress: Progress | None = None,
+    *,
+    by_token: bool = False,
 ) -> list[Outcome]:
     """결정마다 무엇이 되나 — **항목을 원래 자리에서 다시 읽어** 본다. 아무것도 안 바꾼다.
-    `progress` 를 주면(작업 안) 200건마다 알린다 — 수만 건이면 몇 분이다."""
+    `progress` 를 주면(작업 안) 200건마다 알린다 — 수만 건이면 몇 분이다. `by_token` 이면
+    (토큰이 보냄) 사람만 정하는 종류(`human_only`)는 막힘으로 선다."""
     wanted: dict[str, set[str]] = {}
     for one in decisions:
         wanted.setdefault(one.kind, set()).add(one.item_id)
@@ -684,6 +697,9 @@ def plan(
             outcomes.append(
                 _blocked(one, f"「{provider.label}」 은(는) 볼 수 없는 종류입니다.")
             )
+            continue
+        if by_token and provider.human_only:
+            outcomes.append(_blocked(one, human_only_message(provider)))
             continue
         slot = (one.kind, one.item_id)
         if slot in seen:
@@ -754,6 +770,7 @@ def preview(
     query: Query,
     threshold: float,
     action: str,
+    by_token: bool = False,
 ) -> Planned:
     resolved, skipped, notes, unread = resolve(
         db,
@@ -764,7 +781,7 @@ def preview(
         threshold=threshold,
         action=action,
     )
-    outcomes = plan(db, user, resolved)
+    outcomes = plan(db, user, resolved, by_token=by_token)
     if mode == "recommended" and skipped:
         notes.append(
             f"추천이 없거나 확신도가 {threshold:.2f} 아래인 {skipped:,}건은 선택하지 "
@@ -854,10 +871,11 @@ def apply(
     in_job: bool = False,
     progress: Progress | None = None,
     planned: list[Outcome] | None = None,
+    by_token: bool = False,
 ) -> Result:
     """미리 본 그 계획대로 — **지문이 다르면 아무것도 안 한다.** 항목마다 처리 + 기록 +
     커밋. `planned` 를 주면(방금 같은 결정으로 계획한 것) 다시 계획하지 않는다."""
-    outcomes = planned if planned is not None else plan(db, user, decisions)
+    outcomes = planned if planned is not None else plan(db, user, decisions, by_token=by_token)
     require_same(outcomes, fingerprint)
     batch_id = uuid.uuid4()
     user_id = user.id
@@ -908,8 +926,10 @@ def enqueue(
     *,
     mode: str,
     threshold: float | None,
+    by_token: bool = False,
 ) -> Job:
-    """큰 묶음 — 작업으로. 워커가 같은 함수(`apply`)를 같은 지문으로 부른다."""
+    """큰 묶음 — 작업으로. 워커가 같은 함수(`apply`)를 같은 지문으로 부른다. 토큰이 넣었으면
+    적어 둔다 — 워커에는 요청이 없어 사람만 정하는 종류를 못 가른다."""
     job = job_services.enqueue(
         db,
         kind="review_apply",
@@ -918,6 +938,7 @@ def enqueue(
             "fingerprint": fingerprint,
             "mode": mode,
             "threshold": threshold,
+            "by_token": by_token,
         },
         user=user,
         workspace_id=None,
@@ -983,6 +1004,7 @@ def run_job(
         threshold=float(threshold) if threshold is not None else None,
         in_job=True,
         progress=progress,
+        by_token=bool(params.get("by_token")),
     )
     return {
         "applied": True,
@@ -1306,7 +1328,7 @@ def auto_states(db: Session) -> list[AutoState]:
     rules = {one.kind: one for one in db.scalars(select(ReviewAutoRule))}
     out: list[AutoState] = []
     for provider in registry.providers():
-        if provider.check is None:
+        if provider.check is None or provider.human_only:
             continue
         rule = rules.get(provider.kind)
         threshold = rule.threshold if rule is not None else 0.95
@@ -1338,6 +1360,8 @@ def set_auto(
         raise AppError(
             code("REVIEW", 2), f"처리 길이 있는 종류가 아닙니다: {kind}", status=422
         )
+    if provider.human_only:
+        raise AppError(code("REVIEW", 2), human_only_message(provider), status=422)
     if not AUTO_MIN_THRESHOLD <= threshold <= 1.0:
         raise AppError(
             code("REVIEW", 11),
@@ -1600,10 +1624,12 @@ class UndoLine:
     message: str
 
 
-def undo_batch(db: Session, user: User, batch_id: uuid.UUID, *, apply: bool) -> list[UndoLine]:
+def undo_batch(
+    db: Session, user: User, batch_id: uuid.UUID, *, apply: bool, by_token: bool = False
+) -> list[UndoLine]:
     """묶음 하나를 복원한다 — `apply=False` 면 무엇이 복원되나만. 종류마다 원래 기능의
     되돌리기(일괄 수정의 묶음 되돌리기 · 별칭 빼기 · 후보 대기로)로 간다. 병합은 복원이
-    없다."""
+    없다. 사람만 정하는 종류는 토큰으로 복원하지 않는다."""
     rows = list(
         db.scalars(
             select(ReviewDecision)
@@ -1627,6 +1653,9 @@ def undo_batch(db: Session, user: User, batch_id: uuid.UUID, *, apply: bool) -> 
         if not row.undoable or provider is None or provider.undo is None:
             note = provider.undo_note if provider and provider.undo_note else ""
             lines.append(UndoLine(row, "blocked", note or "복원할 수 없는 결정입니다."))
+            continue
+        if by_token and provider.human_only:
+            lines.append(UndoLine(row, "blocked", human_only_message(provider)))
             continue
         ok, message = provider.undo(db, user, dict(row.undo or {}), False)
         lines.append(UndoLine(row, "undo" if ok else "blocked", message))

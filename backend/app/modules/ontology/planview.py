@@ -72,16 +72,41 @@ KIND_WORDS = {
 ACTION_WORDS = {"create": "새로", "update": "수정"}
 
 
+#: 요약에 이름까지 적는 수 — 넘으면 「외 n」.
+SUMMARY_NAMES = 2
+
+
 def summary(prepared: importer.Plan) -> str:
-    """「타입 새로 2 · 속성 새로 12 · 속성 수정 1」 — 바뀌지 않는 것은 세지 않는다."""
+    """「타입 새로 1(partner) · 속성 새로 2」 — 바뀌지 않는 것은 세지 않는다. **무엇인지 이름을
+    적는다** — 수만 적으면 제안끼리 같은 글이 된다. 이 계획이 새로 만드는 타입 · 관계 종류 ·
+    인터페이스의 속성은 그 이름 밑의 것이라 수만 적는다."""
+    made = {
+        one.slug
+        for one in prepared.changes
+        if one.action == "create" and one.kind in ("type", "relation_type", "interface")
+    }
     counts: dict[tuple[str, str], int] = {}
+    names: dict[tuple[str, str], list[str]] = {}
     for one in prepared.changes:
         if one.action == "unchanged":
             continue
-        counts[(one.kind, one.action)] = counts.get((one.kind, one.action), 0) + 1
+        slot = (one.kind, one.action)
+        counts[slot] = counts.get(slot, 0) + 1
+        if "." not in one.slug or one.slug.split(".", 1)[0] not in made:
+            names.setdefault(slot, []).append(one.slug)
+
+    def named(slot: tuple[str, str]) -> str:
+        found = names.get(slot) or []
+        if not found:
+            return ""
+        shown = ", ".join(found[:SUMMARY_NAMES])
+        more = len(found) - SUMMARY_NAMES
+        return f"({shown} 외 {more})" if more > 0 else f"({shown})"
+
     order = list(KIND_WORDS)
     parts = [
         f"{KIND_WORDS.get(kind, kind)} {ACTION_WORDS.get(action, action)} {count}"
+        f"{named((kind, action))}"
         for (kind, action), count in sorted(
             counts.items(),
             key=lambda one: (

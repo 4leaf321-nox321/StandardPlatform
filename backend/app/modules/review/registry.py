@@ -177,6 +177,10 @@ class Provider:
     undo: UndoOne | None = None
     undo_note: str = ""
     """되돌릴 수 없으면 왜 — 미리 보기가 그대로 싣는다."""
+    human_only: bool = False
+    """**사람 세션에서만 정한다** — 토큰(기계 자격)이 보낸 결정 · 복원은 막힘으로 선다.
+    검토함의 쓰기 범위는 `objects:write` 하나라, 그보다 무거운 일(정의를 바꾸기)을 하는 종류는
+    이것으로 닫는다. 자동 확인도 서지 않는다."""
     maintenance_keys: tuple[str, ...] = ()
     """홈 「남은 일」 의 어느 줄이 이 종류인가 — 그 줄의 링크가 검토함의 이 종류로 간다."""
     order: int = 100

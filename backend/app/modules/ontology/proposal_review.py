@@ -11,7 +11,11 @@
   사람이 읽고 고른다(「추천대로 모두」 가 정의를 적용하지 않는다).
 - 「적용」 은 미리 보기에서 지금 정의로 계획을 다시 센다. 지문이 제안 때와 다르면 막고
   「다시 셈」 을 고르게 한다 — 사람이 읽은 계획과 다른 것을 적용하지 않는다. 다시 센 계획은
-  지문이 바뀌어 새 항목처럼 다시 뜬다.
+  지문이 바뀌어 새 항목처럼 다시 뜬다. **「적용」 의 값은 그 줄에 실린 계획의 지문을 든다**
+  (`accept:<지문 앞>`) — 사람이 읽은 뒤 낸 쪽이 「다시 셈」 해 계획이 바뀌었으면 옛 값이라
+  막힌다(검토함의 지문은 종류 · 항목 · 고른 값 · 줄 수라 계획이 바뀐 것을 못 본다).
+- **사람만 정한다**(`human_only`) — 토큰의 결정 · 복원은 막힌다. 검토함의 쓰기 범위는
+  `objects:write` 라, 그대로 두면 `ontology:write` 없는 토큰이 정의를 바꾼다(0.4.104 의 구멍).
 - 보는 사람: 시스템 관리자. 정의는 전역이라 부서로 거르면 없다(전역은 전부).
 - 「무시」 는 없다 — 제안은 적용하거나 거절한다(무시하면 낸 쪽은 영영 기다린다).
 - 되돌리기: 거절 → 다시 엶. 적용은 스냅샷 복원으로(관리 › 온톨로지 › 가져오기의 스냅샷).
@@ -19,6 +23,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 
 from sqlalchemy import func, select
@@ -26,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.ontology import planview, proposals
-from app.modules.ontology.models import OntologyProposal
+from app.modules.ontology.models import ObjectType, OntologyProposal
 from app.modules.review import registry
 from app.modules.review.registry import Applied, Check, Choice, Collected, Filters, Item
 from app.shared.errors import AppError, Conflict, code
@@ -40,9 +45,27 @@ CAP = 500
 CHANGE_LINES = 20
 WARNING_LINES = 8
 
+ACCEPT = "accept"
+
+
+def accept_value(row: OntologyProposal) -> str:
+    """「적용」 의 값 — 지금 실린 계획의 지문을 묶는다."""
+    return f"{ACCEPT}:{row.fingerprint[:16]}"
+
+
+def choices_of(row: OntologyProposal) -> list[Choice]:
+    head, *rest = CHOICES
+    return [dataclasses.replace(head, value=accept_value(row)), *rest]
+
+
+def _split(value: str) -> tuple[str, str]:
+    name, _, mark = value.partition(":")
+    return name, mark
+
+
 CHOICES = (
     Choice(
-        value="accept",
+        value=ACCEPT,
         label="적용",
         detail="이 정의를 적용 — 정의 가져오기와 같은 길(스냅샷을 남기고 한 트랜잭션으로). "
         "지금 "
@@ -86,9 +109,9 @@ def _evidence(row: OntologyProposal, proposer: str) -> list[str]:
     lines = [
         f"근거: {row.note}" if row.note else "근거: (적지 않음)",
         *([f"근거 문서: {row.origin_ref}"] if row.origin_ref else []),
-        f"제안: {who} · {row.created_at:%Y-%m-%d %H:%M}",
+        f"제안: {who} · {row.created_at.astimezone():%Y-%m-%d %H:%M}",
         *([f"원천 잠금: {row.source}"] if row.source else []),
-        f"계획: {row.summary} (센 때 {row.planned_at:%Y-%m-%d %H:%M})",
+        f"계획: {row.summary} (센 때 {row.planned_at.astimezone():%Y-%m-%d %H:%M})",
     ]
     changed = [one for one in plan.get("changes") or [] if one.get("action") != "unchanged"]
     for one in changed[:CHANGE_LINES]:
@@ -98,9 +121,10 @@ def _evidence(row: OntologyProposal, proposer: str) -> list[str]:
         shown = (
             f" — {', '.join(fields[:6])}" + (" …" if len(fields) > 6 else "") if fields else ""
         )
-        lines.append(f"· {kind} {action}: {one.get('slug', '')}{shown}")
+        # 검토함이 근거 줄을 「 · 」 로 잇는다 — 앞에 점을 붙이면 겹친다.
+        lines.append(f"{kind} {action}: {one.get('slug', '')}{shown}")
     if len(changed) > CHANGE_LINES:
-        lines.append(f"· … 외 {len(changed) - CHANGE_LINES}건(정의 제안 화면에서 전부)")
+        lines.append(f"… 외 {len(changed) - CHANGE_LINES}건(정의 제안 화면에서 전부)")
     warnings = list(plan.get("warnings") or [])
     lines += [f"경고: {one}" for one in warnings[:WARNING_LINES]]
     if len(warnings) > WARNING_LINES:
@@ -110,9 +134,19 @@ def _evidence(row: OntologyProposal, proposer: str) -> list[str]:
 
 
 def _first_type(row: OntologyProposal) -> str:
-    for one in (row.plan or {}).get("changes") or []:
-        if one.get("kind") == "type" and one.get("action") != "unchanged":
+    """이 제안이 손대는 첫 타입 — 타입 자체가 바뀌면 그것, 속성만이면 그 주인. 검토함의 타입
+    거르기가 이것으로 선다(아직 없는 새 타입이면 제안한 slug)."""
+    changed = [
+        one
+        for one in (row.plan or {}).get("changes") or []
+        if one.get("action") != "unchanged"
+    ]
+    for one in changed:
+        if one.get("kind") == "type":
             return str(one.get("slug") or "")
+    for one in changed:
+        if one.get("kind") == "property":
+            return str(one.get("slug") or "").split(".", 1)[0]
     return ""
 
 
@@ -143,6 +177,9 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
         one.id: (one.display_name or one.email)
         for one in db.scalars(select(User).where(User.id.in_(people_ids)))
     }
+    labels: dict[str, str] = {}
+    for slug, label in db.execute(select(ObjectType.slug, ObjectType.label)):
+        labels[str(slug)] = str(label)
     items: list[Item] = []
     for row in cut:
         errors = (row.plan or {}).get("errors") or []
@@ -156,7 +193,7 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
                 evidence=_evidence(
                     row, people.get(row.proposed_by_id, "") if row.proposed_by_id else ""
                 ),
-                choices=list(CHOICES),
+                choices=choices_of(row),
                 recommended=None,
                 confidence=None,
                 reason=(
@@ -165,7 +202,8 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
                     else "정의는 사람이 계획을 읽고 고릅니다 — 추천하지 않습니다."
                 ),
                 type_slug=first,
-                type_label="정의",
+                # 이름이 다 「정의」 면 타입 거르기에서 서로 구별되지 않는다.
+                type_label=labels.get(first, first) or "정의",
                 workspace_id=None,
                 rows=sum(
                     1
@@ -192,6 +230,15 @@ def collect(db: Session, user: User, flt: Filters) -> Collected:
     return Collected(items=items, total=total, notes=notes)
 
 
+def _reread(mark: str) -> str:
+    """읽은 계획이 아니다 — 지문 없는 값이거나, 읽은 뒤 「다시 셈」 이 계획을 바꿨다."""
+    if not mark:
+        return (
+            "읽은 계획의 지문이 없습니다 — 검토함의 항목을 다시 읽고 그 후보의 값을 보내세요."
+        )
+    return "읽은 뒤 계획이 다시 세어져 달라졌습니다 — 항목을 다시 읽고 고르세요."
+
+
 def _row(db: Session, item: Item) -> OntologyProposal:
     found = db.get(OntologyProposal, uuid.UUID(item.id))
     if found is None:
@@ -200,7 +247,8 @@ def _row(db: Session, item: Item) -> OntologyProposal:
 
 
 def check(db: Session, _user: User, item: Item, value: str) -> Check:
-    choice = next((one for one in CHOICES if one.value == value), None)
+    name, mark = _split(value)
+    choice = next((one for one in CHOICES if one.value == name), None)
     if choice is None:
         return Check(
             status="blocked",
@@ -221,7 +269,7 @@ def check(db: Session, _user: User, item: Item, value: str) -> Check:
             choice_label=choice.label,
             message=f"이미 처리된 제안입니다({proposals.STATUS_LABELS.get(row.status)}).",
         )
-    if value == "replan":
+    if name == "replan":
         return Check(
             status="apply",
             effect=f"「{row.summary}」 — 지금 정의로 계획을 다시 셈"
@@ -229,13 +277,20 @@ def check(db: Session, _user: User, item: Item, value: str) -> Check:
             choice_label=choice.label,
             rows=0,
         )
-    if value == "reject":
+    if name == "reject":
         return Check(
             status="apply",
             effect=f"정의 제안 「{row.summary}」 거절",
             choice_label=choice.label,
             rows=1,
             undoable=True,
+        )
+    if value != accept_value(row):
+        return Check(
+            status="blocked",
+            effect=f"정의 제안 「{row.summary}」 적용",
+            choice_label=choice.label,
+            message=_reread(mark),
         )
     denied, prepared = proposals.blocker(db, row)
     if denied is not None:
@@ -259,15 +314,18 @@ def check(db: Session, _user: User, item: Item, value: str) -> Check:
 
 def apply(db: Session, user: User, item: Item, value: str, _in_job: bool) -> Applied:
     row = _row(db, item)
-    if value == "accept":
+    name, mark = _split(value)
+    if name == ACCEPT:
+        if value != accept_value(row):
+            raise Conflict(proposals.STALE, _reread(mark))
         snapshot = proposals.accept(db, user, row, note="검토함 — 적용")
         return Applied(
             rows=item.rows,
             message="적용했습니다 — 되돌리려면 스냅샷 "
-            f"{snapshot.taken_at:%Y-%m-%d %H:%M} 복원",
+            f"{snapshot.taken_at.astimezone():%Y-%m-%d %H:%M} 복원",
             undo={"op": "accept", "proposal_id": str(row.id), "snapshot_id": str(snapshot.id)},
         )
-    if value == "replan":
+    if name == "replan":
         changed = proposals.replan(db, user, row)
         return Applied(
             rows=0,
@@ -278,7 +336,7 @@ def apply(db: Session, user: User, item: Item, value: str, _in_job: bool) -> App
             ),
             undo={"op": "replan"},
         )
-    if value == "reject":
+    if name == "reject":
         proposals.reject(db, user, row, note="검토함 — 거절")
         return Applied(rows=1, undo={"op": "reject", "proposal_id": str(row.id)})
     raise Conflict(
@@ -331,6 +389,7 @@ DEFINITION_PROPOSAL = registry.Provider(
     apply=apply,
     undo=undo,
     undo_note="적용한 정의는 스냅샷 복원으로 되돌립니다.",
+    human_only=True,
     maintenance_keys=("ontology_proposals",),
     order=50,
 )
