@@ -11,6 +11,8 @@
 | 참조 속성(`object_ref`) | `owl:ObjectProperty` + `rdfs:range` 대상 타입, 역방향 inverseOf |
 | 관계 종류 | `owl:ObjectProperty` + domain/range(허용 타입이 하나일 때), 이행 → Transitive, |
 |  | 무방향 → Symmetric, 역방향 이름 → `owl:inverseOf` |
+| 관계의 칸(관계 속성) | 선의 구체화한 진술(`rdf:Statement`)에 `sp:rel.<종류>-<키>` — |
+|  | 칸 값이 있는 선만. 참조 종류의 칸은 아직 안 나간다 |
 | 관계의 유효 기간(ADR 0039) | **오늘 유효한 선만** 트리플로. 기간이 있는 선은 그 트리플을 |
 |  | 가리키는 `rdf:Statement`(구체화)에 `sp:validFrom` · `sp:validTo`(xsd:date, 끝은 제외) |
 | 계보 관계(ADR 0041) | W3C PROV 의 `prov:wasDerivedFrom`(파생물 → 원천)에 `rdfs:subPropertyOf`
@@ -94,6 +96,13 @@ class Names:
 
     def relation(self, slug: str) -> URIRef:
         return self.ns[f"rel.{slug}"]
+
+    def relation_prop(self, slug: str, key: str) -> URIRef:
+        """관계의 칸(관계 속성) — 선의 구체화한 진술에 붙는다. **점은 하나만** —
+        `rel.<종류>.<키>` 는 키가 `inverse` 인 칸이 역방향 이름과 겹치고, 점이 둘인 이름
+        (`sp:a.b.c`)은 사본의 Oxigraph(0.5)가 질의에서 못 읽는다(실측). slug · 키에는 `-` 가
+        없어 겹치지 않는다."""
+        return self.ns[f"rel.{slug}-{key}"]
 
     def relation_inverse(self, slug: str) -> URIRef:
         return self.ns[f"rel.{slug}.inverse"]
@@ -213,9 +222,47 @@ def schema_graph(db: Session, names: Names) -> Graph:
             graph.add((names.prop(row.slug, key), RDFS.subPropertyOf, names.prop(owner, key)))
 
     relations = list(db.scalars(select(RelationType).order_by(RelationType.slug)))
+    edge_props = relation_props(db)
     for rel in relations:
         _add_relation(graph, names, rel)
+        for prop in edge_props.get(rel.slug, []):
+            _add_relation_prop(graph, names, rel.slug, prop)
     return graph
+
+
+def relation_props(db: Session) -> dict[str, list[PropertyDef]]:
+    """관계 종류마다 칸 — 글자 · 숫자 · 날짜 · 고를 값 …(참조 종류는 아직 안 낸다: 선의 칸이
+    가리키는 객체의 IRI 를 세우는 길이 아직 없다)."""
+    slug_of = {row.id: row.slug for row in db.scalars(select(RelationType))}
+    out: dict[str, list[PropertyDef]] = {}
+    for prop in db.scalars(
+        select(PropertyDef)
+        .where(PropertyDef.owner_kind == "relation")
+        .order_by(PropertyDef.sort_order, PropertyDef.key)
+    ):
+        slug = slug_of.get(prop.owner_id)
+        if slug is not None and prop.data_type not in ("object_ref", "file", "document"):
+            out.setdefault(slug, []).append(prop)
+    return out
+
+
+def _add_relation_prop(graph: Graph, names: Names, relation: str, prop: PropertyDef) -> None:
+    """관계의 칸 — 주어는 선의 구체화한 진술이다(`rdf:Statement`)."""
+    node = names.relation_prop(relation, prop.key)
+    graph.add((node, RDF.type, OWL.DatatypeProperty))
+    graph.add((node, RDFS.label, Literal(prop.label, lang="ko")))
+    graph.add((node, RDFS.domain, RDF.Statement))
+    graph.add((node, RDFS.range, XSD_OF.get(prop.data_type, XSD.string)))
+    graph.add(
+        (
+            node,
+            SKOS.note,
+            Literal(
+                f"관계 {relation} 의 칸 — 선의 구체화한 진술(rdf:Statement)에 붙는다",
+                lang="ko",
+            ),
+        )
+    )
 
 
 def _add_property(graph: Graph, names: Names, owner_slug: str, prop: PropertyDef) -> None:
@@ -288,7 +335,8 @@ def _add_relation(graph: Graph, names: Names, rel: RelationType) -> None:
             graph.add((term, RDFS.range, XSD.date))
             graph.add((term, RDFS.label, Literal(label, lang="ko")))
     if rel.quantity_key:
-        # 수량 칸(ADR 0040) — 관계 속성은 트리플로 안 나가므로 어느 칸이 수량인지만 적는다.
+        # 수량 칸(ADR 0040) — 어느 칸이 수량인지 적는다(값은 선의 진술에
+        # `sp:rel.<종류>-<키>`).
         graph.add(
             (
                 node,
@@ -464,6 +512,7 @@ def data_graph(
     stmt = select(ObjectRelation).where(alive)
     if type_slugs:
         stmt = stmt.where(ObjectRelation.src_object_id.in_(inside))
+    edge_props = relation_props(db)
     for edge in db.scalars(stmt):
         src = iri_of.get(edge.src_object_id)
         dst = iri_of.get(edge.dst_object_id) or all_iri.get(edge.dst_object_id)
@@ -475,6 +524,7 @@ def data_graph(
             edge.valid_from is not None
             or edge.valid_to is not None
             or edge.pinned_at is not None
+            or edge.properties
         ):
             said = BNode()
             graph.add((said, RDF.type, RDF.Statement))
@@ -494,6 +544,19 @@ def data_graph(
                 )
             if edge.valid_to is not None:
                 graph.add((said, names.valid_to, Literal(edge.valid_to, datatype=XSD.date)))
+            # 관계의 칸 — 「이 BOM 선의 수량 4」. 값이 여럿이면 줄마다.
+            for prop in edge_props.get(edge.relation, []):
+                value = (edge.properties or {}).get(prop.key)
+                if value is None or value == "" or value == []:
+                    continue
+                for one in value if isinstance(value, list) else [value]:
+                    graph.add(
+                        (
+                            said,
+                            names.relation_prop(edge.relation, prop.key),
+                            _literal(prop.data_type, one),
+                        )
+                    )
     return graph
 
 
@@ -533,6 +596,11 @@ def _literal(data_type: str, value: Any) -> Literal:
             return Literal(str(value))
     if data_type in ("text", "text_long"):
         return Literal(str(value), lang="ko")
+    if datatype == XSD.string:
+        # **형 없는 글자로** — RDF 1.1 에서 `"A"^^xsd:string` 은 `"A"` 와 같은데, rdflib 은
+        # 둘을 다르게 맞춰 `VALUES ?v { "A" }` · `?s sp:x "A"` 가 0건이었다(사본의 Oxigraph 는
+        # 맞춘다 — 같은 질의가 사본에서만 답했다). 고를 값 · 파일 칸.
+        return Literal(str(value))
     return Literal(str(value), datatype=datatype)
 
 

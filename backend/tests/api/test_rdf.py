@@ -521,3 +521,71 @@ def test_SPARQL_의_걸린_시간은_줄을_꺼내는_데까지_잰다(
     body = asked.json()
     assert body["truncated"] is True and len(body["rows"]) == 2000
     assert body["elapsed_ms"] >= 1
+
+
+def test_관계의_칸이_선의_진술로_나가고_0건이면_까닭을_짐작한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """적용 뒤 값 대조가 안 됐다 — 관계의 칸이 RDF 에 없었다. 꼬리표 없는 글자로 견주면 오류
+    없이 0건이었다(값은 "…"@ko) — 0건이면 까닭을 짐작해 말한다."""
+    from tests.api.test_edge_fields import _bom_kind
+    from tests.api.test_ontology import _link
+
+    product = _make_type(client, admin, label="제품", key_policy="optional")
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_property(
+        client, admin, part, key="grade", label="등급", data_type="enum", enum_options=["A"]
+    )
+    kind = _bom_kind(client, admin, product, part)
+    p1 = _make_object(client, admin, product, label="제품1", key="P-1")
+    x = _make_object(client, admin, part, label="볼트", key="X-1", properties={"grade": "A"})
+    made = _link(
+        client,
+        admin,
+        product,
+        p1["id"],
+        kind,
+        x["id"],
+        properties={"qty": 4, "opts": ["A", "B"], "memo": "주"},
+    )
+    assert made.status_code == 201, made.text
+
+    def ask(body: str) -> dict[str, Any]:
+        got = client.post(
+            "/api/rdf/query",
+            json={
+                "query": "PREFIX sp: <http://testserver/ns#> "
+                "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> "
+                "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> " + body,
+                "types": [product, part],
+            },
+            headers=admin.headers,
+        )
+        assert got.status_code == 200, got.text
+        return dict(got.json())
+
+    found = ask(
+        f"SELECT ?qty ?opt WHERE {{ ?st a rdf:Statement ; rdf:predicate sp:rel.{kind} ; "
+        f"sp:rel.{kind}-qty ?qty ; sp:rel.{kind}-opts ?opt }}"
+    )
+    assert sorted(row["opt"] for row in found["rows"]) == ["A", "B"], found
+    assert {str(row["qty"]) for row in found["rows"]} == {"4"}
+    assert found["notes"] == []
+
+    # 고를 값은 꼬리표 없는 글자로 맞는다(rdflib 은 "A"^^xsd:string 과 "A" 를 갈랐다).
+    graded = ask(f'SELECT ?s WHERE {{ VALUES ?g {{ "A" }} ?s sp:{part}.grade ?g }}')
+    assert len(graded["rows"]) == 1, graded
+    # 이름은 "…"@ko — 꼬리표 없이 견주면 0건이고, 까닭을 짐작해 말한다. VALUES 의 자리와 무관.
+    for body in (
+        'SELECT ?s WHERE { VALUES ?l { "볼트" } ?s rdfs:label ?l }',
+        'SELECT ?s WHERE { ?s rdfs:label ?l VALUES ?l { "볼트" } }',
+        'SELECT ?s WHERE { ?s rdfs:label ?l FILTER(?l = "볼트") }',
+    ):
+        empty = ask(body)
+        assert empty["rows"] == [] and any("@ko" in one for one in empty["notes"]), empty
+    tagged = ask('SELECT ?s WHERE { VALUES ?l { "볼트"@ko } ?s rdfs:label ?l }')
+    assert len(tagged["rows"]) == 1 and tagged["notes"] == []
+    fine = ask('SELECT ?s WHERE { ?s rdfs:label ?l FILTER(STR(?l) = "없는이름") }')
+    assert fine["rows"] == [] and fine["notes"] == [], "STR() 로 견준 것은 맞는 꼴이다"
+    wrong = ask("SELECT ?s WHERE { ?s sp:key ?k }")
+    assert any("sp:key" in one or "ns#key" in one for one in wrong["notes"]), wrong

@@ -244,12 +244,41 @@ def put_document(
             details={"revision": now_revision},
         )
     # 상한은 요청 모양(`max_length`)이 본다 — 줄바꿈을 맞추면 짧아지기만 한다.
-    body = payload.body.replace("\r\n", "\n")
-    if found is not None and found.body == body:
-        return _out(db, definition, found, True)
+    found, _changed = write_body(
+        db, user, row, key, payload.body, note=payload.note, found=found
+    )
+    db.commit()
+    db.refresh(found)
+    return _out(db, definition, found, True)
 
+
+def write_body(
+    db: Session,
+    user: User,
+    row: ObjectInstance,
+    key: str,
+    body: str,
+    *,
+    note: str = "",
+    found: ObjectDocument | None = None,
+    via: str | None = None,
+) -> tuple[ObjectDocument, bool]:
+    """본문을 바꾼다 — 판이 하나 오르고 그 판 · 언급 · 감사가 남는다. (문서, 바뀌었나). 본문이
+    그대로면 판을 올리지 않는다. **부르는 쪽이 커밋한다**(그리고 판 확인 · 권한은 부르는 쪽 —
+    화면은 `base_revision`, 묶음은 묶음의 지문). `found` 는 이미 읽은 지금 문서(잠금). `via` 를
+    안 주면 이 요청의 토큰 이름(화면이면 빈 글자)."""
+    if found is None:
+        found = db.scalar(
+            select(ObjectDocument)
+            .where(ObjectDocument.object_id == row.id, ObjectDocument.key == key)
+            .with_for_update()
+        )
+    body = body.replace("\r\n", "\n")
+    if found is not None and found.body == body:
+        return found, False
+    now_revision = found.revision if found is not None else 0
     now = datetime.now(UTC)
-    via = get_actor_token() or ""
+    via = (get_actor_token() or "") if via is None else via
     if found is None:
         found = ObjectDocument(object_id=row.id, key=key)
         db.add(found)
@@ -269,7 +298,7 @@ def put_document(
             created_at=now,
             created_by_id=user.id,
             via=via,
-            note=payload.note.strip(),
+            note=note.strip()[:200],
         )
     )
     db.execute(
@@ -294,12 +323,10 @@ def put_document(
             "revision": found.revision,
             "chars": found.chars,
             "via": via,
-            "note": payload.note.strip(),
+            "note": note.strip()[:200],
         },
     )
-    db.commit()
-    db.refresh(found)
-    return _out(db, definition, found, True)
+    return found, True
 
 
 @router.get(

@@ -111,12 +111,40 @@ class BundleOriginIn(BaseModel):
         return value
 
 
+class DocumentIn(BaseModel):
+    """**문서 본문** 하나(ADR 0053) — 행에 붙인 마크다운을 그 객체의 문서 칸에 쓴다. 객체는
+    식별자(`key`)로 찾는다 — 같은 묶음이 만드는 객체여도 된다(객체 단계 뒤에 쓴다)."""
+
+    type_slug: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    """객체의 식별자 — 이름으로는 안 찾는다(같은 이름이 여럿일 수 있다)."""
+    property: str = Field(min_length=1)
+    """문서 칸의 키(`data_type="document"`)."""
+    body: str = Field(max_length=1_000_000)
+    note: str = Field(default="", max_length=200)
+    """판의 까닭 한 줄 — 비우면 「묶음 가져오기」."""
+
+
+class DocumentPlanOut(BaseModel):
+    type_slug: str
+    key: str
+    property: str
+    action: Literal["create", "update", "unchanged", "pending", "error"]
+    """`create` 첫 판 · `update` 판이 오름 · `unchanged` 본문이 그대로 · `pending` 이 묶음이
+    만들 객체(가벼운 미리 보기 — 적용할 때 쓴다) · `error`."""
+    chars: int
+    message: str = ""
+
+
 class BundleIn(BaseModel):
     ontology: dict[str, Any] | None = None
     """`ontology/import` 와 같은 스키마. 없으면 정의는 안 건드린다."""
     objects: list[ObjectBatchIn] = Field(default_factory=list)
     """**적는 차례대로 넣는다** — 다른 타입을 참조하는 타입은 그 뒤에 둔다."""
     relations: list[RelationBatchIn] = Field(default_factory=list)
+    documents: list[DocumentIn] = Field(default_factory=list)
+    """**문서 본문** — 객체 · 관계 단계 뒤에 그 객체의 문서 칸에 쓴다(판이 오른다). 묶음
+    되돌리기는 문서를 되돌리지 않는다 — 문서의 판이 남아 옛 판으로 돌린다."""
     tombstones: TombstonesIn | None = None
     """허브에서 **사라진 것** — 지운 객체와 끊긴 선. 받는 쪽은 지우지 않는다: 객체는
     **사용 중지**, 합쳐진 것은 **합치기**, 선은 **끊기**로 계획에 올린다."""
@@ -188,6 +216,8 @@ class BundleOut(BaseModel):
     tombstones: RowsPlanOut | None = None
     """사라진 것을 어떻게 할지 — 줄마다 `merge` · `deprecate`(사용 중지) · `delete`(원천이
     지움, ADR 0090) · `unlink` · `unchanged` · `error`."""
+    documents: list[DocumentPlanOut] = []
+    """문서 본문마다 무엇이 되나."""
     errors: list[str]
     """묶음 전체에 걸린 오류(권한 등)."""
     snapshot_id: uuid.UUID | None

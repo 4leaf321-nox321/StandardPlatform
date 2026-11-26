@@ -108,7 +108,11 @@ def literal(data_type: str, value: Any) -> str:
         return _number(value)
     if data_type in ("text", "text_long"):
         return _ko(str(value))
-    return _typed(str(value), export.XSD_OF.get(data_type, XSD.string))
+    datatype = export.XSD_OF.get(data_type, XSD.string)
+    if datatype == XSD.string:
+        # 메모리 그래프와 같게 형 없는 글자로(`export._literal` — rdflib 이 둘을 갈랐다).
+        return _plain(str(value))
+    return _typed(str(value), datatype)
 
 
 class _Iris:
@@ -152,6 +156,9 @@ class _Iris:
     def relation(self, slug: str) -> str:
         return self._term(f"rel.{slug}")
 
+    def relation_prop(self, slug: str, key: str) -> str:
+        return self._term(f"rel.{slug}-{key}")
+
 
 def _stream(db: Session, sql: str, params: dict[str, Any] | None = None) -> Iterator[Any]:
     """서버 쪽 커서로 줄을 흘린다(드라이버 그대로 — 줄마다 ORM 개체를 안 만든다)."""
@@ -180,6 +187,9 @@ class Shape:
     values_of: dict[Any, list[tuple[str, str, str]]]
     #: 지금 정의에 있는 참조 칸만 — 지운 칸의 색인 줄이 남아 있어도 메모리 그래프처럼 안 낸다.
     ref_pred: dict[tuple[Any, str], str]
+    #: 관계 종류마다 (칸 키, 칸 종류, 술어) — 선의 구체화한 진술에 붙는다(메모리 그래프와
+    #: 같다).
+    edge_values: dict[str, list[tuple[str, str, str]]]
 
     @classmethod
     def load(cls, db: Session) -> Shape:
@@ -212,6 +222,13 @@ class Shape:
                 for type_id, found in defs.items()
                 for one in found
                 if one.data_type == "object_ref"
+            },
+            edge_values={
+                slug: [
+                    (one.key, one.data_type, iris.relation_prop(slug, one.key))
+                    for one in found
+                ]
+                for slug, found in export.relation_props(db).items()
             },
         )
 
@@ -318,11 +335,12 @@ def relation_blocks(
     pinned_revision, pinned_at = f"<{names.pinned_revision}>", f"<{names.pinned_at}>"
     valid_from, valid_to = f"<{names.valid_from}>", f"<{names.valid_to}>"
     relation_of, node = shape.iris.relation, shape.node
+    edge_values = shape.edge_values
     sql, params = where
-    for rid, relation, vfrom, vto, prev, pat, st, sk, si, dt, dk, di in _stream(
+    for rid, relation, vfrom, vto, prev, pat, props, st, sk, si, dt, dk, di in _stream(
         db,
         "SELECT r.id, r.relation, r.valid_from, r.valid_to, r.pinned_revision, r.pinned_at, "
-        "s.type_id, s.key, s.id, d.type_id, d.key, d.id "
+        "r.properties, s.type_id, s.key, s.id, d.type_id, d.key, d.id "
         f"{alive_relations(edge_rule.today() if today is None else today)}{sql}",
         params,
     ):
@@ -334,7 +352,7 @@ def relation_blocks(
         if src is None or dst is None:
             continue
         predicate = relation_of(relation)
-        if vfrom is None and vto is None and pat is None:
+        if vfrom is None and vto is None and pat is None and not props:
             yield f"{src} {predicate} {dst} .\n", 1
             continue
         said = f"_:r{rid.hex}"
@@ -353,6 +371,13 @@ def relation_blocks(
             lines.append(f"{said} {valid_from} {_typed(vfrom.isoformat(), XSD.date)} .\n")
         if vto is not None:
             lines.append(f"{said} {valid_to} {_typed(vto.isoformat(), XSD.date)} .\n")
+        # 관계의 칸 — 메모리 그래프(`export.data_graph`)와 같은 글.
+        for key, data_type, prop_predicate in edge_values.get(relation, []):
+            value = (props or {}).get(key)
+            if value is None or value == "" or value == []:
+                continue
+            for one in value if isinstance(value, list) else [value]:
+                lines.append(f"{said} {prop_predicate} {literal(data_type, one)} .\n")
         yield "".join(lines), len(lines)
 
 

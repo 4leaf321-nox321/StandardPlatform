@@ -168,16 +168,51 @@ def init(folder: Path, *, title: str, group: str = "", platform: str = "") -> st
     return f"작업 폴더를 만들었습니다: {folder}{where} — 원천을 {SOURCES}/ 에 넣으세요"
 
 
+#: 실행 이름 앞의 날짜 — 이미 있으면 또 붙이지 않는다.
+DATED = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
 def new_run(folder: Path, name: str) -> Path:
-    """`runs/<오늘>-<이름>` — 있으면 `-2`, `-3` … 지난 실행을 덮지 않는다."""
+    """`runs/<오늘>-<이름>` — 있으면 `-2`, `-3` … 지난 실행을 덮지 않는다. 이름이 이미
+    날짜로 시작하면(`2026-11-25-부품`) 날짜를 또 붙이지 않고, 앞의 `runs/` 는 뗀다."""
+    name = name.strip().removeprefix(f"{RUNS}/")
     clean = re.sub(r"[^\w가-힣.-]+", "-", name).strip("-.") or "run"
-    stem = f"{datetime.now().date().isoformat()}-{clean}"
+    stem = clean if DATED.match(clean) else f"{datetime.now().date().isoformat()}-{clean}"
     candidate = folder / RUNS / stem
     number = 2
     while candidate.exists():
         candidate = folder / RUNS / f"{stem}-{number}"
         number += 1
     return candidate
+
+
+def find_run(folder: Path, name: str) -> Path:
+    """실행 폴더 — `runs/<이름>` · `<이름>`(날짜까지) · 날짜를 뺀 이름(`부품` → 하나뿐인
+    `runs/<날짜>-부품`). 날짜를 뺀 이름이 여럿과 맞으면 고르지 않고 후보를 말한다."""
+    raw = name.strip().removeprefix(f"{RUNS}/").strip("/")
+    if not raw:
+        raise Stop("실행 이름을 주세요(runs/<이름>)")
+    runs = folder / RUNS
+    direct = inside(folder, f"{RUNS}/{raw}")
+    if direct.parent == runs and (direct / pipeline.MANIFEST).exists():
+        return direct
+
+    def bare(one: Path) -> set[str]:
+        # 날짜를 뗀 이름과 그 뒤의 `-2` 까지 뗀 이름.
+        undated = DATED.sub("", one.name)
+        return {undated, re.sub(r"-\d+$", "", undated)}
+
+    matched = sorted(
+        one
+        for one in (runs.glob("*") if runs.is_dir() else [])
+        if (one / pipeline.MANIFEST).exists() and raw in bare(one)
+    )
+    if len(matched) == 1:
+        return matched[0]
+    if matched:
+        shown = ", ".join(f"{RUNS}/{one.name}" for one in matched[-5:])
+        raise Stop(f"「{raw}」 과 맞는 실행이 여럿입니다 — 하나를 적으세요: {shown}")
+    raise Stop(f"실행 폴더가 없습니다: {name} — runs/<이름> 또는 그 이름")
 
 
 def record(
@@ -232,8 +267,37 @@ def _applied_on_screen(seen: dict[str, Any], job: str) -> bool:
     return bool(pipeline.plan_applied(chosen.server, chosen.token, job))
 
 
+def _previews(run: Path) -> list[dict[str, Any]]:
+    """이 실행의 미리 보기 잡 전부 — 앞선 것(`previews.json`)과 마지막 것(`preview.json`),
+    새것부터."""
+    out: list[dict[str, Any]] = []
+    history = pipeline._read_json(run / pipeline.PREVIEWS, [])
+    for one in history if isinstance(history, list) else []:
+        if isinstance(one, dict) and one.get("job_id"):
+            out.append(one)
+    last = pipeline._read_json(run / pipeline.PREVIEW, [])
+    if isinstance(last, dict) and (last.get("result") or {}).get("job_id"):
+        out.append(
+            {key: last.get(key) for key in ("at", "server", "platform", "digest")}
+            | {"job_id": (last.get("result") or {}).get("job_id")}
+        )
+    return list(reversed(out))
+
+
+def close(folder: Path, run: Path, *, reason: str) -> str:
+    """쓰지 않을 실행을 닫는다 — 할 일 목록에서 빠지고 다시 미리 보지 않는다. 지우지 않는다
+    (무엇을 했는지 남는다)."""
+    if (run / pipeline.APPLIED).exists():
+        raise Stop("이미 적용한 실행입니다 — 닫을 것이 없습니다(되돌리려면 run_undo)")
+    if not reason.strip():
+        raise Stop("왜 닫는지(reason)를 적으세요 — 뒤에 보는 사람이 압니다")
+    pipeline._write(run / pipeline.CLOSED, {"at": _now(), "reason": reason.strip()})
+    return f"닫았습니다: {run.relative_to(folder).as_posix()} — {reason.strip()}"
+
+
 def _run_state(folder: Path, run: Path) -> dict[str, Any]:
     loaded = pipeline.load(run)
+    body = pipeline.payload(loaded)
     state: dict[str, Any] = {
         "run": run.relative_to(folder).as_posix(),
         "sources": [str(one.get("name")) for one in loaded.manifest.get("sources") or []],
@@ -241,17 +305,41 @@ def _run_state(folder: Path, run: Path) -> dict[str, Any]:
         "objects": sum(len(batch.rows) for batch in loaded.objects),
         "preview": "없음",
         "applied": (run / pipeline.APPLIED).exists(),
+        "closed": "",
         "screen": "",
+        "digest": pipeline.digest(body),
+        "same_as": "",
     }
+    closed = pipeline._read_json(run / pipeline.CLOSED, [])
+    if isinstance(closed, dict):
+        state["closed"] = str(closed.get("reason") or "닫음")
+    jobs = _previews(run)
+    if not state["applied"] and not state["closed"]:
+        # **미리 본 잡 전부에** 묻는다 — 같은 실행을 다시 미리 보면 마지막 잡만 남아, 앞
+        # 잡으로 화면에서 이미 적용한 실행이 「적용 전」 으로 남고 다음 잡의 적용 링크가 또
+        # 떴다(실측).
+        for one in jobs:
+            if one.get("server") and _applied_on_screen(one, str(one["job_id"])):
+                state["applied"] = True
+                # 다음부터 다시 묻지 않게 적어 둔다 — 화면에서 적용한 것.
+                pipeline._write(
+                    run / pipeline.APPLIED,
+                    {
+                        "at": _now(),
+                        "server": one.get("server"),
+                        "digest": one.get("digest"),
+                        "job_id": one.get("job_id"),
+                        "via": "screen",
+                    },
+                )
+                break
     seen = pipeline._read_json(run / pipeline.PREVIEW, [])
     if isinstance(seen, dict):
         job = str((seen.get("result") or {}).get("job_id") or "")
-        if job and seen.get("server"):
+        if job and seen.get("server") and not state["applied"] and not state["closed"]:
             # 그 플랫폼 화면에서 이 계획을 펼친 채로 — 적용은 거기서 사람이 누른다.
             state["screen"] = pipeline.jobs_link(str(seen["server"]), job)
-            if not state["applied"] and _applied_on_screen(seen, job):
-                state["applied"] = True
-        if seen.get("digest") != pipeline.digest(pipeline.payload(loaded)):
+        if seen.get("digest") != state["digest"]:
             state["preview"] = "미리 본 뒤 바뀜"
         elif (seen.get("result") or {}).get("ok"):
             state["preview"] = "괜찮음"
@@ -302,16 +390,26 @@ def status(folder: Path) -> dict[str, Any]:
         for run in sorted((folder / RUNS).glob("*"))
         if (run / pipeline.MANIFEST).exists()
     ]
+    # **같은 묶음(지문)을 이미 적용한 실행이 있으면** 그 실행은 또 넣을 것이 아니다 — 같은
+    # 원천을 다시 변환하면 실행 폴더는 새로 생기지만 묶음은 같다.
+    applied_by = {one["digest"]: one["run"] for one in runs if one["applied"]}
+    for one in runs:
+        if not one["applied"] and one["digest"] in applied_by:
+            one["same_as"] = applied_by[one["digest"]]
+            one["screen"] = ""
 
     steps: list[str] = []
     if not sources:
         steps.append(f"원천 파일을 {SOURCES}/ 에 넣는다")
     for one in sources:
-        if one["kind"] == "엑셀":
-            steps.append(f"{one['name']}: 시트마다 CSV(UTF-8)로 저장해 {SOURCES}/ 에 둔다")
-        elif one["kind"] == "표" and not one["profiled"]:
-            steps.append(f"{one['name']}: 조사 — source_profile")
-    if any(one["kind"] in {"표", "문서"} for one in sources):
+        if one["name"].lower().endswith(".xls"):
+            steps.append(f"{one['name']}: 옛 엑셀(.xls)은 .xlsx 로 저장해 {SOURCES}/ 에 둔다")
+        elif one["kind"] in {"표", "엑셀"} and not one["profiled"]:
+            steps.append(
+                f"{one['name']}: 조사 — source_profile"
+                + ("(다른 시트는 sheet)" if one["kind"] == "엑셀" else "")
+            )
+    if any(one["kind"] in {"표", "엑셀", "문서"} for one in sources):
         if ontology["none"]:
             pass  # 새 정의 없음으로 확정 — 있는 타입에만 넣는다
         elif not ontology["exists"]:
@@ -328,18 +426,24 @@ def status(folder: Path) -> dict[str, Any]:
     if ontology["confirmed"]:
         for one in sources:
             converted = [run for run in runs if one["name"] in run["sources"]]
-            if one["kind"] == "표" and not one["mapping"]:
+            if one["kind"] in {"표", "엑셀"} and not one["mapping"]:
                 steps.append(
                     f"{one['name']}: 대응 파일 — {MAPPING}/{Path(one['name']).stem}.table.json"
                 )
-            elif one["kind"] == "표" and not converted:
+            elif one["kind"] in {"표", "엑셀"} and not converted:
                 steps.append(f"{one['name']}: 변환 — table_convert")
             elif one["kind"] == "문서" and not converted:
                 steps.append(
                     f"{one['name']}: 추출 — run_init 뒤 objects/ · relations/ 를 쓴다"
                 )
     for run in runs:
-        if run["applied"]:
+        if run["applied"] or run["closed"]:
+            continue
+        if run["same_as"]:
+            steps.append(
+                f"{run['run']}: {run['same_as']} 에서 이미 적용한 묶음과 같습니다(지문) — "
+                "또 넣지 않는다. 쓰지 않으면 run_close"
+            )
             continue
         if run["unresolved"]:
             steps.append(
@@ -408,9 +512,18 @@ def render(state: dict[str, Any]) -> str:
         "실행:",
     ]
     for run in state["runs"]:
+        where = (
+            f"닫음({run['closed']})"
+            if run.get("closed")
+            else "적용함"
+            if run["applied"]
+            else f"같은 묶음을 {run['same_as']} 에서 적용함"
+            if run.get("same_as")
+            else "적용 전"
+        )
         lines.append(
             f"- {run['run']}: 객체 {run['objects']} · 미해결 {run['unresolved']} · "
-            f"미리 보기 {run['preview']} · {'적용함' if run['applied'] else '적용 전'}"
+            f"미리 보기 {run['preview']} · {where}"
         )
     if not state["runs"]:
         lines.append("- 없음")
@@ -440,6 +553,10 @@ def main(argv: list[str] | None = None) -> int:
     note.add_argument("--reason", default="")
     note.add_argument("--by", default="")
     note.add_argument("--confirms-ontology", action="store_true")
+    shut = sub.add_parser("close", help="쓰지 않을 실행을 닫는다(할 일에서 뺀다)")
+    shut.add_argument("folder", type=Path)
+    shut.add_argument("run", help="runs/<이름> 또는 그 이름")
+    shut.add_argument("--reason", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
@@ -450,6 +567,8 @@ def main(argv: list[str] | None = None) -> int:
             print(set_platform(args.folder, args.name))
         elif args.command == "status":
             print(render(status(args.folder)))
+        elif args.command == "close":
+            print(close(args.folder, find_run(args.folder, args.run), reason=args.reason))
         else:
             print(
                 record(

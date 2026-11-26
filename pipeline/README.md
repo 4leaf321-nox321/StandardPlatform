@@ -210,6 +210,7 @@ python sp_setup.py --platform qings --server http://<새 주소>/qings --move   
 | `work_read` · `work_write` | 정의 · 판단표 · 대응 · 실행 폴더 행 파일(쓸 수 있는 자리가 정해져 있다) |
 | `decision_record` | 사람이 정한 것 — 정의 확정 · 미해결의 답 |
 | `table_convert` · `run_init` · `run_validate` · `run_preview` | 변환 · 빈 실행 · 검증 · 미리 보기 |
+| `run_close` | 쓰지 않을 실행을 닫는다(할 일에서 뺌 · 다시 미리 보지 않음 · 지우지 않음) |
 | `hub_pull` | (쌍둥이) 허브의 PLM 기준정보를 새 실행 폴더로 받는다 — env 에 `SP_HUB_SERVER` · `SP_HUB_TOKEN`(설치: `--hub-server` · `--hub-token`) |
 | `runs_list` · `run_undo` | 넣은 판들 · **되돌리기 계획**(되돌리는 것은 사람이 `undo_command` 로) |
 

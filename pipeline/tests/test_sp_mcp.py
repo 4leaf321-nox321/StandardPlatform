@@ -36,6 +36,7 @@ TOOLS = {
     "docx_extract",
     "table_convert",
     "run_init",
+    "run_close",
     "hub_pull",
     "run_validate",
     "run_preview",

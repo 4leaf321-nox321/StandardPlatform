@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-25d
+GUIDE_VERSION: 2026-11-26a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -1100,7 +1100,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 | | |
 |---|---|
-| `job_status(job_id, wait_seconds=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다. **`next` 가 다음 할 일**을 말한다 — 종류마다 다르다(`job_apply` 로 적용하는 계획 · `datasource_sync(apply=true)` 로 적용하는 계획 · 파일을 내는 작업 · 그냥 끝나는 작업). 계획 줄(`result.rows`)은 **앞 500줄까지만**(오류 줄 먼저) — 더 있으면 `rows_omitted` 가 그 수다. 건수(`counts`) · 오류(`errors`)는 전체의 것이니 그것으로 요약하고, 줄을 하나하나 옮겨 적지 않는다 |
+| `job_status(job_id, wait_seconds=20, rows=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다. **`next` 가 다음 할 일**을 말한다 — 종류마다 다르다(`job_apply` 로 적용하는 계획 · `datasource_sync(apply=true)` 로 적용하는 계획 · 파일을 내는 작업 · 그냥 끝나는 작업). 계획 줄(`result.rows`)은 **목록마다 `rows` 줄까지**(기본 20, 오류 줄 먼저 · 최대 500) — 더 있으면 `rows_omitted` 가 그 수다. `rows=0` 이면 요약만. 묶음 계획을 다 받으면 백만 자를 넘어 도구 결과의 한도에 걸린다. 건수(`counts`) · 오류(`errors`)는 전체의 것이니 그것으로 요약하고, 줄을 하나하나 옮겨 적지 않는다 |
 | `job_apply(job_id)` | 계획을 **사람이 확인한 뒤** 적용. 사용자의 판단 없이 부르지 않는다 |
 | `jobs_list(status=, kind=, mine=)` | 작업 최근 것부터 + 워커가 살아 있나. 결과는 요약뿐이다(계획 줄은 비우고 `rows_omitted` 에 수만) — 줄은 `job_status` 로. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다. 타이머가 넣은 작업에 파묻히면 `kind` · `mine` 으로 거른다 |
 | `job_cancel(job_id)` | 멈춘다 — 기다리는 것은 바로, 도는 것은 단계 사이에서. 시킨 사람만(시스템 관리자는 모두) |
@@ -1313,7 +1313,10 @@ SELECT (COUNT(DISTINCT ?m) AS ?n) WHERE { <…/o/part/PT-1> ^sp:rel.bom+ ?m . ?m
 절차는 둘뿐이다:
 
 1. `rdf_schema` — 클래스 · 속성 · 관계 이름을 **확인한다**(추측하지 않는다).
-   `sp:<타입slug>` · `sp:<타입>.<속성키>` · `sp:rel.<관계slug>`, 역관계는 `.inverse`.
+   `sp:<타입slug>` · `sp:<타입>.<속성키>` · `sp:rel.<관계slug>`, 역관계는 `.inverse`(사본에는
+   `<…/ns#rel.x.inverse>` 로 IRI 를 다 적는다 — 점이 둘인 접두어 이름을 사본이 못 읽는다).
+   **관계의 칸**(관계 속성 — 수량 · 옵션)은 선의 구체화한 진술에 `sp:rel.<관계>-<칸 키>` 로 있다:
+   `?st a rdf:Statement ; rdf:subject ?s ; rdf:predicate sp:rel.bom ; rdf:object ?o ; sp:rel.bom-qty ?q`.
    인터페이스도 클래스다(`sp:<인터페이스slug>`) — 구현 타입의 객체는 `a sp:<인터페이스>` 로
    **추론 없이** 잡힌다. 공통 속성의 값은 타입마다의 속성(`sp:<타입>.<키>`)에 있고, 그것들은
    `sp:<인터페이스>.<키>` 의 `rdfs:subPropertyOf` 다 — 구현 타입 전부의 값을 한 번에 물으려면
@@ -1326,6 +1329,9 @@ SELECT (COUNT(DISTINCT ?m) AS ?n) WHERE { <…/o/part/PT-1> ^sp:rel.bom+ ?m . ?m
 - `infer=True` 는 상속 · 역관계 · 이행이 **필요할 때만**. 느리고, 큰 범위는 서버가 거절한다.
   역관계만 필요하면 추론 없이 방향을 뒤집어 쓰는 편이 빠르다(`?t ^sp:plm_model.task ?m`).
 - 답의 `truncated` 가 참이면 **잘린 것이다.** 「전부 이것뿐」 으로 말하지 않는다.
+- **이름 · 글 칸은 `"…"@ko` 다** — 꼬리표 없는 글자로 견주면(`VALUES ?l { "볼트" }`) 0건이다.
+  `"볼트"@ko` 로 적거나 `FILTER(STR(?l) = "볼트")`. **0건이면 답의 `notes`** 가 그런 까닭(꼬리표 · 그래프에
+  없는 술어 · 타입)을 짐작해 적는다 — 고쳐 다시 묻고, 「없다」 로 말하지 않는다. `VALUES` 의 자리는 상관없다.
 - 쓰기(INSERT · DELETE)와 바깥 호출(SERVICE)은 막혀 있다. 고치는 것은 `object_update` 등으로.
 - 사람에게 옮길 때는 IRI 가 아니라 **이름**으로 말한다 — `rdfs:label` 을 함께 SELECT 한다.
 

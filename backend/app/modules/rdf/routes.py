@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from itertools import islice
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
-from rdflib import Graph, URIRef
+from rdflib import RDF, RDFS, Graph, Literal, URIRef, Variable
 from rdflib.paths import Path
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import expandUnicodeEscapes, parseQuery
@@ -127,6 +128,10 @@ class QueryOut(BaseModel):
     상한 없음) · `memory`(질의마다 메모리에 세운 그래프 — 추론 · 부서로 좁힌 설치)."""
     copied_at: str | None = None
     """사본이면 언제 실었나 — SP 의 지금과 다를 수 있다. 답에 함께 말한다."""
+    notes: list[str] = []
+    """**0건의 까닭 짐작** — 꼬리표 없는 글자로 이름 · 글 칸을 견줬거나(값은 `"…"@ko`),
+    그래프에 없는 술어 · 타입을 불렀다. 0건이 아니면 비어 있다. 오류가 아니다 — 질의를 고쳐
+    다시 묻는다."""
 
 
 _BLOCKED = ("insert", "delete", "load", "clear", "drop", "create", "service", "with")
@@ -148,6 +153,106 @@ def _algebra_iris(node: Any, out: set[str] | None = None) -> set[str]:
         for value in vars(node).values():
             _algebra_iris(value, found)
     return found
+
+
+def _plain_literals(node: Any, out: list[str] | None = None) -> list[str]:
+    """**꼬리표 · 형 없는 글자**가 값과 그대로 견줘지는 자리 — 삼중 패턴의 목적어, `VALUES`,
+    `FILTER(?x = "…")`(변수와 견줄 때만 — `STR(?x) = "…"` 는 맞는 꼴이다)."""
+    found = out if out is not None else []
+
+    def bare(term: Any) -> bool:
+        return isinstance(term, Literal) and term.language is None and term.datatype is None
+
+    if isinstance(node, dict):  # CompValue 도 dict 다
+        name = getattr(node, "name", "")
+        if name == "BGP":
+            for triple in node.get("triples") or []:
+                if len(triple) == 3 and bare(triple[2]):
+                    found.append(str(triple[2]))
+        elif name == "values":
+            for row in node.get("res") or []:
+                found.extend(str(term) for term in row.values() if bare(term))
+        elif name == "RelationalExpression" and node.get("op") in ("=", "!="):
+            pair = (node.get("expr"), node.get("other"))
+            for one, two in (pair, pair[::-1]):
+                if bare(one) and isinstance(two, Variable):
+                    found.append(str(one))
+        for value in node.values():
+            _plain_literals(value, found)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            _plain_literals(value, found)
+    return found
+
+
+def _used_terms(node: Any, preds: set[str], classes: set[str]) -> None:
+    """삼중 패턴의 술어와 `a <타입>` 의 타입 — 그래프에 있는지 볼 것."""
+    if isinstance(node, dict):
+        if getattr(node, "name", "") == "BGP":
+            for triple in node.get("triples") or []:
+                if len(triple) != 3:
+                    continue
+                _s, p, o = triple
+                if p == RDF.type and isinstance(o, URIRef):
+                    classes.add(str(o))
+                elif isinstance(p, URIRef):
+                    preds.add(str(p))
+        for value in node.values():
+            _used_terms(value, preds, classes)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            _used_terms(value, preds, classes)
+
+
+#: 0건 짐작에 싣는 이름 수.
+_HINT_NAMES = 5
+
+
+def _empty_hints(
+    algebra: Any,
+    names: export.Names,
+    present: Callable[[set[str], set[str]], tuple[set[str], set[str]]],
+) -> list[str]:
+    """0건일 때 **까닭을 짐작해** 말한다(오류 없이 0건이면 AI 는 「없다」 로 읽는다). `present`
+    는 (술어, 타입) → 그래프에 **있는** (술어, 타입)."""
+    notes: list[str] = []
+    plain = list(dict.fromkeys(_plain_literals(algebra)))
+    if plain:
+        shown = ", ".join(f'"{one}"' for one in plain[:_HINT_NAMES])
+        notes.append(
+            f"꼬리표 없는 글자({shown})로 값을 견줬습니다 — 이 그래프의 이름(rdfs:label) · "
+            '설명 · 글 칸 값은 "…"@ko 로 들어 있어 꼬리표 없는 글자와 맞지 않습니다(식별자 '
+            "dcterms:identifier · 고를 값은 꼬리표 없음). @ko 를 붙이거나 "
+            'FILTER(STR(?x) = "…") 로 견주세요.'
+        )
+    preds: set[str] = set()
+    classes: set[str] = set()
+    _used_terms(algebra, preds, classes)
+    ours = (names.base, f"{names.base}ns#")
+    preds = {one for one in preds if one.startswith(ours) or one in _KNOWN_PREDICATES}
+    classes = {one for one in classes if one.startswith(ours)}
+    if preds or classes:
+        have_p, have_c = present(preds, classes)
+        missing = sorted(preds - have_p) + sorted(classes - have_c)
+        if missing:
+            shown = ", ".join(missing[:_HINT_NAMES])
+            notes.append(
+                f"그래프에 없는 술어 · 타입을 불렀습니다: {shown} — 이름이 틀렸거나(식별자는 "
+                "dcterms:identifier, 칸은 sp:<타입>.<키>, 관계는 sp:rel.<종류>) "
+                "범위(`types`)에 없는 타입입니다. 정의는 ontology_schema 로 봅니다."
+            )
+    return notes
+
+
+#: 그래프가 쓰는 바깥 어휘의 술어 — 이름이 틀렸는지 볼 것(이것 밖의 바깥 IRI 는 안 본다).
+_KNOWN_PREDICATES = frozenset(
+    {
+        str(RDFS.label),
+        str(RDFS.comment),
+        "http://purl.org/dc/terms/identifier",
+        "http://www.w3.org/2004/02/skos/core#altLabel",
+    }
+)
 
 
 def _asks_records(algebra: Any, names: export.Names, slugs: list[str]) -> list[str]:
@@ -221,7 +326,7 @@ def query(
     # 부서 구분이 없다) — 그 밖은 지금처럼 메모리에 세운다.
     copy = store.available()
     if copy is not None and not payload.infer and sees_every_department(user):
-        return _from_copy(copy, payload, names)
+        return _from_copy(copy, payload, names, prepared.algebra)
 
     # **안 좁혔으면 기록 타입은 뺀다**(ADR 0031) — 기록 수천만 건이 5만 객체 상한에 걸려 코어를
     # 건너뛰는 물음까지 막히던 것. 빠진 기록을 부르는 질의는 0건이 아니라 거절로 — 0건이면
@@ -309,6 +414,18 @@ def query(
     columns = [str(one) for one in (result.vars or [])]
     rows: list[dict[str, Any]] = []
     truncated = len(found) > payload.limit
+    notes = (
+        []
+        if found
+        else _empty_hints(
+            prepared.algebra,
+            names,
+            lambda preds, classes: (
+                {one for one in preds if (None, URIRef(one), None) in graph},
+                {one for one in classes if (None, RDF.type, URIRef(one)) in graph},
+            ),
+        )
+    )
     for row in found[: payload.limit]:
         values = list(row) if isinstance(row, tuple) else []
         rows.append(
@@ -328,10 +445,45 @@ def query(
         elapsed_ms=elapsed,
         prefixes=_prefixes(names),
         left_out=left_out,
+        notes=notes,
     )
 
 
-def _from_copy(copy: store.Copy, payload: QueryRequest, names: export.Names) -> QueryOut:
+def _present_in_copy(
+    copy: store.Copy, names: export.Names, preds: set[str], classes: set[str]
+) -> tuple[set[str], set[str]]:
+    """사본에 그 술어 · 타입이 있나 — 질의 하나로(따로 도는 프로세스라 한 번에 묻는다)."""
+    parts = []
+    if preds:
+        listed = " ".join(f"<{one}>" for one in sorted(preds))
+        parts.append(
+            f'{{ VALUES ?x {{ {listed} }} FILTER EXISTS {{ ?s ?x ?o }} BIND("p" AS ?k) }}'
+        )
+    if classes:
+        listed = " ".join(f"<{one}>" for one in sorted(classes))
+        parts.append(
+            f'{{ VALUES ?x {{ {listed} }} FILTER EXISTS {{ ?s a ?x }} BIND("c" AS ?k) }}'
+        )
+    out = store.run(
+        copy,
+        f"SELECT ?x ?k WHERE {{ {' UNION '.join(parts)} }}",
+        base=names.base,
+        prefixes={},
+        limit=len(preds) + len(classes) + 1,
+    )
+    have_p: set[str] = set()
+    have_c: set[str] = set()
+    for row in out.get("rows") or []:
+        iri, kind = row[0], row[1]
+        if iri is None or kind is None:
+            continue
+        (have_p if kind["v"] == "p" else have_c).add(str(iri["v"]))
+    return have_p, have_c
+
+
+def _from_copy(
+    copy: store.Copy, payload: QueryRequest, names: export.Names, algebra: Any = None
+) -> QueryOut:
     prefixes = _prefixes(names)
     started = time.perf_counter()
     out = store.run(
@@ -352,6 +504,16 @@ def _from_copy(copy: store.Copy, payload: QueryRequest, names: export.Names) -> 
             for row in out["rows"]
         ]
         truncated = bool(out["truncated"])
+    notes: list[str] = []
+    if out["kind"] != "ask" and not rows and algebra is not None:
+        try:
+            notes = _empty_hints(
+                algebra,
+                names,
+                lambda preds, classes: _present_in_copy(copy, names, preds, classes),
+            )
+        except AppError:
+            notes = []  # 짐작을 못 해도 답은 그대로 — 0건은 0건이다
     return QueryOut(
         columns=columns,
         rows=rows,
@@ -362,6 +524,7 @@ def _from_copy(copy: store.Copy, payload: QueryRequest, names: export.Names) -> 
         prefixes=prefixes,
         source="copy",
         copied_at=copy.copied_at,
+        notes=notes,
     )
 
 

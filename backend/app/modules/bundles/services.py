@@ -26,6 +26,7 @@ import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,10 +35,13 @@ from app.database import engine
 from app.modules.accounts.models import User
 from app.modules.bundles import journal
 from app.modules.bundles import tombstones as graves
-from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut
-from app.modules.objects import bulk
+from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut, DocumentPlanOut
+from app.modules.objects import access, bulk
+from app.modules.objects import documents as object_documents
+from app.modules.objects.models import ObjectDocument, ObjectInstance
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
 from app.modules.objects.schemas import ImportRowOut
+from app.modules.objects.services import properties_of
 from app.modules.ontology import importer, similar
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.schemas import ChangeOut
@@ -58,6 +62,21 @@ class Batch:
         return not self.error and self.plan is not None and self.plan.ok
 
 
+#: 묶음이 쓴 문서 판의 「어디서」 — 판 목록에서 사람이 쓴 판과 가른다.
+BUNDLE_VIA = "묶음 가져오기"
+
+
+@dataclass
+class DocumentPlan:
+    type_slug: str
+    key: str
+    property: str
+    action: str
+    chars: int
+    digest: str
+    message: str = ""
+
+
 @dataclass
 class Outcome:
     ontology: importer.Plan | None = None
@@ -65,6 +84,7 @@ class Outcome:
     relations: list[Batch] = field(default_factory=list)
     tombstones: bulk.Plan | None = None
     """허브에서 사라진 것 — 사용 중지 · 합치기 · 끊기."""
+    documents: list[DocumentPlan] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     snapshot_id: uuid.UUID | None = None
     run_id: uuid.UUID | None = None
@@ -76,6 +96,8 @@ class Outcome:
         if self.errors or (self.ontology is not None and self.ontology.errors):
             return False
         if self.tombstones is not None and not self.tombstones.ok:
+            return False
+        if any(one.action == "error" for one in self.documents):
             return False
         return all(one.ok for one in [*self.objects, *self.relations])
 
@@ -99,6 +121,8 @@ class Outcome:
         for action, count in (self.tombstones.counts if self.tombstones else {}).items():
             if count:
                 out[f"tombstones_{action}"] = count
+        for doc in self.documents:
+            out[f"documents_{doc.action}"] = out.get(f"documents_{doc.action}", 0) + 1
         return out
 
 
@@ -385,6 +409,9 @@ def _stages(
             continue
         out.relations.append(Batch(links.type_slug, planned_links))
 
+    if bundle.documents:
+        _documents(db, user, bundle, out, types, light=light, pending=pending)
+
     if bundle.tombstones is not None and (
         bundle.tombstones.objects or bundle.tombstones.relations
     ):
@@ -402,6 +429,87 @@ def _stages(
         out.tombstones = graves.run(
             db, user, bundle.tombstones, source=bundle.source, apply=True
         )
+
+
+def _documents(
+    db: Session,
+    user: User,
+    bundle: BundleIn,
+    out: Outcome,
+    types: dict[str, ObjectType],
+    *,
+    light: bool,
+    pending: dict[str, set[str]] | None,
+) -> None:
+    """**문서 본문을 쓴다**(ADR 0053) — 객체 · 관계 단계 뒤라 이 묶음이 만든 객체에도 쓴다.
+    미리 보기도 쓴다(바깥이 롤백한다 — 적용과 같은 판정). 가벼운 미리 보기는 쓰지 않고, 이
+    묶음이 만들 객체는 `pending` 이다. 권한은 화면의 문서 수정과 같다(그 객체를 고칠 수 있는
+    사람)."""
+    defs: dict[str, dict[str, Any]] = {}
+    for doc in bundle.documents:
+        body = doc.body.replace("\r\n", "\n")
+        plan = DocumentPlan(
+            doc.type_slug,
+            doc.key,
+            doc.property,
+            "error",
+            len(body),
+            hashlib.sha256(body.encode("utf-8")).hexdigest()[:16],
+        )
+        out.documents.append(plan)
+        object_type = types.get(doc.type_slug)
+        if object_type is None:
+            plan.message = f"타입을 찾을 수 없습니다: {doc.type_slug}"
+            continue
+        if doc.type_slug not in defs:
+            defs[doc.type_slug] = {one.key: one for one in properties_of(db, object_type.id)}
+        definition = defs[doc.type_slug].get(doc.property)
+        if definition is None or definition.data_type != "document":
+            plan.message = f"{doc.type_slug} 에 문서 칸 {doc.property!r} 이 없습니다"
+            continue
+        row = db.scalar(
+            select(ObjectInstance).where(
+                ObjectInstance.type_id == object_type.id,
+                ObjectInstance.key == doc.key,
+                ObjectInstance.deleted_at.is_(None),
+            )
+        )
+        if row is None:
+            if light and doc.key in (pending or {}).get(doc.type_slug, set()):
+                plan.action = "pending"
+                plan.message = "이 묶음이 만들 객체 — 적용할 때 씁니다"
+            else:
+                plan.message = f"객체를 찾을 수 없습니다: {doc.type_slug} {doc.key}"
+            continue
+        try:
+            access.require_edit(db, user, object_type, row, code_value=code("BUNDLES", 35))
+        except AppError as refused:
+            plan.message = refused.message
+            continue
+        found = db.scalar(
+            select(ObjectDocument).where(
+                ObjectDocument.object_id == row.id, ObjectDocument.key == doc.property
+            )
+        )
+        if found is not None and found.body == body:
+            plan.action = "unchanged"
+            continue
+        plan.action = "create" if found is None else "update"
+        if light:
+            continue
+        object_documents.write_body(
+            db,
+            user,
+            row,
+            doc.property,
+            body,
+            note=doc.note or f"묶음 가져오기 — {_label_of(bundle)}",
+            found=found,
+            # 묶음은 작업(워커)이 쓴다 — 요청의 토큰이 없고, 화면에서 사람이 적용하기도 한다.
+            # 누가 적용했는지는 묶음의 판(`run_id`)이 남긴다.
+            via=BUNDLE_VIA,
+        )
+    db.flush()
 
 
 def _staged(on_progress: bulk.Progress, prefix: str) -> bulk.Progress:
@@ -433,6 +541,17 @@ def outcome_out(outcome: Outcome) -> BundleOut:
             if outcome.tombstones is not None
             else None
         ),
+        documents=[
+            DocumentPlanOut(
+                type_slug=one.type_slug,
+                key=one.key,
+                property=one.property,
+                action=one.action,  # type: ignore[arg-type]
+                chars=one.chars,
+                message=one.message,
+            )
+            for one in outcome.documents
+        ],
         errors=outcome.errors,
         snapshot_id=outcome.snapshot_id,
         run_id=outcome.run_id,
@@ -472,6 +591,11 @@ def fingerprint(outcome: Outcome) -> str:
         "tombstones": [
             (r.row, r.action, r.label, r.message)
             for r in (outcome.tombstones.rows if outcome.tombstones else [])
+        ],
+        # 본문의 지문까지 — 미리 본 뒤 본문이 바뀌면 다른 계획이다.
+        "documents": [
+            (one.type_slug, one.key, one.property, one.action, one.digest, one.message)
+            for one in outcome.documents
         ],
         "errors": outcome.errors,
     }

@@ -568,3 +568,228 @@ def test_넣은_판을_도구로_되돌린다(
     assert ok is True and "되돌렸습니다" in text, text
     tools = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()
     assert tools["items"] == [], tools
+
+
+def test_플랫폼_칸과_겹친_키_수명이_아닌_status_이름이_빈_행은_검사가_잡는다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """검사는 오류 0 으로 통과하고 미리 보기에서 463행이 막혔다 — `status` 칸이 수명과
+    겹쳐서."""
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    names = _fill(run, admin.workspace)
+    ontology = json.loads((run / "ontology.json").read_text(encoding="utf-8"))
+    ontology["types"][0]["properties"].append(
+        {"key": "status", "label": "진행 상태", "data_type": "text"}
+    )
+    _write(run / "ontology.json", ontology)
+    _write(
+        run / "objects" / "c_more.json",
+        {
+            "type_slug": names["company"],
+            "workspace_slug": admin.workspace,
+            "rows": [
+                {"key": "C-2", "label": "기업2", "status": "진행", "_source": {"file": "x"}},
+                {"key": "C-3", "label": "기업3", "status": "deprecated", "_source": {"f": 1}},
+                {
+                    "key": "C-4",
+                    "label": "기업4",
+                    "valid_from_year": "올해",
+                    "_source": {"f": 1},
+                },
+                {"key": "C-9", "label": " ", "_source": {"file": "x"}},
+            ],
+        },
+    )
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is False
+    assert "속성 키 'status'" in text and "work_status" in text, text
+    assert "수명 칸(active · deprecated)이 아닌 행 1개(1행)" in text, text
+    assert "valid_from_year" in text
+    assert "label(이름)이 빈 행 1개(4행)" in text and "ask_platform" in text, text
+
+    # 플랫폼에 이미 있는 식별자면 그 객체를 고치는 행이다 — 이름 없이도 된다.
+    token = _token(client, admin)
+    made = client.post(
+        "/api/ontology/import",
+        params={"dry_run": "false"},
+        json={
+            "types": [{"slug": names["company"], "label": "기업", "key_policy": "required"}]
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    created = client.post(
+        f"/api/objects/{names['company']}",
+        json={"key": "C-9", "label": "기업9", "workspace_slug": admin.workspace},
+        headers=admin.headers,
+    )
+    assert created.status_code == 201, created.text
+    _ok, asked = pipeline.cmd_validate(run, server=SERVER, token=token)
+    assert "label(이름)이 빈 행" not in asked, asked
+
+    # 플랫폼도 새 속성의 키로 받지 않는다.
+    refused = client.post(
+        "/api/ontology/import",
+        json={
+            "types": [
+                {
+                    "slug": _uniq("work"),
+                    "label": "업무",
+                    "properties": [{"key": "status", "label": "상태", "data_type": "text"}],
+                }
+            ]
+        },
+        headers=admin.headers,
+    )
+    assert refused.status_code == 200, refused.text
+    assert any("플랫폼 칸" in one for one in refused.json()["errors"]), refused.json()
+
+
+def _report_body(name: str) -> str:
+    return f"# {name} 백서\n\n본문 — 시험 결과 요약.\n"
+
+
+def test_행에_붙인_문서_본문을_적용때_문서_칸에_쓰고_이름_전화를_검사한다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """묶음에는 객체 · 관계 행만 실려 문서 본문(document_write)을 넣을 길이 없었다."""
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    names = _fill(run, admin.workspace)
+    ontology = json.loads((run / "ontology.json").read_text(encoding="utf-8"))
+    ontology["types"][0]["properties"].append(
+        {"key": "paper", "label": "백서", "data_type": "document"}
+    )
+    _write(run / "ontology.json", ontology)
+    (run / "documents").mkdir()
+    (run / "documents" / "C-1.md").write_text(_report_body("기업1"), encoding="utf-8")
+    rows = json.loads((run / "objects" / "b_company.json").read_text(encoding="utf-8"))
+    rows["rows"][0]["_documents"] = {"paper": "documents/C-1.md"}
+    _write(run / "objects" / "b_company.json", rows)
+
+    # 개인 정보 꼴은 오류 · 사람 이름 꼴은 경고 — 가린 값으로만 적는다.
+    (run / "documents" / "C-1.md").write_text(
+        _report_body("기업1") + "담당 김철수 책임 · 연락처 010-1234-5678\n", encoding="utf-8"
+    )
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is False and "개인 정보 꼴 1곳" in text and "010" in text, text
+    assert "010-1234-5678" not in text, "보고서는 가린 값만"
+    assert "사람 이름 꼴" in text
+    (run / "documents" / "C-1.md").write_text(_report_body("기업1"), encoding="utf-8")
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is True, text
+
+    token = _token(client, admin)
+    ok, text = pipeline.cmd_preview(run, server=SERVER, token=token)
+    assert ok is True, text
+    seen = json.loads((run / "preview.json").read_text(encoding="utf-8"))
+    assert [(one["key"], one["action"]) for one in seen["result"]["documents"]] == [
+        ("C-1", "create")
+    ]
+    ok, text = pipeline.cmd_apply(run, server=SERVER, token=token)
+    assert ok is True, text
+    company = client.get(f"/api/objects/{names['company']}", headers=admin.headers).json()
+    oid = company["items"][0]["id"]
+    doc = client.get(
+        f"/api/objects/{names['company']}/{oid}/documents/paper", headers=admin.headers
+    ).json()
+    assert doc["revision"] == 1 and doc["body"] == _report_body("기업1"), doc
+    assert doc["updated_via"] == "묶음 가져오기", "사람이 쓴 판과 가른다"
+
+
+def test_문서_본문의_모양을_검사가_잡는다(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    names = _fill(run, "cae")
+    ontology = json.loads((run / "ontology.json").read_text(encoding="utf-8"))
+    ontology["types"][0]["properties"].append(
+        {"key": "memo", "label": "메모", "data_type": "text"}
+    )
+    _write(run / "ontology.json", ontology)
+    (run / "documents").mkdir()
+    (run / "documents" / "a.md").write_text("본문", encoding="utf-8")
+    (run / "documents" / "a.pdf").write_bytes(b"%PDF")
+    _write(
+        run / "objects" / "c_docs.json",
+        {
+            "type_slug": names["company"],
+            "workspace_slug": "cae",
+            "rows": [
+                {"key": "C-5", "label": "a", "_documents": {"memo": "documents/a.md"}},
+                {"label": "b", "_documents": {"paper": "documents/a.md"}},
+                {"key": "C-7", "label": "c", "_documents": {"paper": "../밖.md"}},
+                {"key": "C-8", "label": "d", "_documents": {"paper": "documents/a.pdf"}},
+                {"key": "C-9", "label": "e", "_documents": {"paper": "documents/없음.md"}},
+                {"key": "C-10", "label": "f", "_documents": "documents/a.md"},
+            ],
+        },
+    )
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is False
+    for word in ("문서 칸이 아닙니다", "식별자(key)", "실행 폴더 밖", "마크다운", "없습니다"):
+        assert word in text, (word, text)
+    assert '_documents 는 {"문서 칸 키"' in text
+    sent = pipeline.payload(pipeline.load(run))
+    assert [one["key"] for one in sent["documents"]] == ["C-5"], "읽은 것만 싣는다"
+    assert all("_documents" not in row for batch in sent["objects"] for row in batch["rows"])
+
+
+def test_묶음의_문서_본문은_객체를_식별자로_찾고_문서_칸만_받는다(
+    client: TestClient, admin: Signed
+) -> None:
+    from tests.api.conftest import bundle_import
+
+    kind = _uniq("paper_owner")
+    made = client.post(
+        "/api/ontology/import",
+        params={"dry_run": "false"},
+        json={
+            "types": [
+                {
+                    "slug": kind,
+                    "label": "보고 대상",
+                    "key_policy": "required",
+                    "properties": [
+                        {"key": "paper", "label": "백서", "data_type": "document"},
+                        {"key": "memo", "label": "메모", "data_type": "text"},
+                    ],
+                }
+            ]
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    rows = {
+        "type_slug": kind,
+        "workspace_slug": admin.workspace,
+        "rows": [{"key": "R-1", "label": "하나"}],
+    }
+    docs = [
+        {"type_slug": kind, "key": "R-1", "property": "paper", "body": "# 첫 판"},
+        {"type_slug": kind, "key": "R-1", "property": "memo", "body": "x"},
+        {"type_slug": kind, "key": "R-404", "property": "paper", "body": "x"},
+    ]
+    light = bundle_import(
+        client, admin, {"objects": [rows], "documents": docs[:1], "preview": "plan"}
+    )
+    assert [one["action"] for one in light["documents"]] == ["pending"], light
+    plan = bundle_import(client, admin, {"objects": [rows], "documents": docs})
+    actions = [(one["action"], one["message"]) for one in plan["documents"]]
+    assert actions[0] == ("create", "") and plan["ok"] is False, plan
+    assert "문서 칸" in actions[1][1] and "찾을 수 없습니다" in actions[2][1]
+    done = bundle_import(
+        client, admin, {"objects": [rows], "documents": docs[:1], "apply": True}
+    )
+    assert done["applied"] is True and done["counts"]["documents_create"] == 1, done
+    again = bundle_import(client, admin, {"objects": [rows], "documents": docs[:1]})
+    assert again["documents"][0]["action"] == "unchanged", again
+
+
+def test_플랫폼_칸_목록은_한_벌이다() -> None:
+    """키트 검사 · 플랫폼 정의 검사 · 일괄 입력의 고정 열 — 어긋나면 한쪽만 통과한다."""
+    from app.modules.objects.bulk import FIXED_COLUMNS
+    from app.modules.ontology.services import RESERVED_PROPERTY_KEYS
+
+    assert tuple(RESERVED_PROPERTY_KEYS) == tuple(FIXED_COLUMNS)
+    assert tuple(pipeline.RESERVED_ROW_KEYS) == tuple(FIXED_COLUMNS)

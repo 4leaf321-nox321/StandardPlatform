@@ -24,8 +24,8 @@
 | 2 정의 초안 | **이미 있는 타입에 넣는 것이면 새 정의를 만들지 않는다** — 판단표에 「새 정의 없음 · 어느 타입에」 를 적어 보이고, 확정을 받으면 `decision_record(confirms_ontology=true)`(정의 파일 없이 = 「새 정의 없음」 확정). 새 타입이 필요하면 `pipeline_guide("modeling")` · `platform_schema(work)`(그 작업의 플랫폼 정의 — 서버 MCP 없이) · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` — **조사의 정의 초안에서 시작한다**: 식별자 · 숫자와 단위 · 날짜 · 고를 값은 계산한 것이라 그대로 두고(근거 `_why` 를 판단표에), `col_<n>` 키 · slug · 이름은 사람과 정한다. `_bridge`(잇는 표 후보)면 타입이 아니라 관계 + 선의 칸으로 넣을지 묻는다 | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
 | 3 대응 | `pipeline_guide("table")` · `work_write` 로 `03-대응/<원천 이름>.table.json` | — |
 | 4 변환 | `table_convert` → 보고서를 읽고 대응을 고쳐 다시 | **미해결은 사람에게 묻고** `decision_record` |
-| 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` | 확신 없는 것은 `unresolved.json` 으로 |
-| 5 검증 · 미리 보기 | `run_validate` → `run_preview` | **어느 플랫폼에 미리 봤는지부터 요약을 보이고, 적용은 사람이 — `apply_on_screen`(그 플랫폼 화면 「작업」 에서 「적용」) 을 먼저 안내, 명령 창이 편하면 `apply_command`** — 적용 도구는 없다 |
+| 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` — 문서 본문(마크다운)은 `runs/<실행>/documents/*.md` 에 쓰고 행의 `_documents` 로 붙인다 | 확신 없는 것은 `unresolved.json` 으로 |
+| 5 검증 · 미리 보기 | `run_validate` → `run_preview` | **어느 플랫폼에 미리 봤는지부터 요약을 보이고, 적용은 사람이 — `apply_on_screen`(그 플랫폼 화면 「작업」 에서 「적용」) 을 먼저 안내, 명령 창이 편하면 `apply_command`** — 적용 도구는 없다. 이미 적용한 실행은 다시 미리 보지 않는다(새 실행으로). 쓰지 않을 실행은 `run_close(reason=)` |
 | 허브에서 받기(쌍둥이) | `hub_pull(work, group="plm")` → `run_validate` → `run_preview` | 적용은 사람이. 받은 타입은 받는 플랫폼에서 **허브 관리**가 되어 거기서는 못 고친다 — 정의 · 값이 틀렸으면 허브 쪽 작업에서 고친다 |
 | Word → 문서 속성(본문) | `docx_extract` → 플랫폼 MCP `attachment_upload_prepare` + `curl` → 그림 줄을 `photo:<id>` 로 → `document_write` — `pipeline_guide("docx")` | 못 옮긴 그림(차트 · SmartArt · 바꾸지 못한 EMF)을 알린다 · **셸이 없으면 그림은 사람이 화면에서** 올린다 |
 
@@ -74,6 +74,19 @@
 10. **넣은 뒤에 틀린 것을 알면** `python sp_pipeline.py runs` 로 판 번호를 찾고
     `undo <판번호>` 로 **계획을 먼저** 본다. 사람이 읽은 뒤 `undo <판번호> --apply`.
     되돌리기도 사람이 누른다 — 그 사이 남이 고친 줄은 되돌리지 않고 이유가 줄에 적혀 온다.
+
+## 실행의 이름 · 상태
+
+- 실행은 `runs/<날짜>-<이름>` — `run_init` · `table_convert` 에 이름만 준다. 이미 날짜로 시작하는
+  이름(`2026-11-25-부품`)이면 날짜를 또 붙이지 않는다.
+- 도구의 `run` 인자는 `runs/<날짜>-<이름>` · `<날짜>-<이름>` · 날짜를 뺀 이름(그 이름의 실행이 하나뿐일
+  때) 모두 된다. 여럿과 맞으면 후보를 말하고 멈춘다.
+- `work_status` 는 실행마다 **미리 본 잡 전부**를 보고 적용 여부를 정한다 — 같은 실행을 다시 미리 봐도
+  앞 잡을 화면에서 적용했으면 「적용함」 이다. **같은 묶음(지문)을 이미 적용한 다른 실행**은 「또 넣지
+  않는다」 로 알린다.
+- 쓰지 않을 실행(고쳐서 새 실행을 만든 뒤의 옛 실행 · 같은 묶음을 이미 넣은 실행)은 `run_close(work,
+  run, reason)` — 할 일에서 빠지고 다시 미리 보지 않는다. 지우지 않는다(명령: `python sp_work.py close
+  <작업 폴더> <실행> --reason …`).
 
 ## 실행 폴더의 모양
 
@@ -130,7 +143,13 @@ runs/2026-09-13-sim-tools/
 ```
 
 - 칸 이름은 **속성 키**(`ontology_schema` 의 `properties[].key`). 고정 칸은 `key` · `label` ·
-  `description` · `status` · `aliases` · `valid_from_year` · `valid_to_year`.
+  `description` · `status` · `aliases` · `valid_from_year` · `valid_to_year`(과 `id` ·
+  `renamed_from` · `previous_keys`). **이 이름으로 속성을 짓지 않는다** — 행의 그 칸은 속성이
+  아니라 고정 칸으로 읽힌다. `status` 는 객체의 수명(`active` · `deprecated`)이다 — 업무 상태는
+  `work_status` 같은 다른 키로. 검사(`run_validate`)가 오류로 잡고, 플랫폼도 새 속성의 키로
+  받지 않는다.
+- **새로 만드는 객체는 `label`(이름)이 있어야 한다** — 빈 행은 검사가 잡는다. 플랫폼에 이미 있는
+  식별자를 고치는 행이면 이름 없이도 된다(`ask_platform` 검사가 플랫폼에 물어 가른다).
 - 참조 칸은 상대의 **식별자**로 적는다(없으면 별칭 · 이름으로 풀리지만, 겹치면 거절된다).
 - **원천마다 다른 코드 · 이름은 `aliases` 로 함께 싣는다**(말의 자리, ADR 0063 — SP 의 별칭이 정본). 대응 파일의
   `dictionaries` · `map` 은 변환의 입력일 뿐이라, 객체를 가리키는 짝을 거기에만 두면 이름 풀이 · 검색 · 다른 설치가
@@ -139,6 +158,14 @@ runs/2026-09-13-sim-tools/
 - **`_` 로 시작하는 칸은 플랫폼에 안 간다** — `_source`(필수에 가깝다) · `_confidence` · `_note`.
 - `workspace_slug` 가 없으면 전역으로 들어가고, 전역은 시스템 관리자만 넣는다.
 - 한 파일에 5000행까지.
+- **문서 본문** — 그 타입의 **문서 칸**(`data_type: document`)에 마크다운을 넣으려면 실행 폴더의
+  `documents/` 에 파일을 두고 행에 `"_documents": {"<문서 칸 키>": "documents/<파일>.md"}` 를
+  붙인다(식별자 `key` 가 있는 행만). 보낼 때 본문을 읽어 묶음에 싣고, 적용하면 그 객체의 문서에
+  판이 하나 오른다(같은 본문이면 안 오른다 · 판의 「어디서」 는 「묶음 가져오기」). 묶음 되돌리기는
+  문서를 되돌리지 않는다 — 문서의 판에서 옛 판으로. 한 편에 100만 자까지.
+- **문서 본문은 이름 · 전화를 검사한다** — 전화번호 · 메일 주소 · 주민등록번호 꼴은 **오류**(가리거나
+  빼고 보낸다 — 문서는 판으로 남아 나중에 지워도 옛 판에 남는다), 「김철수 책임」 · 「담당: 홍길동」
+  같은 사람 이름 꼴은 **경고**(사람에게 확인받는다). 보고서에는 가린 값만 적는다.
 
 ### 관계 행
 

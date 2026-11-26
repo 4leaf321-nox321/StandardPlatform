@@ -132,7 +132,10 @@ def test_사본은_메모리_그래프와_같은_트리플을_낸다(
     want_plain, want_said = _ours(memory, world["types"])
     got_plain, got_said = _ours(copied, world["types"])
     assert got_plain == want_plain
-    assert got_said == want_said and len(got_said) == 1
+    # 진술 둘 — 기간 · 고정이 있는 선, 그리고 칸(수량)만 있는 선(관계의 칸이 진술로 나간다).
+    assert got_said == want_said and len(got_said) == 2
+    quantities = {str(o) for body in got_said for p, o in body if str(p).endswith("-qty")}
+    assert quantities == {"1", "2"}
     # 쓴 줄 수 — 같은 줄이 두 번 나올 수 있다(부서마다 같은 식별자를 쓰는 두 객체는 사본에서
     # IRI 하나다). 사본은 그것을 하나로 친다.
     assert written.triples == out.getvalue().count("\n") >= len(copied)

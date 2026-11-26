@@ -125,7 +125,9 @@ def relation_prints(today: Any) -> str:
         "SELECT r.id, r.src_object_id, r.dst_object_id, r.relation, md5(concat_ws("
         f"{_SEP}, r.relation, r.src_object_id::text, r.dst_object_id::text, "
         f"coalesce(r.valid_from::text, {_NULL}), coalesce(r.valid_to::text, {_NULL}), "
-        f"coalesce(r.pinned_revision::text, {_NULL}), coalesce(r.pinned_at::text, {_NULL})"
+        f"coalesce(r.pinned_revision::text, {_NULL}), coalesce(r.pinned_at::text, {_NULL}), "
+        # 관계의 칸 — 고치면 그 선의 진술을 다시 낸다.
+        f"coalesce(r.properties::text, {_NULL})"
         f")) {alive_relations(today)} ORDER BY r.id"
     )
 
@@ -649,7 +651,8 @@ def expected(db: Session, shape: Shape, *, today: Any) -> Expected:
         db.execute(
             text(
                 f"SELECT count(*) {alive_relations(today)} AND (r.valid_from IS NOT NULL "
-                "OR r.valid_to IS NOT NULL OR r.pinned_at IS NOT NULL)"
+                "OR r.valid_to IS NOT NULL OR r.pinned_at IS NOT NULL "
+                "OR (r.properties IS NOT NULL AND r.properties <> '{}'::jsonb))"
             )
         ).scalar_one()
     )

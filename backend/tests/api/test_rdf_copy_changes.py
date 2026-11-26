@@ -138,7 +138,12 @@ def world(client: TestClient, admin: Signed) -> dict[str, Any]:
         ("P1X", "P1", "X", {}),
         ("P1Y", "P1", "Y", {"valid_from": "2026-01-01"}),
         ("P1Z", "P1", "Z", {"valid_from": soon}),
-        ("P2X", "P2", "X", {"valid_to": soon}),
+        (
+            "P2X",
+            "P2",
+            "X",
+            {"valid_to": soon, "properties": {"qty": 3, "opts": ["A", "B"], "memo": "볼트"}},
+        ),
         ("P2W", "P2", "W", {}),
     ):
         made = _link(client, admin, product, ids[src], kind, ids[dst], **extra)
@@ -225,6 +230,13 @@ def test_바뀐_것만_고친_사본은_통째로_내보낸_것과_같다(
         )
     )
     db.commit()
+    # 관계의 칸 — 수량만 고쳐도 그 선의 진술이 다시 나가야 한다.
+    qty = client.patch(
+        f"/api/objects/{product}/{ids['P2']}/relations/{world['edges']['P2X']}",
+        json={"properties": {"qty": 7, "opts": ["C"], "memo": "볼트"}},
+        headers=admin.headers,
+    )
+    assert qty.status_code == 200, qty.text
 
     assert copycli.load(tmp_path) == 0
     done = _manifest(tmp_path)
@@ -463,3 +475,25 @@ def test_통째로_하는_때() -> None:
         assert copycli._when_full(meta, today) is None
     finally:
         settings.rdf_copy_full_weekday = old
+
+
+def test_사본에_관계의_칸이_선의_진술로_실린다(
+    db: Session, world: dict[str, Any], tmp_path: Path
+) -> None:
+    """적용 뒤 값 대조 — 관계의 칸(수량 · 옵션 · 메모)이 사본에 없어 SPARQL 로 못 맞췄다."""
+    assert copycli.load(tmp_path) == 0
+    found = Store.read_only(str((tmp_path / store.ACTIVE).resolve()))
+    kind = world["kind"]
+    rows = list(
+        found.query(  # type: ignore[arg-type]
+            "PREFIX sp: <" + store.COPY_BASE + "ns#> "
+            "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> "
+            "SELECT ?qty ?opt ?memo WHERE { ?st a rdf:Statement ; "
+            f"rdf:predicate sp:rel.{kind} ; sp:rel.{kind}-qty ?qty ; "
+            f"sp:rel.{kind}-opts ?opt ; sp:rel.{kind}-memo ?memo }}"
+        )
+    )
+    assert sorted(str(row[1].value) for row in rows) == ["A", "B"], rows
+    assert {str(row[0].value) for row in rows} == {"3"}
+    assert {(row[2].value, row[2].language) for row in rows} == {("볼트", "ko")}
+    _same(tmp_path, db, edges.today())

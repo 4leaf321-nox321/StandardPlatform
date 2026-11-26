@@ -512,3 +512,100 @@ def test_정의가_초안과_다른_칸은_옮기기_보고서가_알린다(tmp_
     assert "「중량(kg)」 → part.weight: 초안은 숫자(" in report and "정의는 글" in report
     assert "「두께」 → part.thick: 초안의 단위 mm · 정의의 단위 cm" in report
     assert "재질" not in report.split("정의 초안과 다른 칸")[1], "고를 값 · 글은 사람이 정한다"
+
+
+# --------------------------------------------------------------------------
+# 실행 이름 · 다시 미리 본 실행 · 닫기
+# --------------------------------------------------------------------------
+
+
+def test_실행_이름에_날짜를_또_붙이지_않고_이름만으로도_찾는다(tmp_path: Path) -> None:
+    folder = tmp_path / "w"
+    sp_work.init(folder, title="w")
+    dated = sp_work.new_run(folder, "runs/2026-11-20-부품")
+    assert dated.name == "2026-11-20-부품", "날짜를 또 붙이지 않는다 · runs/ 는 뗀다"
+    sp_pipeline.cmd_init(dated)
+    plain = sp_work.new_run(folder, "설비")
+    sp_pipeline.cmd_init(plain)
+    assert sp_work.find_run(folder, "runs/2026-11-20-부품") == dated
+    assert sp_work.find_run(folder, "2026-11-20-부품") == dated
+    assert sp_work.find_run(folder, "부품") == dated, "날짜를 뺀 이름"
+    assert sp_work.find_run(folder, "설비") == plain
+    again = sp_work.new_run(folder, "설비")
+    sp_pipeline.cmd_init(again)
+    with pytest.raises(sp_work.Stop, match="여럿"):
+        sp_work.find_run(folder, "설비")
+    with pytest.raises(sp_work.Stop, match="없습니다"):
+        sp_work.find_run(folder, "없는것")
+
+
+def test_앞_잡으로_적용한_실행을_알고_같은_묶음은_또_넣지_않으며_닫는다(
+    client: Any, admin: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """같은 실행을 다시 미리 보면 `preview.json` 이 마지막 잡만 남아, 앞 잡으로 화면에서 이미
+    적용한 실행이 「적용 전」 으로 남고 다음 잡의 적용 링크가 또 떴다(실측)."""
+    from tests.api.conftest import finish_job, patched_pipeline
+    from tests.api.test_pipeline_cli import SERVER, _fill, _token
+
+    folder = tmp_path / "w"
+    sp_work.init(folder, title="w")
+    run = sp_work.new_run(folder, "툴")
+    sp_pipeline.cmd_init(run)
+    _fill(run, admin.workspace)
+    token = _token(client, admin)
+    monkeypatch.setenv("SP_SERVER", SERVER)
+    monkeypatch.setenv("SP_TOKEN", token)
+    with patched_pipeline(sp_pipeline, client):
+        ok, text = sp_pipeline.cmd_preview(run, server=SERVER, token=token)
+        assert ok is True, text
+        first = json.loads((run / sp_pipeline.PREVIEW).read_text(encoding="utf-8"))
+        first_job = first["result"]["job_id"]
+        # 작업 응답의 줄 목록은 줄일 수 있다 — 묶음 계획을 다 실으면 백만 자를 넘었다.
+        brief = client.get(
+            f"/api/jobs/{first_job}", params={"rows": 0}, headers=admin.headers
+        ).json()["result"]
+        plans = [one["plan"] for one in brief["objects"]]
+        assert plans and all(one["rows"] == [] and one["rows_omitted"] >= 1 for one in plans)
+        full = client.get(f"/api/jobs/{first_job}", headers=admin.headers).json()["result"]
+        assert all(one["plan"]["rows"] for one in full["objects"])
+        ok, text = sp_pipeline.cmd_preview(run, server=SERVER, token=token)
+        assert ok is True, text
+        history = json.loads((run / sp_pipeline.PREVIEWS).read_text(encoding="utf-8"))
+        assert [one["job_id"] for one in history] == [first_job]
+
+        # 앞 잡을 화면에서 적용했다.
+        applied = client.post(f"/api/jobs/{first_job}/apply", headers=admin.headers)
+        assert applied.status_code == 202, applied.text
+        assert finish_job(client, admin, applied.json())["status"] == "done"
+
+        state = sp_work.status(folder)
+        mine = state["runs"][0]
+        assert mine["applied"] is True and mine["screen"] == "", mine
+        assert not any("적용" in one and run.name in one for one in state["next"]), state
+        marker = json.loads((run / sp_pipeline.APPLIED).read_text(encoding="utf-8"))
+        assert marker["job_id"] == first_job and marker["via"] == "screen"
+        with pytest.raises(sp_pipeline.Stop, match="이미 적용한 실행"):
+            sp_pipeline.cmd_preview(run, server=SERVER, token=token)
+
+        # 같은 원천을 다시 변환한 실행 — 묶음(지문)이 같으면 또 넣을 것이 아니다.
+        twin = sp_work.new_run(folder, "툴")
+        sp_pipeline.cmd_init(twin)
+        for name in ("bundle.json", "ontology.json"):
+            (twin / name).write_bytes((run / name).read_bytes())
+        for one in (run / "objects").glob("*.json"):
+            (twin / "objects" / one.name).write_bytes(one.read_bytes())
+        state = sp_work.status(folder)
+        other = next(one for one in state["runs"] if one["run"].endswith(twin.name))
+        assert other["same_as"].endswith(run.name), other
+        assert any("이미 적용한 묶음과 같습니다" in one for one in state["next"]), state
+
+        with pytest.raises(sp_work.Stop, match="reason"):
+            sp_work.close(folder, twin, reason=" ")
+        sp_work.close(folder, twin, reason="같은 묶음을 이미 넣음")
+        state = sp_work.status(folder)
+        assert not any(twin.name in one for one in state["next"]), state
+        assert "닫음(같은 묶음을 이미 넣음)" in sp_work.render(state)
+        with pytest.raises(sp_pipeline.Stop, match="닫은 실행"):
+            sp_pipeline.cmd_preview(twin, server=SERVER, token=token)
+        with pytest.raises(sp_work.Stop, match="이미 적용한 실행"):
+            sp_work.close(folder, run, reason="x")

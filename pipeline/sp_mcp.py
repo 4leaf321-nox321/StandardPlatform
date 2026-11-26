@@ -99,10 +99,8 @@ def _work(work: str, *, exists: bool = True) -> Path:
 
 
 def _run(folder: Path, run: str) -> Path:
-    path = sp_work.inside(folder, run)
-    if path.parent != folder / sp_work.RUNS or not (path / pipeline.MANIFEST).exists():
-        raise Stop(f"실행 폴더가 아닙니다: {run} — runs/<이름> 이어야 합니다")
-    return path
+    """`runs/<이름>` · `<이름>` · 날짜를 뺀 이름 모두 받는다(`sp_work.find_run`)."""
+    return sp_work.find_run(folder, run)
 
 
 def _source(folder: Path, source: str) -> Path:
@@ -498,9 +496,13 @@ def hub_pull(work: str, group: str | list[str], name: str = "") -> str:
 def run_validate(work: str, run: str, ask_platform: bool = True) -> dict[str, Any]:
     """보내기 전 검사 — 식별자 겹침 · 관계 행의 칸 · 확신도 · 출처 · 미해결.
 
+    `run` 은 `runs/<이름>` · 그 이름 · 날짜를 뺀 이름(하나뿐이면) 모두 된다. 플랫폼 칸과 겹친
+    속성 키(`status` 등) · 수명이 아닌 `status` 값 · 이름이 빈 새 객체 행도 오류로 잡는다.
+
     `ask_platform` 이면(기본) **끝점이 풀리는지도 플랫폼에 묻는다** — 가리키는 것이 없거나
-    이름이 여럿과 맞는 것을 여기서 잡는다. 예전에는 미리 보기에서야 알았고, 미리 보기는
-    계획을 세우느라 몇 분이 걸린다. `SP_SERVER` · `SP_TOKEN` 이 없으면 모양만 본다.
+    이름이 여럿과 맞는 것을 여기서 잡는다. 이름이 빈 행이 이미 있는 객체를 고치는 것인지도.
+    예전에는 미리 보기에서야 알았고, 미리 보기는 계획을 세우느라 몇 분이 걸린다. `SP_SERVER` ·
+    `SP_TOKEN` 이 없으면 모양만 본다.
     """
     folder = _work(work)
     server, token = _maybe(folder) if ask_platform else ("", "")
@@ -539,6 +541,15 @@ def run_preview(work: str, run: str) -> dict[str, Any]:
         "note": "사람이 apply_on_screen 을 열어 「적용」 을 누른다(계획을 본 사람 — 이 토큰의 "
         "주인 — 으로 로그인해 있어야 한다). 명령 창이면 apply_command 를 아무 창에나.",
     }
+
+
+@mcp.tool()
+def run_close(work: str, run: str, reason: str) -> str:
+    """**쓰지 않을 실행을 닫는다** — 작업 상태의 할 일에서 빠지고 다시 미리 보지 않는다. 지우지
+    않는다(무엇을 했는지 남는다). 고쳐서 새 실행을 만든 뒤의 옛 실행 · 같은 묶음을 이미 적용한
+    실행에 쓴다. `reason` 에 왜 닫는지. 적용한 실행은 닫지 않는다(되돌리려면 `run_undo`)."""
+    folder = _work(work)
+    return sp_work.close(folder, _run(folder, run), reason=reason)
 
 
 @mcp.tool()

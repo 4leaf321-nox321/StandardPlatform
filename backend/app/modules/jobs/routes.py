@@ -242,9 +242,21 @@ def list_jobs(
 
 @router.get("/{job_id}", response_model=JobOut)
 def get_job(
-    job_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
+    job_id: uuid.UUID,
+    rows: int | None = Query(
+        default=None,
+        ge=0,
+        le=500,
+        description="결과 안의 줄 목록(`rows`)마다 싣는 줄 수 — 문제 줄(오류 · 못 찾음)을 "
+        "앞세운다. 0 이면 줄 없이 요약(수 · 오류 · 경고)만. 뺀 수는 `rows_omitted`. 묶음 "
+        "계획은 타입마다 줄 목록이 있어 다 실으면 백만 자를 넘는다 — AI(MCP)는 작게 받는다",
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
 ) -> JobOut:
-    return _out(db, services.get_visible(db, user, job_id))
+    row = services.get_visible(db, user, job_id)
+    keep = services.ROWS_SHOWN if rows is None else min(rows, services.ROWS_SHOWN)
+    return _out(db, row, services.trim_rows(row.result, keep))
 
 
 def _require_apply_scope(request: Request, plan_job: Job) -> None:

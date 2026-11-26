@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -26,14 +26,29 @@ from tests.api.test_ontology import _link, _make_object, _make_property, _make_t
 
 
 @pytest.fixture
-def world(client: TestClient, admin: Signed) -> dict[str, Any]:
+def world(client: TestClient, admin: Signed, db: Session) -> dict[str, Any]:
     vendor = _make_type(client, admin, label="업체", key_policy="optional")
     part = _make_type(client, admin, label="부품", key_policy="optional")
     _make_property(client, admin, part, key="weight", label="무게", data_type="number")
     _make_property(
         client, admin, part, key="tags", label="꼬리표", data_type="text", multi=True
     )
-    _make_property(client, admin, part, key="label", label="이름 칸", data_type="text")
+    # 객체의 이름과 겹치는 칸 이름 — 새로 만들 수는 없지만(ONTOLOGY-113) 그 전에 만든 설치에
+    # 남아 있을 수 있다. 사본이 둘을 가르는지 본다 — 정의 표에 바로 넣는다.
+    from app.modules.ontology.models import ObjectType, PropertyDef
+
+    part_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == part))
+    db.add(
+        PropertyDef(
+            owner_kind="type",
+            owner_id=part_id,
+            key="label",
+            label="이름 칸",
+            data_type="text",
+            sort_order=30,
+        )
+    )
+    db.commit()
     _make_property(
         client,
         admin,

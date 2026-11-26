@@ -88,6 +88,44 @@ def require_key(value: str) -> str:
     return value
 
 
+#: **객체 행의 플랫폼 칸** — 일괄 입력 · 묶음의 행에서 이 이름은 속성이 아니라 객체의 칸으로
+#: 읽힌다(`objects/bulk.FIXED_COLUMNS` 와 같다 — 시험이 견준다). 같은 키로 타입 속성을 만들면
+#: 그 칸에 적은 값이 속성에 안 들어가고 플랫폼 칸으로 거절된다(`status` 에 업무 상태를 적으면
+#: 수명 active · deprecated 로 읽어 행마다 막혔다 — 실측 463행). 새로 만들 때만 막는다(이미
+#: 있는 속성은 그대로 둔다 — 지우거나 「키 변경」 으로 옮긴다).
+RESERVED_PROPERTY_KEYS: tuple[str, ...] = (
+    "id",
+    "key",
+    "label",
+    "description",
+    "aliases",
+    "status",
+    "valid_from_year",
+    "valid_to_year",
+    "renamed_from",
+    "previous_keys",
+)
+
+
+def reserved_key_message(key: str) -> str:
+    hint = (
+        " 업무 상태면 다른 키로(예: work_status) — status 는 객체의 수명"
+        "(active · deprecated)이다."
+        if key == "status"
+        else " 다른 키로 지으세요."
+    )
+    return f"속성 키 {key!r} 는 객체 행의 플랫폼 칸과 겹쳐 쓸 수 없습니다.{hint}"
+
+
+def require_new_key(value: str) -> str:
+    """**새로 만드는** 타입 · 공통 속성의 키 — 모양(`require_key`)에 더해 객체 행의 플랫폼
+    칸(`RESERVED_PROPERTY_KEYS`)과 겹치지 않는가."""
+    key = require_key(value)
+    if key in RESERVED_PROPERTY_KEYS:
+        raise InvalidValue(code("ONTOLOGY", 113), reserved_key_message(key))
+    return key
+
+
 def require_choice(value: str, allowed: tuple[str, ...], *, what: str) -> str:
     if value not in allowed:
         raise InvalidValue(

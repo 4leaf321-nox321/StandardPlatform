@@ -132,7 +132,7 @@ from app.modules.ontology.services import (
     group_color,
     group_parent_error,
     require_choice,
-    require_key,
+    require_new_key,
     require_slug,
     require_system_source,
     reserved_slug_error,
@@ -1746,7 +1746,7 @@ def create_interface_property(
     한다)."""
     owner = _interface(db, slug)
     managed.require_definition_editable(owner)
-    key = require_key(payload.key)
+    key = require_new_key(payload.key)
     _check_interface_property(db, key, payload)
     catalog = interfaces.load(db)
     if key in catalog.interfaces[slug].props:
@@ -2023,7 +2023,7 @@ def create_property(
 ) -> PropertyDef:
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
-    key = require_key(payload.key)
+    key = require_new_key(payload.key)
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
     _check_ref_target(db, payload.ref_type_slug)
@@ -2733,7 +2733,7 @@ def _rename_property(
 ) -> RenameOut:
     owner = _type(db, slug)
     prop = _property(db, slug, key)
-    to = require_key(payload.to)
+    to = require_new_key(payload.to)
     _same_name(prop.key, to)
     path = f"/api/ontology/types/{slug}/properties/{key}/rename-key"
     if inline and _too_big_to_plan(db, owner):
@@ -2809,7 +2809,7 @@ def rename_property_key_job(
     """키 변경을 **작업으로** — 계획 작업을 만든다. 사람이 결과를 보고 `POST
     /api/jobs/{id}/apply` 로 적용한다(그 사이 바뀌었으면 지문이 막는다)."""
     _property(db, slug, key)
-    _same_name(key, require_key(payload.to))
+    _same_name(key, require_new_key(payload.to))
     job = job_services.enqueue(
         db,
         kind="ontology_rename",
@@ -3627,7 +3627,7 @@ def build_from_inferred(
     taken: set[str] = set()
     for column in columns:
         if column.role == "property":
-            column.key = require_key(column.key)
+            column.key = require_new_key(column.key)
             if column.key in taken:
                 raise Conflict(code("ONTOLOGY", 72), f"속성 키가 겹칩니다: {column.key}")
             taken.add(column.key)

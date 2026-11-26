@@ -2757,3 +2757,21 @@ def test_정의_제안은_적용하지_않고_쌓는다() -> None:
     seen = _serve(lambda _r: httpx.Response(200, json={"id": "p1"}))
     asyncio.run(server.ontology_proposals(_ctx("Bearer t"), proposal_id="p1"))
     assert seen[0].url.path == "/api/ontology/proposals/p1"
+
+
+def test_작업_상태는_계획_줄을_줄여_받는다() -> None:
+    """묶음 계획을 다 받으면 36만 ~ 145만 자라 도구 결과의 한도를 넘었다(실측)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"id": "j1", "status": "done"}))
+    asyncio.run(server.job_status(_ctx("Bearer t"), "j1", wait_seconds=0))
+    assert seen[0].url.params["rows"] == str(server.JOB_ROWS)
+    seen = _serve(lambda _r: httpx.Response(200, json={"id": "j1", "status": "done"}))
+    asyncio.run(server.job_status(_ctx("Bearer t"), "j1", wait_seconds=0, rows=0))
+    assert seen[0].url.params["rows"] == "0"
+    # 이미 끝난 작업을 받은 도구도 줄인 것을 다시 받는다.
+    seen = _serve(lambda _r: httpx.Response(200, json={"id": "j2", "status": "done"}))
+    asyncio.run(
+        server._wait_job(
+            _ctx("Bearer t"), {"id": "j2", "status": "done", "result": {"rows": [1] * 900}}, 0
+        )
+    )
+    assert seen and seen[0].url.params["rows"] == str(server.JOB_ROWS)

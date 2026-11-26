@@ -107,6 +107,7 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "docx_extract",
         "table_convert",
         "run_init",
+        "run_close",
         "hub_pull",
         "run_validate",
         "run_preview",
@@ -265,7 +266,8 @@ def test_조사부터_미리_보기까지_한_바퀴(
     assert went["ok"] is True and went["platform"].startswith("main ")
     # **적용은 그 플랫폼 화면에서** — 계획이 펼쳐진 채로 열리는 링크를 준다.
     assert went["apply_on_screen"].startswith(f"{SERVER}/jobs?job=")
-    assert "그 플랫폼 화면 「작업」" in server.work_status(work)
+    # 같은 원천을 다시 변환한 실행 — 묶음(지문)이 이미 적용한 것과 같아 또 넣으라고 안 한다.
+    assert "이미 적용한 묶음과 같습니다" in server.work_status(work)
     # 그 링크의 계획은 화면의 「적용」 이 받는 작업이다(같은 사람 · 같은 파일).
     job_id = went["apply_on_screen"].rsplit("=", 1)[1]
     applied = client.post(f"/api/jobs/{job_id}/apply", headers=admin.headers)

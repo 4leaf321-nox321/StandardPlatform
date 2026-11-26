@@ -5143,6 +5143,26 @@
               "format": "uuid",
               "title": "Job Id"
             }
+          },
+          {
+            "name": "rows",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 500,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "결과 안의 줄 목록(`rows`)마다 싣는 줄 수 — 문제 줄(오류 · 못 찾음)을 앞세운다. 0 이면 줄 없이 요약(수 · 오류 · 경고)만. 뺀 수는 `rows_omitted`. 묶음 계획은 타입마다 줄 목록이 있어 다 실으면 백만 자를 넘는다 — AI(MCP)는 작게 받는다",
+              "title": "Rows"
+            },
+            "description": "결과 안의 줄 목록(`rows`)마다 싣는 줄 수 — 문제 줄(오류 · 못 찾음)을 앞세운다. 0 이면 줄 없이 요약(수 · 오류 · 경고)만. 뺀 수는 `rows_omitted`. 묶음 계획은 타입마다 줄 목록이 있어 다 실으면 백만 자를 넘는다 — AI(MCP)는 작게 받는다"
           }
         ],
         "responses": {
@@ -28558,6 +28578,13 @@
             "type": "array",
             "title": "Relations"
           },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentIn"
+            },
+            "type": "array",
+            "title": "Documents"
+          },
           "tombstones": {
             "anyOf": [
               {
@@ -36320,6 +36347,45 @@
           "used_percent"
         ],
         "title": "DiskOut"
+      },
+      "DocumentIn": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Type Slug"
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key"
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Property"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 1000000,
+            "title": "Body"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "key",
+          "property",
+          "body"
+        ],
+        "title": "DocumentIn",
+        "description": "**문서 본문** 하나(ADR 0053) — 행에 붙인 마크다운을 그 객체의 문서 칸에 쓴다. 객체는\n식별자(`key`)로 찾는다 — 같은 묶음이 만드는 객체여도 된다(객체 단계 뒤에 쓴다)."
       },
       "DocumentOut": {
         "properties": {
@@ -50905,6 +50971,14 @@
               }
             ],
             "title": "Copied At"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes",
+            "default": []
           }
         },
         "type": "object",

@@ -53,7 +53,7 @@ def test_점검은_앱이_읽는_파일마다_말한다(
     assert f"✓ {good}: 이 키트를 가리킵니다" in shown
     assert f"✗ {private}: sp-pipeline 항목이 없습니다" in shown
     assert "[Claude Code 설정" in shown and "Claude Code 를 켠 적이 없다" in shown
-    assert "도구 19개" in shown
+    assert "도구 20개" in shown
     assert "앱이 이 항목을 띄운 적이 없습니다" in shown
 
 

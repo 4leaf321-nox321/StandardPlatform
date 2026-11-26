@@ -756,17 +756,27 @@ JOB_WAIT_MAX = 25.0
 짧게 — 그 안에 안 끝나면 `job_status` 로 다시 묻는다. 작은 파일은 첫 호출 안에 끝난다."""
 
 
-async def _wait_job(ctx: Context, job: Any, wait_seconds: float) -> Any:
+#: 작업 결과의 줄 목록마다 AI 에게 싣는 줄 수 — 문제 줄을 앞세운다. 묶음 계획을 다 실으면
+#: 36만 ~ 145만 자라 도구 결과의 한도를 넘었다(실측). 전부는 `job_status(rows=…)` · CSV.
+JOB_ROWS = 20
+
+
+async def _wait_job(ctx: Context, job: Any, wait_seconds: float, rows: int = JOB_ROWS) -> Any:
     """작업이 끝나거나 `wait_seconds` 가 지날 때까지 본다. **끝났다는 말을 지어내지
     않는다** — 안 끝났으면 `status` 가 `queued`/`running` 인 채로 돌려주고 `next` 가 무엇을
-    할지 말한다."""
+    할지 말한다. 결과의 줄 목록은 `rows` 줄까지(문제 줄 먼저 · 뺀 수 `rows_omitted`)."""
     if not isinstance(job, dict) or "id" not in job:
         return job
     deadline = time.monotonic() + max(0.0, min(wait_seconds, JOB_WAIT_MAX))
     current = job
+    if current.get("status") not in ("queued", "running") and current.get("result"):
+        # 이미 끝난 작업을 받았다(만든 응답 · 다른 도구의 응답) — 줄을 줄여 다시 받는다.
+        again = await _get(ctx, f"/api/jobs/{job['id']}", {"rows": rows})
+        if isinstance(again, dict) and "id" in again:
+            current = again
     while current.get("status") in ("queued", "running") and time.monotonic() < deadline:
         await asyncio.sleep(1.0)
-        current = await _get(ctx, f"/api/jobs/{job['id']}")
+        current = await _get(ctx, f"/api/jobs/{job['id']}", {"rows": rows})
         # 작업 행에는 `error` 칸이 늘 있다(없으면 null) — 오류 봉투는 `id` 가 없는 것으로
         # 가른다.
         if not isinstance(current, dict) or "id" not in current:
@@ -3556,7 +3566,9 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
 
     모양: `{"ontology": <ontology_import 와 같은 스키마, 없으면 생략>,
     "objects": [{"type_slug", "workspace_slug", "rows": [...]}],
-    "relations": [{"type_slug", "rows": [{"src","relation","dst","evidence_note"}]}]}`.
+    "relations": [{"type_slug", "rows": [{"src","relation","dst","evidence_note"}]}],
+    "documents": [{"type_slug", "key", "property", "body"}]}`. `documents` 는 그 객체(식별자
+    `key` — 같은 묶음이 만드는 것도 된다)의 **문서 칸**에 마크다운 본문을 쓴다(판이 오른다).
     행은 `objects_import` · `relations_import` 와 같다. `objects` 는 **적은 차례대로**
     넣는다 — 참조하는 타입을 뒤에. 정의가 들면 시스템 관리자와 `ontology:write`
     범위가 필요하다.
@@ -3873,14 +3885,22 @@ async def relations_import(
 # 작업 — 오래 걸리는 일은 요청이 아니라 표에 산다(docs/작업-워커-설계.md)
 # --------------------------------------------------------------------------- #
 @tool()
-async def job_status(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
+async def job_status(
+    ctx: Context, job_id: str, wait_seconds: int = 20, rows: int = JOB_ROWS
+) -> Any:
     """작업이 어디까지 됐나 — 작업을 만든 도구(`objects_import` · `relations_import` ·
     `bundle_import` · `datasource_sync` · `metric_define` · `metric_recompute` ·
     `filestore_gc` …)가 돌려준 `job_id` 로. `wait_seconds`(최대 25) 동안 끝나기를 기다렸다가
     돌려준다 — 그래도 안 끝났으면 `status` 가 `running` 인 채로 오고, 그때 다시 부른다.
-    **끝났다고 지어내지 않는다.** `next` 가 다음에 할 일을 말한다(종류마다 다르다)."""
-    job = await _get(ctx, f"/api/jobs/{job_id}")
-    return await _wait_job(ctx, job, float(wait_seconds))
+    **끝났다고 지어내지 않는다.** `next` 가 다음에 할 일을 말한다(종류마다 다르다).
+
+    결과의 계획 줄은 **목록마다 `rows` 줄까지**(기본 20 — 오류 · 못 찾음 같은 문제 줄 먼저,
+    뺀 수는 `rows_omitted`). `rows=0` 이면 수 · 오류 · 경고 요약만. 묶음 계획을 다 받으면
+    백만 자를 넘어 도구 결과의 한도에 걸린다 — 줄 전부는 화면의 「작업」 또는 CSV
+    (`/api/jobs/{id}/rows.csv`)로 사람이 본다. 최대 500."""
+    wanted = max(0, min(int(rows), 500))
+    job = await _get(ctx, f"/api/jobs/{job_id}", {"rows": wanted})
+    return await _wait_job(ctx, job, float(wait_seconds), wanted)
 
 
 @tool()
@@ -4103,8 +4123,18 @@ async def rdf_query(
       `{ SELECT DISTINCT ?m WHERE { <부품> ^sp:rel.bom+ ?m } } ?m a sp:model` 은 0.007초,
       같은 것을 `<부품> ^sp:rel.bom+ ?m . ?m a sp:model` 로 쓰면 23초(견주기). 끊기면
       (`RDF-0010`) 그 꼴로 다시 쓴다.
-    - 값의 꼴: 글자 칸은 `"…"@ko`, 고를 값 · 식별자는 형 없는 글자(`"A"`), 날짜는
+    - 값의 꼴: **이름(rdfs:label) · 설명 · 글 칸은 `"…"@ko`** — `VALUES ?l { "볼트" }` ·
+      `?s rdfs:label "볼트"` 는 꼬리표가 없어 0건이다(`"볼트"@ko` 또는
+      `FILTER(STR(?l) = "볼트")`).
+      고를 값 · 식별자(`dcterms:identifier`)는 형 없는 글자(`"A"`), 날짜는
       `"2026-01-01"^^xsd:date`, 숫자는 `xsd:decimal` — 모르면 `rdf_schema` 의 `rdfs:range`.
+    - **0건이면 답의 `notes` 를 본다** — 꼬리표 없는 글자로 견줬거나 그래프에 없는 술어 ·
+      타입을 부른 것을 짐작해 적는다. 고쳐 다시 묻는다(「없다」 로 읽기 전에).
+    - **관계의 칸**(수량 · 옵션 같은 관계 속성)은 선의 구체화한 진술에 있다:
+      `?st a rdf:Statement ; rdf:subject ?s ; rdf:predicate sp:rel.bom ; rdf:object ?o ;
+      sp:rel.bom-qty ?qty`. 이름은 `sp:rel.<관계>-<칸 키>`.
+    - 점이 둘 이상인 이름(`sp:rel.x.inverse`)은 사본(Oxigraph)이 접두어 꼴로 못 읽는다 —
+      `<…/ns#rel.x.inverse>` 처럼 IRI 를 다 적는다.
     - (메모리일 때) `types` 로 **범위를 좁히면 빠르다** — 안 주면 **기록 타입을 뺀** 전부를
       올린다(빠진 것은 답의 `left_out`). 질의가 빠진 기록 타입을 부르면 `[RDF-0006]` — 그
       기록 타입과 지나는 축 타입을 `types` 에 적어 다시 부른다.

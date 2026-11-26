@@ -43,10 +43,23 @@ MANIFEST = "bundle.json"
 ONTOLOGY = "ontology.json"
 OBJECTS_DIR = "objects"
 RELATIONS_DIR = "relations"
+#: 행에 붙이는 **문서 본문**(마크다운) —
+#: `"_documents": {"<문서 칸 키>": "documents/<파일>.md"}`. 경로는 실행 폴더 기준이고, 보낼
+#: 때 본문을 읽어 묶음의 `documents` 에 싣는다(플랫폼이 그 객체의 문서 칸에 판을 하나 올려
+#: 쓴다). 객체는 식별자(`key`)로 찾는다.
+DOCUMENTS_KEY = "_documents"
+DOCUMENTS_DIR = "documents"
+DOCUMENT_SUFFIXES = (".md", ".markdown", ".txt")
+DOCUMENT_MAX_CHARS = 1_000_000
 TOMBSTONES = "tombstones.json"
 UNRESOLVED = "unresolved.json"
 PREVIEW = "preview.json"
+#: 앞선 미리 보기들 — 같은 실행을 다시 미리 보면 `preview.json` 은 마지막 것만 남는다. 앞의
+#: 잡을 화면에서 이미 적용했는지 물으려면 그 잡들을 기억해야 한다.
+PREVIEWS = "previews.json"
 APPLIED = "applied.json"
+#: 쓰지 않기로 한 실행 — 작업 상태의 할 일에서 뺀다(`run_close`).
+CLOSED = "closed.json"
 
 #: 감사 기록에 남는 통로 이름 — 사람이 화면에서 넣은 것과 가른다.
 CLIENT = "sp-pipeline"
@@ -215,6 +228,24 @@ RELATION_FIELDS = ("src", "relation", "dst", "evidence_note", "properties")
 #: 이보다 낮은 확신도의 행은 넣지 않는다 — 모델링 규약 5장. unresolved.json 으로 간다.
 LOW_CONFIDENCE = 0.7
 ONTOLOGY_KEYS = {"groups", "interfaces", "types", "relation_types"}
+#: **객체 행의 플랫폼 칸** — 플랫폼 일괄 입력의 고정 열(`objects/bulk.FIXED_COLUMNS`)과 같다.
+#: 같은 키로 속성을 정의하면 행의 그 칸은 속성이 아니라 이것으로 읽힌다 — `status` 칸에 업무
+#: 상태를 적으면 플랫폼은 수명(active · deprecated)으로 읽어 행마다 거절한다(실측: 검사는 오류
+#: 0 으로 통과하고 미리 보기에서 463행이 막혔다).
+RESERVED_ROW_KEYS = (
+    "id",
+    "key",
+    "label",
+    "description",
+    "aliases",
+    "status",
+    "valid_from_year",
+    "valid_to_year",
+    "renamed_from",
+    "previous_keys",
+)
+#: 객체의 수명 — 행의 `status` 가 받는 값.
+LIFECYCLE = ("active", "deprecated")
 
 #: 대량 적재(백필)에 켜는 칸들 — `bundle.json` 의 `backfill` 에 적거나 `--backfill` 로 켠다.
 #:
@@ -367,6 +398,161 @@ def load(path: Path) -> Run:
     return run
 
 
+# --------------------------------------------------------------------------
+# 문서 본문 — 행에 붙인 마크다운 · 이름 · 전화 검사
+# --------------------------------------------------------------------------
+
+#: 전화 · 메일 · 주민등록번호 꼴 — 본문에 있으면 **오류**(가리거나 빼고 보낸다).
+PHONE = re.compile(
+    r"(?<![\d-])(?:\+82[-.\s]?)?(?:0\d{1,2}|1[016789])[-.\s)]\d{3,4}[-.\s]\d{4}(?![\d-])"
+    r"|(?<!\d)01[016789]\d{7,8}(?!\d)"
+)
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+RESIDENT = re.compile(r"(?<!\d)\d{6}[-\s]?[1-8]\d{6}(?!\d)")
+#: 사람 이름 꼴 — 직함이 붙은 이름 · 「담당: 홍길동」. 짐작이라 **경고**(사람에게 묻는다).
+PERSON = re.compile(
+    r"(?<![가-힣])[가-힣]{2,4}\s?(?:님|씨|책임|선임|수석|과장|대리|부장|차장|팀장|사원|주임|"
+    # 직함 뒤에는 조사가 붙는다(「김철수 책임이」) — 뒤를 막지 않는다. 짐작이라 경고뿐이다.
+    r"매니저|연구원|위원|교수|박사)"
+    r"|(?:이름|성명|담당자?|작성자|연락처)\s*[:\uff1a]\s*[가-힣]{2,4}(?![가-힣])"
+)
+
+
+def _masked(text: str) -> str:
+    """보고서에 싣는 꼴 — 앞 셋만 두고 가린다(보고서는 사내 밖으로 옮겨진다)."""
+    shown = text.strip()
+    return shown[:3] + "*" * max(0, len(shown) - 3)
+
+
+def personal_info(body: str) -> tuple[list[str], list[str]]:
+    """(오류, 경고) — 전화 · 메일 · 주민등록번호는 오류, 사람 이름 꼴은 경고. 줄 번호와 가린
+    값만 적는다."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    for number, line in enumerate(body.splitlines(), start=1):
+        for what, pattern, out in (
+            ("전화번호", PHONE, errors),
+            ("메일 주소", EMAIL, errors),
+            ("주민등록번호 꼴", RESIDENT, errors),
+            ("사람 이름 꼴", PERSON, warnings),
+        ):
+            for found in pattern.finditer(line):
+                out.append(f"{number}줄 {what} {_masked(found.group(0))}")
+    return errors, warnings
+
+
+@dataclass
+class Document:
+    """보낼 문서 본문 하나 — 행에 붙인 파일에서 읽었다."""
+
+    where: str
+    type_slug: str
+    key: str
+    property: str
+    path: str
+    body: str | None
+    problem: str = ""
+
+
+def documents_of(run: Run) -> list[Document]:
+    """행마다 붙인 본문 파일 — 읽지 못한 것은 `problem` 에 까닭(검사가 오류로 올린다)."""
+    out: list[Document] = []
+    for batch in run.objects:
+        for index, row in enumerate(batch.rows, start=1):
+            if not isinstance(row, dict) or DOCUMENTS_KEY not in row:
+                continue
+            where = f"{batch.file} {index}행"
+            attached = row[DOCUMENTS_KEY]
+            key = str(row.get("key") or "").strip()
+            if not isinstance(attached, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in attached.items()
+            ):
+                out.append(
+                    Document(
+                        where,
+                        batch.type_slug,
+                        key,
+                        "",
+                        "",
+                        None,
+                        f'{DOCUMENTS_KEY} 는 {{"문서 칸 키": "documents/파일.md"}} '
+                        "이어야 합니다",
+                    )
+                )
+                continue
+            for prop, relative in attached.items():
+                doc = Document(where, batch.type_slug, key, prop, relative, None)
+                out.append(doc)
+                if not key:
+                    doc.problem = "문서 본문을 붙이려면 식별자(key)가 있어야 합니다"
+                    continue
+                path = (run.path / relative).resolve()
+                if run.path.resolve() not in path.parents:
+                    doc.problem = f"실행 폴더 밖의 파일입니다: {relative}"
+                    continue
+                if path.suffix.lower() not in DOCUMENT_SUFFIXES:
+                    doc.problem = f"마크다운(.md)이 아닙니다: {relative}"
+                    continue
+                try:
+                    body = path.read_text(encoding="utf-8-sig")
+                except FileNotFoundError:
+                    doc.problem = f"파일이 없습니다: {relative}"
+                    continue
+                except (OSError, UnicodeDecodeError) as failure:
+                    doc.problem = f"읽을 수 없습니다({relative}): {failure}"
+                    continue
+                if len(body) > DOCUMENT_MAX_CHARS:
+                    doc.problem = (
+                        f"본문이 {len(body):,}자입니다 — {DOCUMENT_MAX_CHARS:,}자까지"
+                        f"({relative})"
+                    )
+                    continue
+                doc.body = body
+    return out
+
+
+def _check_documents(run: Run, report: Report) -> None:
+    """붙인 본문 — 파일 · 식별자 · 문서 칸(실행 폴더의 정의가 말하면)과 **이름 · 전화**."""
+    kinds: dict[str, dict[str, str]] = {
+        str(one.get("slug")): {
+            str(prop.get("key")): str(prop.get("data_type") or "")
+            for prop in one.get("properties") or []
+            if isinstance(prop, dict)
+        }
+        for one in ((run.ontology or {}).get("types") or [])
+        if isinstance(one, dict)
+    }
+    for doc in documents_of(run):
+        label = f"{doc.where} 문서 {doc.property or '?'}"
+        if doc.problem:
+            report.errors.append(f"{label}: {doc.problem}")
+            continue
+        props = kinds.get(doc.type_slug)
+        if props is not None and props.get(doc.property) not in (None, "document"):
+            report.errors.append(
+                f"{label}: {doc.type_slug}.{doc.property} 는 문서 칸이 아닙니다"
+                f"({props[doc.property]}) — data_type 이 document 인 칸에만 본문을 붙입니다"
+            )
+        elif props is not None and doc.property not in props:
+            report.warnings.append(
+                f"{label}: 실행 폴더의 정의에 {doc.type_slug}.{doc.property} 가 없습니다 — "
+                "플랫폼에 그 문서 칸이 있어야 합니다(미리 보기가 확인한다)"
+            )
+        found, maybe = personal_info(doc.body or "")
+        if found:
+            shown = " · ".join(found[:5]) + (f" 외 {len(found) - 5}" if len(found) > 5 else "")
+            report.errors.append(
+                f"{label}({doc.path}): 개인 정보 꼴 {len(found)}곳 — {shown}. 가리거나 빼고 "
+                "보낸다(문서는 판으로 남아 지워도 옛 판에 남는다)"
+            )
+        if maybe:
+            shown = " · ".join(maybe[:5]) + (f" 외 {len(maybe) - 5}" if len(maybe) > 5 else "")
+            report.warnings.append(
+                f"{label}({doc.path}): 사람 이름 꼴 {len(maybe)}곳 — {shown}. 실은 사람 "
+                "이름이면 직함 · 역할로 바꾸거나 사람에게 확인받는다"
+            )
+
+
 def _clean(row: dict[str, Any]) -> dict[str, Any]:
     """`_` 로 시작하는 칸(출처 · 확신도 · 메모)은 **플랫폼에 안 보낸다.**
 
@@ -401,6 +587,18 @@ def payload(run: Run) -> dict[str, Any]:
             for one in run.relations
         ],
     }
+    attached = [
+        {
+            "type_slug": one.type_slug,
+            "key": one.key,
+            "property": one.property,
+            "body": one.body,
+        }
+        for one in documents_of(run)
+        if one.body is not None and not one.problem
+    ]
+    if attached:
+        body["documents"] = attached
     if run.tombstones:
         body["tombstones"] = run.tombstones
     source = str(run.manifest.get("source") or "").strip()
@@ -446,7 +644,14 @@ class Report:
     warnings: list[str] = field(default_factory=list)
 
 
-def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
+#: (타입, 식별자들) → 플랫폼에 **이미 있는** 식별자 — 이름이 빈 행이 있는 객체를 고치는
+#: 것인지 가른다. 플랫폼에 안 물으면 None.
+KnownKeys = Callable[[str, list[str]], set[str]]
+
+
+def validate(
+    run: Run, *, allow_unresolved: bool = False, known: KnownKeys | None = None
+) -> Report:
     report = Report(errors=list(run.problems))
     if run.manifest:
         try:
@@ -465,6 +670,20 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
         for index, one in enumerate(run.ontology.get("types") or [], start=1):
             if not isinstance(one, dict) or not one.get("slug") or not one.get("label"):
                 report.errors.append(f"{ONTOLOGY}: types[{index}] 에 slug · label 이 없습니다")
+                continue
+            for prop in one.get("properties") or []:
+                key = str(prop.get("key") or "") if isinstance(prop, dict) else ""
+                if key in RESERVED_ROW_KEYS:
+                    report.errors.append(
+                        f"{ONTOLOGY}: {one['slug']} 의 속성 키 {key!r} 는 객체 행의 플랫폼 "
+                        f"칸과 겹칩니다 — 행의 {key!r} 는 속성이 아니라 플랫폼 칸으로 읽힙니다"
+                        + (
+                            "(수명: active · deprecated). 업무 상태면 다른 키로"
+                            "(예: work_status)"
+                            if key == "status"
+                            else ". 다른 키로"
+                        )
+                    )
 
     if run.ontology is None and not run.objects and not run.relations:
         report.errors.append(
@@ -481,11 +700,25 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
                 " (시스템 관리자만)"
             )
         seen = keys.setdefault(batch.type_slug, {})
+        nameless: list[tuple[int, str]] = []
+        lifecycle: list[int] = []
+        years: list[int] = []
         for index, row in enumerate(batch.rows, start=1):
             if not isinstance(row, dict):
                 continue
-            if not row.get("label") and not row.get("key"):
-                report.errors.append(f"{batch.file} {index}행: label 도 key 도 없습니다")
+            if not str(row.get("label") or "").strip():
+                if not str(row.get("key") or "").strip():
+                    report.errors.append(f"{batch.file} {index}행: label 도 key 도 없습니다")
+                else:
+                    nameless.append((index, str(row["key"]).strip()))
+            status = row.get("status")
+            if status not in (None, "") and str(status).strip() not in LIFECYCLE:
+                lifecycle.append(index)
+            for name in ("valid_from_year", "valid_to_year"):
+                raw = row.get(name)
+                if raw not in (None, "") and not str(raw).strip().lstrip("-").isdigit():
+                    years.append(index)
+                    break
             key = str(row.get("key") or "").strip()
             if key:
                 where = f"{batch.file} {index}행"
@@ -495,6 +728,36 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
                     )
                 else:
                     seen[key] = where
+        if lifecycle:
+            report.errors.append(
+                f"{batch.file}: status 가 플랫폼의 수명 칸(active · deprecated)이 아닌 행 "
+                f"{len(lifecycle)}개({_rows(lifecycle)}행) — 행의 status 는 수명으로 "
+                "읽힙니다. 업무 상태면 다른 칸 키로(예: work_status)"
+            )
+        if years:
+            report.errors.append(
+                f"{batch.file}: valid_from_year · valid_to_year 가 연도(숫자)가 아닌 행 "
+                f"{len(years)}개({_rows(years)}행)"
+            )
+        if nameless:
+            # 플랫폼에 이미 있는 식별자면 그 객체를 고치는 행이다 — 이름 없이도 된다.
+            existing = (
+                known(batch.type_slug, [key for _index, key in nameless])
+                if known is not None
+                else set()
+            )
+            missing = [index for index, key in nameless if key not in existing]
+            if missing:
+                report.errors.append(
+                    f"{batch.file}: label(이름)이 빈 행 {len(missing)}개"
+                    f"({_rows(missing)}행) — 새로 만드는 객체는 이름이 있어야 합니다"
+                    + (
+                        ""
+                        if known is not None
+                        else ". 이미 있는 객체를 고치는 행이면 플랫폼에 묻는 검사로 다시 "
+                        "(run_validate ask_platform=true)"
+                    )
+                )
 
     for batch in run.relations:
         _check_rows(batch, report, max_rows=MAX_ROWS, received=received)
@@ -528,6 +791,8 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
                 f"{batch.file}: 근거(evidence_note)가 없는 관계 {no_evidence}줄"
                 " — 왜 이었는지 남지 않습니다"
             )
+
+    _check_documents(run, report)
 
     if run.unresolved:
         message = f"{UNRESOLVED}: 미해결 {len(run.unresolved)}건 — 사람이 판단한 뒤 비우세요"
@@ -1231,7 +1496,18 @@ def cmd_validate(
     token: str = "",
 ) -> tuple[bool, str]:
     run = load(path)
-    report = validate(run, allow_unresolved=allow_unresolved)
+
+    def known(type_slug: str, keys: list[str]) -> set[str]:
+        found = resolve_names(server, token, type_slug, keys) or {}
+        return {
+            name
+            for name, one in found.items()
+            if one.get("match") == "exact" and (one.get("object") or {}).get("key") == name
+        }
+
+    report = validate(
+        run, allow_unresolved=allow_unresolved, known=known if server and token else None
+    )
     asked = ""
     if server and token:
         remote = check_endpoints(run, server, token)
@@ -1266,7 +1542,23 @@ def cmd_preview(
             "검증을 먼저 통과하세요:\n" + "\n".join(f"오류: {e}" for e in report.errors)
         )
     body = payload(run)
+    if (path / APPLIED).exists():
+        raise Stop(
+            "이미 적용한 실행입니다 — 다시 미리 보면 같은 묶음의 적용 링크가 또 생깁니다. "
+            "바꿔 넣으려면 새 실행으로"
+        )
+    if (path / CLOSED).exists():
+        raise Stop("닫은 실행입니다(run_close) — 새 실행으로")
     result = _post_bundle(server, token, {**body, "apply": False})
+    earlier = _read_json(path / PREVIEW, [])
+    if isinstance(earlier, dict) and (earlier.get("result") or {}).get("job_id"):
+        history = _read_json(path / PREVIEWS, [])
+        history = history if isinstance(history, list) else []
+        history.append(
+            {key: earlier.get(key) for key in ("at", "server", "platform", "digest")}
+            | {"job_id": (earlier.get("result") or {}).get("job_id")}
+        )
+        _write(path / PREVIEWS, history)
     _write(
         path / PREVIEW,
         {

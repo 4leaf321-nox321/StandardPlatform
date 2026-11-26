@@ -50,12 +50,14 @@ from app.modules.ontology.models import (
     RelationType,
 )
 from app.modules.ontology.services import (
+    RESERVED_PROPERTY_KEYS,
     InvalidValue,
     group_color,
     group_color_error,
     group_parent_error,
     require_key,
     require_slug,
+    reserved_key_message,
     reserved_slug_error,
     system_source_error,
 )
@@ -1064,6 +1066,9 @@ def _plan_properties(
             )
 
         if found is None:
+            if owner_kind != "relation" and key in RESERVED_PROPERTY_KEYS:
+                # 관계의 칸은 행의 `properties` 안에 있어 겹치지 않는다 — 타입 · 공통 속성만.
+                out.errors.append(f"속성 {name}: {reserved_key_message(key)}")
             out.changes.append(Change(kind_name, name, "create", owner_kind=owner_kind))
             continue
 
