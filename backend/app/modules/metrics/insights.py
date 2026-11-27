@@ -747,7 +747,9 @@ def system_viewer(db: Session) -> User | None:
     """훑기의 눈 — 처음 만든 활성 시스템 관리자(전체를 본다)."""
     return db.scalar(
         select(User)
-        .where(User.is_system_admin.is_(True), User.status == "active")
+        .where(
+            User.is_system_admin.is_(True), User.status == "active", User.deleted_at.is_(None)
+        )
         .order_by(User.created_at)
         .limit(1)
     )

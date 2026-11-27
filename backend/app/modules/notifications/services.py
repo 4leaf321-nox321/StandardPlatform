@@ -81,7 +81,11 @@ def notify_system_admins(
     """
     admins = list(
         db.scalars(
-            select(User.id).where(User.is_system_admin.is_(True), User.status == "active")
+            select(User.id).where(
+                User.is_system_admin.is_(True),
+                User.status == "active",
+                User.deleted_at.is_(None),
+            )
         )
     )
     for user_id in admins:

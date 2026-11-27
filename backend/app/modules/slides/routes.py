@@ -37,7 +37,7 @@ from app.modules.slides.schemas import (
 )
 from app.shared import audit
 from app.shared.auth import current_user, require_system_admin
-from app.shared.errors import Conflict, NotFound, code
+from app.shared.errors import Conflict, Forbidden, NotFound, code
 from app.shared.pagination import Page, clamp_limit
 from app.shared.permissions import (
     can_edit_authored,
@@ -235,7 +235,7 @@ def list_slides(
         )
     )
     return Page[SlideSummaryOut](
-        items=[_summary(db, one) for one in rows], total=total, limit=size, offset=offset
+        items=[_summary(db, user, one) for one in rows], total=total, limit=size, offset=offset
     )
 
 
@@ -417,7 +417,9 @@ def used_in(
     db: Session = Depends(get_db),
 ) -> list[UsedInOut]:
     """이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는
-    살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`)."""
+    살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`). 볼 수 없는 객체면 없는 것과 같다."""
+    if not _sees(db, user, object_id):
+        raise NotFound(code("SLIDES", 41), "객체를 찾을 수 없습니다.")
     out: list[UsedInOut] = []
     subjects = db.scalars(
         select(Slide)
@@ -426,7 +428,9 @@ def used_in(
         .limit(50)
     )
     for one in subjects:
-        out.append(UsedInOut(slide=_summary(db, one), role="subject", areas=[], seen_at=None))
+        out.append(
+            UsedInOut(slide=_summary(db, user, one), role="subject", areas=[], seen_at=None)
+        )
     seen: dict[uuid.UUID, tuple[Slide, list[str], datetime]] = {}
     for slide, area_key, seen_at in db.execute(
         select(Slide, SlideRef.area_key, SlideRef.seen_at)
@@ -450,7 +454,9 @@ def used_in(
             seen[slide.id] = (slide, [title], seen_at)
     for slide, titles, seen_at in seen.values():
         out.append(
-            UsedInOut(slide=_summary(db, slide), role="record", areas=titles, seen_at=seen_at)
+            UsedInOut(
+                slide=_summary(db, user, slide), role="record", areas=titles, seen_at=seen_at
+            )
         )
     return out
 
@@ -526,12 +532,29 @@ def _template_out(db: Session, row: SlideTemplate) -> TemplateOut:
     )
 
 
-def _subject_out(db: Session, subject_id: uuid.UUID | None) -> SubjectOut | None:
+def _sees(db: Session, user: User, object_id: uuid.UUID) -> bool:
+    """이 사람이 그 객체를 보나 — 조회가 부서로 좁혀진 설치(`VIEW_SCOPE=department`)에서만
+    갈린다."""
+    return (
+        db.scalar(
+            select(ObjectInstance.id).where(
+                ObjectInstance.id == object_id,
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+        is not None
+    )
+
+
+def _subject_out(db: Session, user: User, subject_id: uuid.UUID | None) -> SubjectOut | None:
     if subject_id is None:
         return None
     found = services.follow_merges(db, subject_id)
     if found is None:
         return None
+    if not _sees(db, user, found.id):
+        # 볼 수 없는 부서의 객체 — 이름 · 타입을 싣지 않는다(장표 목록이 그것을 드러냈다).
+        return SubjectOut(id=found.id, label="(볼 수 없는 객체)", type_slug="", deleted=False)
     object_type = db.get(ObjectType, found.type_id)
     return SubjectOut(
         id=found.id,
@@ -541,14 +564,14 @@ def _subject_out(db: Session, subject_id: uuid.UUID | None) -> SubjectOut | None
     )
 
 
-def _summary(db: Session, row: Slide) -> SlideSummaryOut:
+def _summary(db: Session, user: User, row: Slide) -> SlideSummaryOut:
     template = db.get(SlideTemplate, row.template_id)
     return SlideSummaryOut(
         id=row.id,
         title=row.title,
         template_id=row.template_id,
         template_name=template.name if template else "",
-        subject=_subject_out(db, row.subject_id),
+        subject=_subject_out(db, user, row.subject_id),
         author_name=row.author_name,
         created_at=row.created_at,
         edited_at=row.edited_at,
@@ -558,6 +581,12 @@ def _summary(db: Session, row: Slide) -> SlideSummaryOut:
 def _slide_out(db: Session, user: User, row: Slide) -> SlideOut:
     template = _template(db, row.template_id)
     subject = services.follow_merges(db, row.subject_id)
+    if subject is not None and not _sees(db, user, subject.id):
+        # 주제 객체의 값으로 그리는 글이다 — 그 객체를 못 보는 사람에게는 안 그린다(pptx 도).
+        raise Forbidden(
+            code("SLIDES", 40),
+            "이 장표의 주제 객체를 볼 수 없습니다 — 그 부서의 사람에게 보여 달라고 하세요.",
+        )
     if subject is not None and subject.id != row.subject_id:
         # 주제가 다른 것에 합쳐졌다 — 장표는 이긴 쪽을 주제로 이어 간다(아래에서 커밋한다).
         row.subject_id = subject.id
@@ -567,7 +596,7 @@ def _slide_out(db: Session, user: User, row: Slide) -> SlideOut:
     services.remember(db, row, areas)
     db.commit()
     return SlideOut(
-        **_summary(db, row).model_dump(),
+        **_summary(db, user, row).model_dump(),
         rows=template.rows,
         cols=template.cols,
         areas=areas,

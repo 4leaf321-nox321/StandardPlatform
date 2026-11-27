@@ -3143,17 +3143,26 @@ async def object_update(
 
 @tool()
 async def document_read(
-    ctx: Context, type_slug: str, object_id: str, key: str, revision: int | None = None
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    key: str,
+    revision: int | None = None,
+    body: bool = True,
 ) -> Any:
     """문서 속성(`data_type: document`, ADR 0053)의 본문 — 마크다운. 지금 판과 함께 온다.
 
     `revision` 을 주면 그 옛 판을 읽는다(판 목록은 `document_revisions`). 아직 안 썼으면
     빈 본문 · 판 0. **고치기 전에 반드시 읽는다** — 고칠 때 이 판 번호를 `base_revision`
-    으로 보낸다."""
+    으로 보낸다.
+
+    **`body=False`** 면 본문 없이 판 · 글자 수 · `sha256`(본문의, UTF-8 · 줄바꿈 `\n`)만 —
+    쓴 것을 대조하거나 판만 볼 때. 수천 자를 다시 받지 않는다. 로컬 파일을 넣고 대조하는 일은
+    정제 키트의 `document_push` · `document_check` 가 한다(본문이 모델을 안 거친다)."""
     base = f"/api/objects/{type_slug}/{object_id}/documents/{key}"
     if revision is not None:
         return await _get(ctx, f"{base}/revisions/{revision}")
-    return await _get(ctx, base)
+    return await _get(ctx, base, {"body": "false"} if not body else None)
 
 
 @tool()
@@ -3171,7 +3180,12 @@ async def document_write(
 
     `base_revision` 은 `document_read` 로 읽은 판(처음이면 0). 그사이 누가 먼저 고쳤으면
     `[OBJECTS-0149]` 로 거절된다 — **덮어쓰지 말고** 다시 읽어 사람이 고친 것을 살린 뒤 쓴다.
-    `note` 에 고친 까닭 한 줄(「백서 v2 반영」).
+    `note` 에 고친 까닭 한 줄(「백서 v2 반영」). 답의 `sha256` 이 쓴 본문의 것이다.
+
+    ⚠️ **로컬 파일(Word 에서 꺼낸 마크다운 · 여러 건)을 옮겨 적지 않는다** — 본문이 도구
+    인자라 토큰이 들고 옮기다 틀린다. 정제 키트의 `document_push` 가 파일을 그대로
+    올린다(그림까지 — 계획을 보이고 사용자가 「좋다」 하면 `document_apply`). 이 도구는 짧은
+    본문을 손으로 고칠 때다.
 
     본문은 마크다운(제목 · 목록 · 표). 객체를 가리킬 때는
     **`[이름](/o/<타입 slug>/<객체 id>)`** 링크로 쓴다 — 그 객체의 상세에 「이 객체를 언급한
@@ -3567,8 +3581,11 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
     모양: `{"ontology": <ontology_import 와 같은 스키마, 없으면 생략>,
     "objects": [{"type_slug", "workspace_slug", "rows": [...]}],
     "relations": [{"type_slug", "rows": [{"src","relation","dst","evidence_note"}]}],
-    "documents": [{"type_slug", "key", "property", "body"}]}`. `documents` 는 그 객체(식별자
-    `key` — 같은 묶음이 만드는 것도 된다)의 **문서 칸**에 마크다운 본문을 쓴다(판이 오른다).
+    "documents": [{"type_slug", "workspace_slug", "key", "property", "body"}]}`. `documents` 는
+    그 객체(식별자 `key` — 같은 묶음이 만드는 것도 된다)의 **문서 칸**에 마크다운 본문을
+    쓴다(판이 오른다). 문서만 실어도 된다(있는 객체에 본문만). 식별자 범위가 부서인 타입은
+    `workspace_slug` 로 어느 부서의 것인지 적는다(여러 부서에 같은 식별자면 줄 오류). 같은
+    객체 · 칸에 본문은 하나.
     행은 `objects_import` · `relations_import` 와 같다. `objects` 는 **적은 차례대로**
     넣는다 — 참조하는 타입을 뒤에. 정의가 들면 시스템 관리자와 `ontology:write`
     범위가 필요하다.

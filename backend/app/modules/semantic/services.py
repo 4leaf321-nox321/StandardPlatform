@@ -490,7 +490,7 @@ def run_sync(
         row.id: row
         for row in db.scalars(select(ObjectType).where(ObjectType.id.in_(list(chosen))))
     }
-    counted = {
+    counted: dict[str, Any] = {
         "types": len(types),
         "seen": 0,
         "embedded": 0,
@@ -520,6 +520,14 @@ def run_sync(
     for type_id, object_type in types.items():
         defs = properties_of(db, type_id)
         fields = chosen[type_id]
+        broken = _fields_gone(defs, fields)
+        if broken:
+            # **고른 칸이 모두 없어졌다**(지웠거나 글이 아닌 종류로 바꿨다) — 그대로 돌면 글이
+            # 비어
+            # 그 타입의 조각이 하루 안에 오류 없이 다 지워졌다. 건드리지 않고 까닭을 남긴다.
+            log.warning("뜻으로 찾기: %s 건너뜀 — %s", object_type.slug, broken)
+            counted.setdefault("skipped", {})[object_type.slug] = broken
+            continue
         after: uuid.UUID | None = None
         while True:
             query = candidates(type_id).order_by(ObjectInstance.id).limit(CHUNK)
@@ -536,6 +544,21 @@ def run_sync(
             commit()
             progress("뜻 계산", counted["seen"], total)
     return counted
+
+
+def _fields_gone(defs: list[PropertyDef], fields: list[str] | None) -> str:
+    """고른 칸(`fields`)이 **하나도** 글로 읽히지 않으면 까닭 — 아니면 빈 글자. 이름(`label`)을
+    고른 것은 늘 읽힌다."""
+    if not fields or LABEL_FIELD in fields:
+        return ""
+    readable = {one.key for one in defs if one.data_type in CHOOSABLE}
+    if any(key in readable for key in fields):
+        return ""
+    return (
+        f"고른 칸({', '.join(fields)})이 모두 없거나 글이 아닌 종류입니다 — 서버 › 뜻으로 "
+        "찾기에서 "
+        "칸을 다시 고르세요(그때까지 있던 조각은 그대로 둡니다)"
+    )
 
 
 def _piece_inputs(

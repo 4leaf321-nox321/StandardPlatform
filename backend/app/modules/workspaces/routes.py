@@ -251,7 +251,14 @@ def reassign_workspace(
     job = job_services.enqueue(
         db,
         kind=services.REASSIGN_KIND,
-        params={"slug": slug, "target_slug": payload.target_slug, "kinds": payload.kinds},
+        params={
+            "slug": slug,
+            "target_slug": payload.target_slug,
+            "kinds": payload.kinds,
+            # 적용은 사람만 — 토큰으로는 계획을 세울 길이 없는 일이다(`/api/workspaces` 는
+            # 어느 범위로도 안 열린다). 적용 자리(`/api/jobs/{id}/apply`)가 다시 묻는다.
+            "human_only": True,
+        },
         user=admin,
         workspace_id=None,
     )

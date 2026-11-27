@@ -1003,3 +1003,33 @@ def test_칸을_하나도_고르지_않은_영역은_이름을_보인다(
     risks = _areas(slide)["risks"]
     assert risks["fields"] == [{"key": "label", "label": "이름"}]
     assert [one["values"] for one in risks["records"]] == [{"label": "접촉 불량"}]
+
+
+@pytest.mark.usefixtures("department_scope")
+def test_볼_수_없는_부서의_주제는_장표가_이름도_값도_내지_않는다(
+    client: TestClient, admin: Signed, db: Session, world: dict[str, Any]
+) -> None:
+    """조회가 부서로 좁혀진 설치에서 장표 목록 · 한 장 · 「쓰인 장표」 가 볼 수 없는 주제
+    객체의
+    이름 · 값을 그대로 냈다(ADR 0098)."""
+    from app.modules.workspaces.models import Workspace
+
+    template = _made_template(client, admin, world)
+    subject = world["models"]["A"]["id"]
+    made = _slide(client, admin, template, subject)
+    team = Workspace(slug=f"team-{uuid.uuid4().hex[:8]}", name="다른 팀")
+    db.add(team)
+    db.commit()
+    outsider = _make_user(db, team, label="outsider", is_system_admin=False, role="member")
+    headers = {"Authorization": f"Bearer {_login(client, outsider.email)}"}
+
+    listed = client.get("/api/slides", params={"subject_id": subject}, headers=headers)
+    assert listed.status_code == 200, listed.text
+    shown = next(one for one in listed.json()["items"] if one["id"] == made["id"])
+    assert shown["subject"]["label"] == "(볼 수 없는 객체)", shown
+    one = client.get(f"/api/slides/{made['id']}", headers=headers)
+    assert one.status_code == 403, one.text
+    used = client.get(f"/api/slides/used-in/{subject}", headers=headers)
+    assert used.status_code == 404, used.text
+    mine = client.get(f"/api/slides/{made['id']}", headers=admin.headers)
+    assert mine.status_code == 200 and mine.json()["subject"]["label"] == "A", mine.text

@@ -116,13 +116,23 @@ def propose(
         )
     if not _changed(prepared):
         raise _invalid("바뀌는 것이 없습니다 — 이미 그 정의입니다.")
-    same = db.scalar(
-        select(OntologyProposal).where(
-            OntologyProposal.status == "proposed",
-            OntologyProposal.proposed_by_id == user.id,
-            OntologyProposal.fingerprint == fingerprint,
-            OntologyProposal.source == source,
-        )
+    # **같은 정의**일 때만 앞 제안을 돌려준다 — 계획의 지문은 무엇이 바뀌는지(종류 · 이름 ·
+    # 칸)만 담아, 값(종류 · 선택 값 · 이름)을 고쳐 다시 낸 제안이 옛 제안으로 바뀌었다.
+    wanted = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+    same = next(
+        (
+            one
+            for one in db.scalars(
+                select(OntologyProposal).where(
+                    OntologyProposal.status == "proposed",
+                    OntologyProposal.proposed_by_id == user.id,
+                    OntologyProposal.fingerprint == fingerprint,
+                    OntologyProposal.source == source,
+                )
+            )
+            if json.dumps(one.schema, ensure_ascii=False, sort_keys=True) == wanted
+        ),
+        None,
     )
     if same is not None:
         return same, False
@@ -171,6 +181,12 @@ def get(db: Session, proposal_id: uuid.UUID) -> OntologyProposal:
     if row is None:
         raise NotFound(code("ONTOLOGY", 110), "그 정의 제안이 없습니다.")
     return row
+
+
+def _lock(db: Session, row: OntologyProposal) -> None:
+    """결정 직전에 **잠그고 다시 읽는다** — 두 사람(또는 사람과 철회)이 같은 때 누르면, 적용은
+    됐는데 상태는 거절 · 철회로 남는 엇갈림이 생겼다."""
+    db.refresh(row, with_for_update=True)
 
 
 def require_open(row: OntologyProposal) -> None:
@@ -243,6 +259,7 @@ def accept(
 ) -> OntologySnapshot:
     """적용 — 지금 계획의 지문이 제안 때와 같을 때만. **부르는 쪽이 커밋한다.**"""
     _require_person()
+    _lock(db, row)
     denied, _prepared = blocker(db, row)
     if denied is not None:
         raise Conflict(
@@ -287,6 +304,7 @@ def accept(
 
 def reject(db: Session, user: User, row: OntologyProposal, *, note: str = "") -> None:
     _require_person()
+    _lock(db, row)
     require_open(row)
     row.status = "rejected"
     row.decided_by_id = user.id
@@ -305,6 +323,7 @@ def reject(db: Session, user: User, row: OntologyProposal, *, note: str = "") ->
 
 def withdraw(db: Session, user: User, row: OntologyProposal) -> None:
     require_owner_or_admin(user, row)
+    _lock(db, row)
     require_open(row)
     row.status = "withdrawn"
     row.decided_by_id = user.id
@@ -323,6 +342,7 @@ def reopen(db: Session, user: User, row: OntologyProposal, *, apply: bool) -> tu
     """거절을 되돌린다 — 다시 열린 제안으로(검토함의 복원)."""
     if apply:
         _require_person()
+        _lock(db, row)
     if row.status != "rejected":
         return False, "그 제안의 상태가 그 사이 바뀌었습니다 — 복원할 것이 없음."
     if apply:

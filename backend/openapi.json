@@ -3276,7 +3276,7 @@
           "slides"
         ],
         "summary": "Used In",
-        "description": "이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는\n살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`).",
+        "description": "이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는\n살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`). 볼 수 없는 객체면 없는 것과 같다.",
         "operationId": "used_in_api_slides_used_in__object_id__get",
         "parameters": [
           {
@@ -8769,6 +8769,18 @@
               "type": "string",
               "title": "Key"
             }
+          },
+          {
+            "name": "body",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "거짓이면 본문 없이 판 · 글자 수 · sha256 만 — 쓴 것을 대조하거나 판만 볼 때(수천 자를 다시 받지 않는다)",
+              "default": true,
+              "title": "Body"
+            },
+            "description": "거짓이면 본문 없이 판 · 글자 수 · sha256 만 — 쓴 것을 대조하거나 판만 볼 때(수천 자를 다시 받지 않는다)"
           }
         ],
         "responses": {
@@ -36355,6 +36367,17 @@
             "minLength": 1,
             "title": "Type Slug"
           },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
           "key": {
             "type": "string",
             "minLength": 1,
@@ -36439,6 +36462,15 @@
           "can_edit": {
             "type": "boolean",
             "title": "Can Edit"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "body_included": {
+            "type": "boolean",
+            "title": "Body Included",
+            "default": true
           }
         },
         "type": "object",
@@ -36451,7 +36483,8 @@
           "updated_at",
           "updated_by_name",
           "updated_via",
-          "can_edit"
+          "can_edit",
+          "sha256"
         ],
         "title": "DocumentOut"
       },

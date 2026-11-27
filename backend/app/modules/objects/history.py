@@ -363,25 +363,68 @@ def _renames(db: Session, type_id: uuid.UUID) -> list[tuple[datetime, str, str]]
     ]
 
 
+#: 옮겨 온 길을 거슬러 볼 단계 — A → B → C … 의 끝에서 앞으로.
+MOVE_HOPS = 6
+
+
 def _moves(db: Session, type_id: uuid.UUID) -> list[tuple[datetime, str, dict[str, str]]]:
-    """이 타입으로 옮겨 온 것(`ontology.type.move`) — (때, 원 타입, 원 키 → 대상 키)."""
-    rows = db.execute(
-        select(AuditEntry.created_at, AuditEntry.changes).where(
-            AuditEntry.action == "ontology.type.move",
-            AuditEntry.target_table == "object_types",
-            AuditEntry.target_id == type_id,
-        )
-    )
+    """이 타입으로 옮겨 온 것(`ontology.type.move`) — (때, 원 타입, 원 키 → **지금** 키).
+
+    **거슬러 끝까지** — A → B 로 옮긴 뒤 B → C 로 또 옮기면 C 의 객체에 「A:…」 로 적힌 기록이
+    있다. 전에는 한 단계(B → C)만 봐 그 기록을 A 의 키로 읽었다. 앞 단계의 칸 대응을 뒤 단계와
+    이어 붙인다(A 의 키 → B 의 키 → C 의 키)."""
+
+    def into(where: Any) -> list[tuple[datetime, str, dict[str, str]]]:
+        found: list[tuple[datetime, str, dict[str, str]]] = []
+        for at, changes in db.execute(
+            select(AuditEntry.created_at, AuditEntry.changes).where(
+                AuditEntry.action == "ontology.type.move",
+                AuditEntry.target_table == "object_types",
+                where,
+            )
+        ):
+            if not isinstance(changes, dict) or not changes.get("from"):
+                continue
+            keys = {
+                str(src): str(dst)
+                for src, dst in (changes.get("keys") or {}).items()
+                if isinstance(dst, str)
+            }
+            found.append((at, str(changes["from"]), keys))
+        return found
+
     out: list[tuple[datetime, str, dict[str, str]]] = []
-    for at, changes in rows:
-        if not isinstance(changes, dict) or not changes.get("from"):
-            continue
-        keys = {
-            str(src): str(dst)
-            for src, dst in (changes.get("keys") or {}).items()
-            if isinstance(dst, str)
-        }
-        out.append((at, str(changes["from"]), keys))
+    # (그 단계의 때, 원 타입, 원 키 → 지금 키) — 여기서 앞 단계를 찾는다.
+    frontier = [
+        (at, origin, keys) for at, origin, keys in into(AuditEntry.target_id == type_id)
+    ]
+    seen: set[str] = set()
+    for _hop in range(MOVE_HOPS):
+        if not frontier:
+            break
+        out.extend(frontier)
+        following: list[tuple[datetime, str, dict[str, str]]] = []
+        for at, origin, after in frontier:
+            if origin in seen:
+                continue
+            seen.add(origin)
+            for earlier_at, earlier, keys in into(
+                AuditEntry.target_label.endswith(f" → {origin}", autoescape=True)
+            ):
+                if earlier_at >= at:
+                    continue
+                composed = {
+                    key: after.get(keys.get(key, key), keys.get(key, key))
+                    for key in set(keys) | set(after)
+                }
+                following.append(
+                    (
+                        earlier_at,
+                        earlier,
+                        {key: value for key, value in composed.items() if key != value},
+                    )
+                )
+        frontier = following
     return out
 
 

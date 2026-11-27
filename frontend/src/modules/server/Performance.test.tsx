@@ -399,8 +399,9 @@ describe('느린 요청 · 큰 응답', () => {
     )
     await screen.findByRole('heading', { name: '끊긴 질문' })
     expect(calls('/server/performance/cut')[0]).toContain('suggest=true')
-    // SPARQL 의 끊김에는 초안이 없다 — 단추도 하나뿐이다.
-    const buttons = screen.getAllByRole('button', { name: '지표 초안' })
+    // SPARQL 의 끊김에는 초안이 없다 — 단추도 하나뿐이다. 제목이 먼저 서고 목록은 뒤에 온다 —
+    // 기다려서 찾는다(기계가 바쁘면 바로 찾을 때 아직 없었다).
+    const buttons = await screen.findAllByRole('button', { name: '지표 초안' })
     expect(buttons).toHaveLength(1)
     await userEvent.click(buttons[0])
     expect(await screen.findByRole('dialog')).toHaveTextContent(

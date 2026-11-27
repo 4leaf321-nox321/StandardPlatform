@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-26a
+GUIDE_VERSION: 2026-11-27b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -31,7 +31,7 @@ GUIDE_VERSION: 2026-11-26a
 | 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
 | **목록을 끝까지 다 받기** — 수천 · 수만 줄 | `objects_list(cursor="start", limit=2000)` → 응답의 `next_cursor` 를 그대로 다음 `cursor` 로 | `offset` 으로 넘기면 뒤로 갈수록 느려진다(2,000만 건 표). 커서는 id 차례 · 전체 수는 첫 쪽에서만(ADR 0079). **세려면 받지 말고 통계 · 전수 집계** |
-| **긴 글(백서 · 위키 페이지) 읽기 · 쓰기** | `document_read` → `document_write(body, base_revision)` · 판 목록 `document_revisions` | 문서 속성(`data_type: document`)만. **읽은 판을 `base_revision` 으로** — 그사이 바뀌었으면 거절된다(덮어쓰지 않는다). 객체는 `[이름](/o/<타입>/<id>)` 링크로 가리킨다 |
+| **긴 글(백서 · 위키 페이지) 읽기 · 쓰기** | `document_read` → `document_write(body, base_revision)` · 판 목록 `document_revisions` · 판 · sha256 만 `document_read(body=False)` | 문서 속성(`data_type: document`)만. **읽은 판을 `base_revision` 으로** — 그사이 바뀌었으면 거절된다(덮어쓰지 않는다). 객체는 `[이름](/o/<타입>/<id>)` 링크로 가리킨다. **로컬 파일(Word 에서 꺼낸 것 · 여러 건)은 옮겨 적지 않는다** — 정제 키트의 `document_push` |
 | 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
@@ -976,9 +976,16 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - **객체를 가리킬 때는 링크로** — `[N12 카메라](/o/part/<객체 id>)`. id 는 `object_resolve` ·
   `objects_list` 로 찾는다(짐작하지 않는다). 저장하면 그 객체의 상세에 「이 객체를 언급한 문서」 로
   모인다. 이름만 적으면 아무것도 이어지지 않는다.
-- **Word · 마크다운 원본을 넣을 때(백필)** — Word 는 마크다운으로 바꿔 넣는다: 제목 → `#` · `##`,
-  목록 → `-`, 표 → `|` 표, 굵게 → `**`. 머리글 · 바닥글 · 쪽 번호는 뺀다. 한 편을 넣은 뒤
-  `document_read` 로 다시 읽어 잘린 데가 없는지 본다.
+- **본문 없이 판 · sha256 만** — `document_read(body=False)`(답의 `body` 는 빈 글자, `sha256` 은 본문의
+  UTF-8 · 줄바꿈 `\n` 의 것). `document_write` 의 답에도 `sha256` 이 온다 — 쓴 것을 대조하려고 본문을
+  다시 받지 않는다.
+- **로컬 파일을 넣을 때(백필 · Word 여러 건)는 이 도구로 옮겨 적지 않는다**(ADR 0099) — 본문이 도구
+  인자라 수백 건이면 토큰이 들고 옮기다 틀린다. 사용자 PC 의 **정제 키트**가 있으면
+  `docx_extract` → `document_push`(초안 · 그림을 파일 그대로 zip 으로 올려 계획만) → 계획을 사용자에게 보이고
+  「좋다」 하면 `document_apply`(적용하고 sha256 으로 대조까지). 키트가 없을 때만 아래처럼 한 편씩.
+- **Word · 마크다운 원본을 한 편 넣을 때** — Word 는 마크다운으로 바꿔 넣는다: 제목 → `#` · `##`,
+  목록 → `-`, 표 → `|` 표, 굵게 → `**`. 머리글 · 바닥글 · 쪽 번호는 뺀다. 넣은 뒤
+  `document_read(body=False)` 의 글자 수 · sha256 으로 잘린 데가 없는지 본다.
 - **그림은 원래 자리에 넣는다**(ADR 0056). 차례:
   1. Word 를 풀어 글 초안과 그림 파일을 꺼낸다 — 로컬 정제 도구가 있으면 그 도구(`docx_extract`)가
      그림 자리를 잃지 않고 꺼낸다(EMF · WMF 는 PNG 로 바꿔서). 없으면 `.docx` 를 zip 으로 풀어
@@ -1060,6 +1067,10 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   그 판이 넣은 객체의 이력(`object_history` 의 `run`)에 남고, 이력은 `trace` 의 `{type}` · `{key}` 를
   그 객체로 채워 원천의 추적으로 링크한다. 잠금과 달리 기록일 뿐 권한을 바꾸지 않는다. 원천 파이프라인
   이 넣는 묶음이면 꼭 싣는다 — 안 실으면 이력에는 「누가 · 일괄 가져오기」 만 남는다.
+- **`documents`** — 문서 칸의 마크다운 본문(`{type_slug, workspace_slug?, key, property, body}`).
+  문서만 실은 묶음도 된다. 식별자 범위가 부서인 타입은 `workspace_slug` 를 적는다. 원천이 잠근 타입의
+  문서는 그 원천의 `source` 로만 쓴다. 묶음을 되돌리면 그 묶음이 만든 객체는 지우지만 문서의 판은
+  되돌리지 않는다(문서의 옛 판으로).
 
 **한꺼번에 많이(백필)** — 길이 둘이다. 크기로 고른다.
 
@@ -1078,8 +1089,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
    를 더블클릭**한다 — 이 플랫폼용 토큰 · 주소가 등록된다(명령을 칠 일이 없다). 플랫폼이
    여럿이면 각 플랫폼 화면에서 한 번씩.
 3. Claude Desktop 을 완전히 종료했다가 다시 켠다. 그 뒤 「○○ 자료 작업을 시작하자」 고 말하면
-   정제 도구가 차례를 안내하고, 미리 보기 뒤에는 **그 플랫폼 화면 「작업」 에서 「적용」** 으로
-   넣는다.
+   정제 도구가 차례를 안내한다. 미리 보기 뒤에는 그 요약을 보고 대화에서 **「좋다 · 적용해」** 라고
+   하면 정제 도구가 그 계획 그대로 넣는다(`run_apply` — 화면 「작업」 의 「적용」 도 된다, ADR 0100).
 
 ### 넣은 판을 되돌린다 — `bundle_runs` → `bundle_undo(run_id)`
 
@@ -1101,7 +1112,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 | | |
 |---|---|
 | `job_status(job_id, wait_seconds=20, rows=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다. **`next` 가 다음 할 일**을 말한다 — 종류마다 다르다(`job_apply` 로 적용하는 계획 · `datasource_sync(apply=true)` 로 적용하는 계획 · 파일을 내는 작업 · 그냥 끝나는 작업). 계획 줄(`result.rows`)은 **목록마다 `rows` 줄까지**(기본 20, 오류 줄 먼저 · 최대 500) — 더 있으면 `rows_omitted` 가 그 수다. `rows=0` 이면 요약만. 묶음 계획을 다 받으면 백만 자를 넘어 도구 결과의 한도에 걸린다. 건수(`counts`) · 오류(`errors`)는 전체의 것이니 그것으로 요약하고, 줄을 하나하나 옮겨 적지 않는다 |
-| `job_apply(job_id)` | 계획을 **사람이 확인한 뒤** 적용. 사용자의 판단 없이 부르지 않는다 |
+| `job_apply(job_id)` | 계획을 **사람이 확인한 뒤** 적용. 사용자의 판단 없이 부르지 않는다. 부서 자료 통째 옮기기(`workspace_reassign`)는 토큰으로는 적용되지 않는다(JOBS-31 — 사람이 화면에서) |
 | `jobs_list(status=, kind=, mine=)` | 작업 최근 것부터 + 워커가 살아 있나. 결과는 요약뿐이다(계획 줄은 비우고 `rows_omitted` 에 수만) — 줄은 `job_status` 로. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다. 타이머가 넣은 작업에 파묻히면 `kind` · `mine` 으로 거른다 |
 | `job_cancel(job_id)` | 멈춘다 — 기다리는 것은 바로, 도는 것은 단계 사이에서. 시킨 사람만(시스템 관리자는 모두) |
 
@@ -1292,7 +1303,8 @@ SELECT (COUNT(DISTINCT ?m) AS ?n) WHERE { <…/o/part/PT-1> ^sp:rel.bom+ ?m . ?m
 
 **바깥 창구** — 바깥 시스템(Jena · SPARQLWrapper · 사내 도구)은 표준 SPARQL 1.1 Protocol 로
 `GET /api/rdf/sparql?query=…`(또는 `POST` — `application/sparql-query` 몸통)에 묻는다. 답은
-`application/sparql-results+json`, 머리 `Authorization: Bearer <토큰>`. 사본에만 묻고(없으면 503), 머리
+`application/sparql-results+json`, 머리 `Authorization: Bearer <토큰>`(`read` 범위면 된다 — `POST` 도 읽기다,
+v0.4.107 전에는 토큰의 `POST` 가 막혔다). 사본에만 묻고(없으면 503), 머리
 `X-SP-Copied-At` · `X-SP-Truncated` 가 판 · 잘림이다. 사람이 「다른 시스템에서 SPARQL 로 보고 싶다」 고
 하면 이 주소와 질의를 건넨다.
 

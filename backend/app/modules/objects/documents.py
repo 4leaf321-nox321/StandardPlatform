@@ -22,11 +22,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -40,6 +41,7 @@ from app.modules.objects.models import (
     ObjectDocumentRevision,
     ObjectInstance,
 )
+from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import audit
 from app.shared.auth import current_user
@@ -69,6 +71,12 @@ class DocumentOut(BaseModel):
     updated_via: str
     """토큰으로 고쳤으면 그 이름(MCP · AI) — 화면에서 고쳤으면 빈 글자."""
     can_edit: bool
+    sha256: str
+    """본문의 sha256(UTF-8, 줄바꿈 `\n`) — 쓴 것과 같은지 본문을 다시 받지 않고 견준다(ADR
+    0099).
+    빈 문서면 빈 글자의 것."""
+    body_included: bool = True
+    """`?body=false` 로 읽었으면 거짓 — 그때 `body` 는 빈 글자다(판 · 글자 수 · sha256 만)."""
 
 
 class DocumentPutIn(BaseModel):
@@ -152,8 +160,18 @@ def _names(db: Session, ids: set[uuid.UUID | None]) -> dict[uuid.UUID, str]:
     }
 
 
+def body_sha256(body: str) -> str:
+    """본문의 sha256 — 저장한 꼴(줄바꿈 `\n`)의 UTF-8. 문서 올리기(`docpush.digest`)와 같다."""
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def _out(
-    db: Session, definition: PropertyDef, found: ObjectDocument | None, can_edit: bool
+    db: Session,
+    definition: PropertyDef,
+    found: ObjectDocument | None,
+    can_edit: bool,
+    *,
+    with_body: bool = True,
 ) -> DocumentOut:
     if found is None:
         return DocumentOut(
@@ -166,18 +184,22 @@ def _out(
             updated_by_name=None,
             updated_via="",
             can_edit=can_edit,
+            sha256=body_sha256(""),
+            body_included=with_body,
         )
     names = _names(db, {found.updated_by_id})
     return DocumentOut(
         key=definition.key,
         label=definition.label,
-        body=found.body,
+        body=found.body if with_body else "",
         revision=found.revision,
         chars=found.chars,
         updated_at=found.updated_at,
         updated_by_name=names.get(found.updated_by_id) if found.updated_by_id else None,
         updated_via=found.updated_via,
         can_edit=can_edit,
+        sha256=body_sha256(found.body),
+        body_included=with_body,
     )
 
 
@@ -204,6 +226,11 @@ def get_document(
     type_slug: str,
     object_id: uuid.UUID,
     key: str,
+    body: bool = Query(
+        default=True,
+        description="거짓이면 본문 없이 판 · 글자 수 · sha256 만 — 쓴 것을 대조하거나 판만 "
+        "볼 때(수천 자를 다시 받지 않는다)",
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DocumentOut:
@@ -212,7 +239,9 @@ def get_document(
     row = _visible(db, user, object_type, object_id)
     definition = _definition(db, object_type, key)
     found = db.get(ObjectDocument, (row.id, key))
-    return _out(db, definition, found, access.can_edit(db, user, object_type, row))
+    return _out(
+        db, definition, found, access.can_edit(db, user, object_type, row), with_body=body
+    )
 
 
 @router.put("/{type_slug}/{object_id}/documents/{key}", response_model=DocumentOut)
@@ -229,6 +258,9 @@ def put_document(
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
     access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 16))
+    # 원천이 관리하는 타입(`managed_by`)은 로컬에서 고치지 않는다 — 다른 쓰기(값 · 첨부)와
+    # 같다.
+    managed.require_objects_editable(object_type, what="문서를 고치지")
     definition = _definition(db, object_type, key)
     found = db.scalar(
         select(ObjectDocument)
@@ -262,11 +294,15 @@ def write_body(
     note: str = "",
     found: ObjectDocument | None = None,
     via: str | None = None,
+    touched_at: datetime | None = None,
 ) -> tuple[ObjectDocument, bool]:
     """본문을 바꾼다 — 판이 하나 오르고 그 판 · 언급 · 감사가 남는다. (문서, 바뀌었나). 본문이
     그대로면 판을 올리지 않는다. **부르는 쪽이 커밋한다**(그리고 판 확인 · 권한은 부르는 쪽 —
     화면은 `base_revision`, 묶음은 묶음의 지문). `found` 는 이미 읽은 지금 문서(잠금). `via` 를
-    안 주면 이 요청의 토큰 이름(화면이면 빈 글자)."""
+    안 주면 이 요청의 토큰 이름(화면이면 빈 글자). `touched_at` 은 객체의 「고친 때」 로 적을
+    시각 — 묶음은 같은 트랜잭션의 객체 단계와 같은 때(`now()`)를 준다. 문서 단계의 시각을
+    적으면
+    묶음 되돌리기가 이 묶음이 만든 객체를 「그 뒤에 고쳐졌다」 로 보고 안 지웠다(0.4.106)."""
     if found is None:
         found = db.scalar(
             select(ObjectDocument)
@@ -309,7 +345,7 @@ def write_body(
     for target in mentions_in(db, body, owner_id=row.id):
         db.add(ObjectDocumentMention(object_id=row.id, key=key, target_id=target))
     # 객체가 바뀐 것으로 친다 — 「지난번 이후 바뀐 것」 · 뜻으로 찾기의 차례가 이것을 본다.
-    row.updated_at = now
+    row.updated_at = touched_at or now
     audit.record(
         db,
         action="object.document",

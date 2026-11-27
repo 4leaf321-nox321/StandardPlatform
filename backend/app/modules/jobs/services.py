@@ -333,8 +333,10 @@ def apply_child(db: Session, plan_id: uuid.UUID) -> Job | None:
     )
 
 
-def make_apply(db: Session, user: User, plan_job: Job) -> Job:
-    """계획 작업 → 적용 작업. **같은 파일 · 같은 지문.**"""
+def make_apply(db: Session, user: User, plan_job: Job, *, by_token: bool = False) -> Job:
+    """계획 작업 → 적용 작업. **같은 파일 · 같은 지문.** `by_token` 은 적용을 토큰(AI ·
+    스크립트)이 시켰나 — 계획을 사람이 세웠어도 적용이 토큰이면 사람만 정하는 것(검토함의
+    `human_only`)을 그 작업이 다시 막는다. 워커에는 요청의 토큰이 없어 작업 인자로 넘긴다."""
     spec = kinds.get(plan_job.kind)
     if spec is None or not spec.two_step:
         raise Conflict(code("JOBS", 8), "이 종류의 작업은 적용 단계가 없습니다.")
@@ -368,6 +370,8 @@ def make_apply(db: Session, user: User, plan_job: Job) -> Job:
         else None
     )
     params = {**plan_job.params, "apply": True, "fingerprint": result.get("fingerprint")}
+    if by_token:
+        params["by_token"] = True
     return enqueue(
         db,
         kind=plan_job.kind,

@@ -56,7 +56,13 @@ def _clean_orphans() -> None:
 
     try:
         with SessionLocal() as db:
-            done = gc.clean(db, gc.scan(db))
+            found = gc.scan(db)
+            foreign = gc.looks_foreign(found)
+            if foreign:
+                # 지우지 않고 알린다 — 다른 DB 에 붙은 워커가 남의 저장소를 비우는 것을 막는다.
+                log.warning("고아 첨부 정리를 멈춤: %s", foreign)
+                return
+            done = gc.clean(db, found)
     except Exception:
         log.exception("고아 첨부 정리 실패 — 다음 차례에 다시")
         return

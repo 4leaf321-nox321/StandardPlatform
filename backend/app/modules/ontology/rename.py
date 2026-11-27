@@ -598,7 +598,11 @@ def _graph_map(db: Session, owner: ObjectType, rename: Rename, out: Plan) -> Non
 def _review_ids(db: Session, old_prefix: str, new_prefix: str, out: Plan) -> None:
     """검토함이 「무시」 를 기억하는 줄 — 항목 id 에 slug · 키가 든다(`<slug>:<키>:…`)."""
     rows = list(
-        db.scalars(select(ReviewDecision).where(ReviewDecision.item_id.startswith(old_prefix)))
+        db.scalars(
+            select(ReviewDecision).where(
+                ReviewDecision.item_id.startswith(old_prefix, autoescape=True)
+            )
+        )
     )
     for row in rows:
         out.edits.append(_setter(row, "item_id", new_prefix + row.item_id[len(old_prefix) :]))
@@ -669,7 +673,7 @@ def plan_type(db: Session, owner: ObjectType, to: str, *, consumers: list[str]) 
         db.scalar(
             select(func.count())
             .select_from(Notification)
-            .where(Notification.link.startswith(f"/o/{old}/"))
+            .where(Notification.link.startswith(f"/o/{old}/", autoescape=True))
         )
         or 0
     )
@@ -833,10 +837,17 @@ def type_side_tables(db: Session, old: str, new: str) -> None:
     db.execute(
         text(
             "UPDATE notifications SET link = :new || substr(link, :cut) WHERE link LIKE "
-            ":pattern"
+            ":pattern ESCAPE '\\'"
         ),
-        {"new": f"/o/{new}/", "cut": len(f"/o/{old}/") + 1, "pattern": f"/o/{old}/%"},
+        # slug 의 `_` 는 LIKE 에서 아무 한 글자다 — 가리지 않으면 `a_1` 을 바꿀 때 `a11` 의
+        # 링크까지 바뀌었다.
+        {"new": f"/o/{new}/", "cut": len(f"/o/{old}/") + 1, "pattern": f"/o/{_like(old)}/%"},
     )
+
+
+def _like(value: str) -> str:
+    """LIKE 의 글자 그대로 — `\\` · `%` · `_` 를 가린다(ESCAPE '\\')."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def fingerprint(plan: Plan) -> str:

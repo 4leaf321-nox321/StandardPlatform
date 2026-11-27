@@ -106,3 +106,25 @@ def test_GPU_와_CPU_의_기대는_수와_비슷한_것이_같다() -> None:
     assert cpu.depends_top.tolist() == gpu.depends_top.tolist()
     assert cpu.similar_node.tolist() == gpu.similar_node.tolist()
     assert np.allclose(cpu.similar_score, gpu.similar_score)
+
+
+def test_객체는_있는데_선이_없으면_무리는_없음_다리_역할은_0이다() -> None:
+    """NetworKit 의 모듈성이 선 없는 그래프에서 예외를 내 밤 계산 전체가 실패했다 — 객체만 있고
+    관계가 아직 없는 설치(ADR 0098). GPU 판과 같은 답."""
+    empty = np.zeros(0, np.int64)
+    whole = calcengine.Engine(threads=1).whole(3, empty, empty)
+    assert whole.cluster is not None and whole.cluster.tolist() == [-1, -1, -1]
+    assert whole.modularity is None
+    assert whole.bridge is not None and whole.bridge.tolist() == [0.0, 0.0, 0.0]
+    nothing = calcengine.Engine(threads=1).whole(0, empty, empty)
+    assert nothing.cluster is not None and len(nothing.cluster) == 0
+
+
+def test_선이_모두_고리_안이면_맨_위가_없다고_말하고_실패하지_않는다() -> None:
+    """A → B · B → A 만 있는 이어지는 관계 — 맨 위가 없어 `keep[0]` 에서 IndexError 로 밤
+    계산 전체가 실패했다(이어지는 관계를 나중에 켜면 예전 선의 고리가 남는다)."""
+    src = np.array([0, 1, 2, 3], np.int64)
+    dst = np.array([1, 0, 3, 2], np.int64)
+    got = calcengine.Engine(threads=1).transitive(4, src, dst, np.zeros(4, np.int64))
+    assert got.roots.tolist() == []
+    assert got.similar_skipped and "고리" in got.similar_skipped

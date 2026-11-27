@@ -44,7 +44,7 @@ python sp_pipeline.py undo <판번호>                          # 되돌리기 �
 | `init` | `bundle.json` · `ontology.json` · `objects/` · `relations/` · `unresolved.json` | 0 |
 | `validate` | JSON 모양, 식별자 겹침, 관계 행의 칸, 미해결 목록. 출처(`_source`) · 근거가 없으면 경고. **`SP_SERVER` · `SP_TOKEN` 이 있으면 끝점도 플랫폼에 묻는다**(없는 것 · 이름이 여럿과 맞는 것 · 별칭으로 풀린 것) | 오류 있으면 1 |
 | `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false, 202 작업) → 끝나기를 기다려 `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
-| `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
+| `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json`(거절되면 `apply_failed.json` — 잠그지 않아 다시 미리 볼 수 있다) | 안 들어갔으면 1 |
 | `init --backfill` | 대량 적재용 실행 폴더 — 미리 보기는 **계획만**(적용을 두 번 돌지 않는다) · 웹훅과 감사는 묶음 한 건 · 못 찾은 참조는 그 칸만 비움. `preview`/`apply` 에 `--backfill` 을 줘도 그때 켜진다 | 0 |
 | `runs` | 넣은 판들(적용한 것만) — 최근 것부터. 되돌릴 번호를 여기서 찾는다. 「되돌릴 수 없음」 은 이미 되돌렸거나 기록 보관 기간(30일)이 지난 것 | 0 |
 | `undo <판번호>` | 그 판을 **통째로 되돌린다** — 기본은 계획이다. 사람이 읽은 뒤 `--apply`. 그 사이 남이 고친 줄 · 밖에서 가리키는 것이 생긴 객체 · 합치기는 되돌리지 않고 이유를 적는다 | 오류 있으면 1 |
@@ -90,8 +90,12 @@ python sp_pipeline.py docx 00-원천/설계서.docx      # → docs/설계서/ (
 | `media/` | 쓰인 그림만, 읽는 차례대로 `image1.png` …(같은 그림은 한 파일). SVG 는 Word 가 넣어 둔 PNG 사본, **EMF · WMF(Visio · 붙여 넣은 엑셀 차트) · TIFF · BMP 는 PNG 로** — Windows 의 PowerShell(GDI+)로, WSL 에서도 |
 | `manifest.json` | 그림마다 차례 · 파일 · 원래 이름 · 형식 · 바꿨는지 · 폭 · 캡션 · 바로 앞 문단, 못 옮긴 것(차트 · SmartArt · 도형 · 바꾸지 못한 EMF)과 그 이유 — 초안에는 `> 그림: …` 으로 자리가 남는다 |
 
-그 뒤는 AI 가 플랫폼 MCP 로 한다(`attachment_upload_prepare` → `curl` → 그림 줄을 `photo:<첨부 id>` 로 →
-`document_write`) — 절차는 [AGENTS.md](AGENTS.md) 「Word 문서를 문서 속성으로」. **서버가 Word 를 풀지 않는다는
+그 뒤는 키트의 **`document_push`**(`sp_docpush.py`, ADR 0099)가 초안 · 그림을 **파일 그대로** zip 으로 묶어 플랫폼
+작업(「문서 올리기」)으로 올리고 — 본문이 AI 의 도구 인자를 거치지 않는다 — 계획을 사람에게 보인다. 사람이
+「좋다」 하면 **`document_apply`** 가 적용하고(그림이 붙고 그림 줄이 `photo:<첨부 id>` 로) 곧바로 본문 없이 판 ·
+sha256 · 붙은 그림만 받아 로컬 초안과 견준다(`document_check` 와 같다). 화면에서 「적용」 해도 된다. 여러 건은
+목록 파일 하나로, 크면 나눠 여러 작업으로.
+절차는 [AGENTS.md](AGENTS.md) 「Word 문서를 문서 속성으로」. **서버가 Word 를 풀지 않는다는
 ADR 0053 과 부딪치지 않는다** — 이 도구는 사용자 PC 에서 표준 라이브러리만으로 돌고, 글은 초안일 뿐 다듬기는
 AI 몫이다. zip 은 풀기 전에 항목 수 · 풀린 크기를 보고, 디스크에 경로째 풀지 않으며, DTD 가 든 XML 은 읽지 않는다.
 
@@ -122,8 +126,10 @@ AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 �
 4. **Claude Desktop 을 켠다**(Claude Code 는 새 대화의 `/mcp` 로 확인). 안 보이면 **`check.cmd` 를 더블클릭** — 앱이 읽는 설정 파일마다
    항목이 있는지 · 서버가 뜨는지 · 앱의 로그(`mcp-server-sp-pipeline.log`)를 한 화면에 보인다.
 
-**적용은 그 플랫폼 화면 「작업」 에서** 사람이 「적용」 을 누른다 — 미리 보기 뒤에 AI 가 그 계획이
-펼쳐진 채로 열리는 링크(`apply_on_screen`)를 준다. 그 플랫폼의 화면이니 엉뚱한 곳에 넣을 일이 없다.
+**적용은 사람이 확인한 뒤에만**(ADR 0100) — 미리 보기 뒤에 AI 가 요약을 보이고 묻는다. 사람이 대화에서
+「좋다 · 적용해」 라고 하면 AI 가 `run_apply` 로 **미리 본 그 계획**을 넣는다(화면의 「적용」 과 같은 길 —
+그 사이 누가 바꿨으면 플랫폼이 거절한다). 화면에서 보고 누르고 싶으면 그 계획이 펼쳐진 채로 열리는 링크
+(`apply_on_screen`)도 함께 온다. 되돌리기도 같다(`run_undo` 로 계획 → 「되돌려」 → `run_undo_apply`).
 
 **명령으로 할 때**(Gemini CLI · 다른 작업 폴더 · macOS · Linux) — 저장소에 없는 사내 파일(허브 정의 ·
 대응 파일)까지 함께 들고 가려면 `KIT_PRIVATE_DIR=<폴더> ./deploy/build_pipeline_kit.sh` 로 만든
@@ -206,16 +212,19 @@ python sp_setup.py --platform qings --server http://<새 주소>/qings --move   
 | `pipeline_guide` | 절차 · 형식의 정본(이 폴더의 AGENTS.md, 모델링 규약) |
 | `work_list` · `work_init` · `work_status` | 작업 폴더 — **어디까지 했고 다음이 무엇인지** |
 | `source_profile` · `source_head` | 원천 표 조사(계산) · 앞부분 보기 — 정의 초안(`01-조사/<이름>.draft.json`: 식별자 · 숫자와 단위 · 날짜 · 고를 값 · 잇는 표 후보, 칸마다 근거)도 낸다 |
-| `docx_extract` | Word 원천 → `docs/<이름>/` 에 그림 자리가 든 초안 · 그림 파일(위 「Word 를 문서 속성으로」). 올리는 것은 플랫폼 MCP 로 |
+| `docx_extract` | Word 원천 → `docs/<이름>/` 에 그림 자리가 든 초안 · 그림 파일(위 「Word 를 문서 속성으로」) |
+| `document_push` · `document_apply` · `document_check` | 초안 · 그림을 파일 그대로 올려 계획 → 사람이 「좋다」 하면 적용 + 대조 · sha256 대조만(ADR 0099) |
 | `work_read` · `work_write` | 정의 · 판단표 · 대응 · 실행 폴더 행 파일(쓸 수 있는 자리가 정해져 있다) |
 | `decision_record` | 사람이 정한 것 — 정의 확정 · 미해결의 답 |
 | `table_convert` · `run_init` · `run_validate` · `run_preview` | 변환 · 빈 실행 · 검증 · 미리 보기 |
+| `run_apply` | 미리 본 그 계획을 넣는다 — **사람이 대화에서 「좋다」 한 뒤에만** |
 | `run_close` | 쓰지 않을 실행을 닫는다(할 일에서 뺌 · 다시 미리 보지 않음 · 지우지 않음) |
 | `hub_pull` | (쌍둥이) 허브의 PLM 기준정보를 새 실행 폴더로 받는다 — env 에 `SP_HUB_SERVER` · `SP_HUB_TOKEN`(설치: `--hub-server` · `--hub-token`) |
-| `runs_list` · `run_undo` | 넣은 판들 · **되돌리기 계획**(되돌리는 것은 사람이 `undo_command` 로) |
+| `runs_list` · `run_undo` · `run_undo_apply` | 넣은 판들 · **되돌리기 계획** · 그 계획대로 되돌린다(사람이 「되돌려」 한 뒤에만) |
 
-**적용 도구도 되돌리는 도구도 없다.** `run_preview` 의 `apply_command` 와 `run_undo` 의
-`undo_command` 를 사람이 확인한 뒤 직접 실행한다.
+**적용하는 도구는 셋 — `run_apply` · `run_undo_apply` · `document_apply`.** 셋 다 사람이 본 계획 작업만
+넣고, AI 는 사람의 말 없이 부르지 않는다. 명령 창이 편하면 `run_preview` 의 `apply_command` · `run_undo` 의
+`undo_command` 도 그대로 된다.
 
 **결과를 밖으로 못 들고 나오는 자리** — `source_profile` 의 끝과 `table_convert` 의 `brief` 에 **「말로
 전할 요약」**(수와 열 이름만, 값 없음)이 있다. 그것을 읽어 전하면 규칙을 고칠 수 있다.

@@ -116,6 +116,10 @@ class DocumentIn(BaseModel):
     식별자(`key`)로 찾는다 — 같은 묶음이 만드는 객체여도 된다(객체 단계 뒤에 쓴다)."""
 
     type_slug: str = Field(min_length=1)
+    workspace_slug: str | None = None
+    """객체의 부서 — 식별자 범위가 부서(`key_scope="workspace"`)인 타입에서 어느 부서의
+    것인지 가른다(객체 묶음의 `workspace_slug` 와 같은 값). 비우면 그 식별자가 한 부서에만
+    있을 때 그것, 여럿이면 줄 오류."""
     key: str = Field(min_length=1)
     """객체의 식별자 — 이름으로는 안 찾는다(같은 이름이 여럿일 수 있다)."""
     property: str = Field(min_length=1)
@@ -127,6 +131,7 @@ class DocumentIn(BaseModel):
 
 class DocumentPlanOut(BaseModel):
     type_slug: str
+    workspace_slug: str | None = None
     key: str
     property: str
     action: Literal["create", "update", "unchanged", "pending", "error"]

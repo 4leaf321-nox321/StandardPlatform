@@ -54,10 +54,15 @@ def import_bundle(
         and not payload.objects
         and not payload.relations
         and not has_graves
+        # 문서 본문만 실은 묶음도 묶음이다 — 있는 객체에 본문만 붙인다(0.4.106 은 이것을 빈
+        # 묶음
+        # 으로 거절했다).
+        and not payload.documents
     ):
         raise Conflict(
             code("BUNDLES", 2),
-            "묶음이 비어 있습니다 — ontology · objects · relations · tombstones 중 "
+            "묶음이 비어 있습니다 — ontology · objects · relations · tombstones · documents "
+            "중 "
             "하나는 있어야 합니다.",
         )
     granted: list[str] | None = getattr(request.state, "token_scopes", None)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import uuid
 
 from app.modules.ontology import importer, similar
@@ -45,15 +46,21 @@ def plan_out(
     )
 
 
+#: 경고 속의 **지금 수**(「값이 있는 객체는 1,204개」) — 지문에서는 뺀다.
+_COUNTS = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
 def fingerprint(prepared: importer.Plan) -> str:
     """계획의 지문 — 바뀌는 것(종류 · 이름 · 어떻게 · 칸 · 까닭) · 경고 · 오류. 비슷한 정의는
-    넣지 않는다(뜻 비교는 임베딩 서버가 있을 때만이라 같은 계획이 달리 보인다)."""
+    넣지 않는다(뜻 비교는 임베딩 서버가 있을 때만이라 같은 계획이 달리 보인다). 경고의 숫자는
+    지운다 — 경고에 지금 객체 수가 섞여, 쓰기가 잦은 타입의 정의 제안은 정의가 그대로여도
+    매번 「제안 뒤 정의가 바뀌었다」 로 막혔다. 어떤 경고인지는 그대로 견준다."""
     body = {
         "changes": [
             [c.kind, c.owner_kind, c.slug, c.action, sorted(c.fields), c.via]
             for c in prepared.changes
         ],
-        "warnings": prepared.warnings,
+        "warnings": [_COUNTS.sub("#", one) for one in prepared.warnings],
         "errors": prepared.errors,
     }
     raw = json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")

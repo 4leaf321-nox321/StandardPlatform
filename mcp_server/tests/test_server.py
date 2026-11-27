@@ -2775,3 +2775,13 @@ def test_작업_상태는_계획_줄을_줄여_받는다() -> None:
         )
     )
     assert seen and seen[0].url.params["rows"] == str(server.JOB_ROWS)
+
+
+def test_문서는_본문_없이_판과_sha256_만_읽을_수_있다() -> None:
+    """쓴 본문을 대조하려고 본문 전체를 다시 모델에 받았다(ADR 0099)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"revision": 3, "sha256": "ab"}))
+    asyncio.run(server.document_read(_ctx("Bearer t"), "part", "o1", "paper", body=False))
+    assert seen[0].url.params["body"] == "false"
+    seen = _serve(lambda _r: httpx.Response(200, json={"revision": 3, "body": "x"}))
+    asyncio.run(server.document_read(_ctx("Bearer t"), "part", "o1", "paper"))
+    assert "body" not in seen[0].url.params

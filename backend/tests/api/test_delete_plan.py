@@ -256,11 +256,14 @@ def test_빈_타입은_무엇이_사라지고_무엇이_가리키는지_말하�
     done = client.delete(f"/api/ontology/types/{kind}", headers=admin.headers)
     assert done.status_code == 204, done.text
     snapshots = _snapshots(client, admin)
-    assert len(snapshots) == before + 1
-    assert snapshots[0]["reason"] == f"삭제 직전: 타입 {kind}"
+    # 나란히 도는 다른 시험도 그 사이 스냅샷을 남긴다 — 수는 「적어도 하나 늘었다」,
+    # 내 것은 까닭으로.
+    assert len(snapshots) >= min(before + 1, 50)
+    mine = [one for one in snapshots if one["reason"] == f"삭제 직전: 타입 {kind}"]
+    assert len(mine) == 1, snapshots[:5]
 
     # 그 스냅샷이 되살린다 — 미리 보기는 아무것도 안 바꾼다.
-    restore = f"/api/ontology/snapshots/{_only(db, snapshots[0]['id'], kind)}/restore"
+    restore = f"/api/ontology/snapshots/{_only(db, mine[0]['id'], kind)}/restore"
     preview = client.post(restore, params={"dry_run": "true"}, headers=admin.headers)
     assert preview.status_code == 200, preview.text
     assert preview.json()["applied"] is False

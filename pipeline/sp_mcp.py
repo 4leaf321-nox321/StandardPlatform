@@ -14,8 +14,11 @@ Claude Desktop 은 PC 의 명령을 직접 못 돌리고, Gemini CLI 는 돌리�
     SP_SERVER      플랫폼 주소(미리 보기 · 코어 대조)
     SP_TOKEN       개인 토큰(read · objects:write, 정의까지 넣으려면 ontology:write)
 
-**적용(apply)은 도구로 두지 않는다.** AI 는 미리 보기 요약까지 보이고, 넣는 것은 사람이
-명령으로 한다 — 「사람이 확인한 뒤에만 넣는다」 를 말이 아니라 도구의 모양으로 지킨다.
+**적용은 사람이 대화에서 확인한 뒤에만**(ADR 0100). 적용하는 도구(`run_apply` ·
+`run_undo_apply` · `document_apply`)는 **미리 본 그 계획 작업**만 넣는다 — 계획 없이는 부를
+길이 없고, 사람이 본 뒤 그 사이 누가 바꿨으면 플랫폼이 거절한다(지문). AI 는 요약을 보이고
+묻고, 사람이 「좋다 · 적용해」 라고 한 뒤에 부른다. 화면 「작업」 의 「적용」 · 명령 창도
+그대로다.
 
 절차의 정본은 같은 폴더의 `AGENTS.md` 이고 `pipeline_guide` 가 그것을 그대로 내려준다. 여기에
 절차를 옮겨 적지 않는다.
@@ -31,6 +34,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import sp_docpush
 import sp_docx
 import sp_pipeline as pipeline
 import sp_profile
@@ -63,9 +67,11 @@ mcp = FastMCP(
         "사용자 PC 의 작업 폴더에서 원천 데이터(표 · 문서)를 "
         "StandardPlatform 에 넣을 묶음으로 "
         "만든다. **처음에 `pipeline_guide()` 를, 작업마다 `work_status` 를 먼저 부르고 그 "
-        "「다음」 을 따른다.** 정의 확정 · 미해결의 답 · 적용은 사람이 한다 — "
-        "그 자리에서 멈추고 "
-        "묻는다. 통계를 스스로 세지 말고 `source_profile` 결과를 쓴다. "
+        "「다음」 을 따른다.** 정의 확정 · 미해결의 답은 사람이 한다 — 그 자리에서 멈추고 "
+        "묻는다. **적용 · 되돌리기는 계획(미리 보기)을 사람에게 보이고, 사람이 「좋다 · "
+        "적용해」 라고 한 뒤에만** `run_apply` · `run_undo_apply` · `document_apply` 를 "
+        "부른다 — 짐작으로 · 묻지 않고 부르지 않는다. "
+        "통계를 스스로 세지 말고 `source_profile` 결과를 쓴다. "
         "**이 PC 는 플랫폼 여럿에 넣을 수 있다** — 작업 폴더가 넣을 곳을 기억하고"
         "(`work_list` 에 보인다), 여럿인데 정해지지 않았으면 짐작하지 말고 사람에게 묻는다. "
         "Word 를 객체의 문서 속성(마크다운 본문)에 넣을 때는 글만 뽑지 말고 `docx_extract` 로 "
@@ -383,10 +389,11 @@ def docx_extract(work: str, source: str, name: str = "") -> dict[str, Any]:
     못 옮긴 것과 이유). `name` 을 비우면 원천 이름 — 같은 이름으로 다시 부르면 새로 꺼낸다.
 
     돌려주는 것: `files`(올릴 파일 — 같은 그림은 한 번, 셸에서 보이는 `local_path`) ·
-    `figures`(그림 자리마다 초안의 줄과 그 파일) · `not_moved`(못 옮긴 것과 이유).
-    그 뒤(`pipeline_guide("docx")`): 플랫폼 MCP `attachment_upload_prepare(local_path=[files 의
-    local_path 들])` → `curl` → 그림 줄의 경로를 그 파일의 `photo:<첨부 id>` 로 → 다듬어
-    `document_write`. 셸이 없으면 그림은 사람이 화면에서 올린다."""
+    `figures`(그림 자리마다 초안의 줄과 그 파일) · `not_moved`(못 옮긴 것과 이유). 그
+    뒤(`pipeline_guide("docx")`): 초안을 다듬고(`work_read` · `work_write`)
+    **`document_push`** — 키트가 초안 · 그림을 파일 그대로 올려 계획을 보이고, 사람이
+    「좋다」 하면 `document_apply`. 본문을 플랫폼 MCP `document_write` 의 인자로 옮겨 적지
+    않는다(여러 건이면 토큰이 들고 옮기다 틀린다)."""
     folder = _work(work)
     path = _source(folder, source)
     out = sp_work.inside(folder / sp_work.DOCS, sp_docx.folder_name(name or path.stem))
@@ -420,17 +427,120 @@ def docx_extract(work: str, source: str, name: str = "") -> dict[str, Any]:
         "not_moved": result.not_moved,
         "notes": result.notes,
         "next": [
-            f'초안을 읽고 원본과 맞춰 다듬는다 — work_read(work, "{shown}/{sp_docx.DRAFT}")',
-            "플랫폼 MCP attachment_upload_prepare(type_slug, object_id, local_path=[files 의 "
-            "local_path 를 그 차례대로], field=<문서 키>) → 돌아온 script 를 셸에서 바로 한 번"
-            "(표는 5분) — 줄마다 첨부 id 가 같은 차례로",
-            "그림 줄 `![캡션](media/imageN.png?w=60)` 의 경로를 그 파일의 "
-            "`photo:<첨부 id>` 로 — `![캡션](photo:<id>?w=60)`",
-            "document_read 로 판을 읽고 document_write",
-            "셸이 없는 클라이언트면 그림 줄을 `> 그림: <캡션>` 으로 두고 사람에게 화면에서 "
-            "올려 달라고 한다(not_moved 도 함께 알린다)",
+            f'초안을 읽고 원본과 맞춰 다듬는다 — work_read(work, "{shown}/{sp_docx.DRAFT}") · '
+            "고칠 곳만 work_write(그림 줄 `![캡션](media/imageN.png?w=60)` 은 그대로 둔다)",
+            f'document_push(work, type_slug, object_id, key=<문서 키>, path="{shown}/'
+            f'{sp_docx.DRAFT}") — 여러 건이면 manifest 하나로. 초안 · 그림을 파일 그대로 '
+            "올려 계획만 세운다",
+            "계획(counts · 문제 줄)을 사람에게 보이고 묻는다 — 「좋다」 하면 "
+            "document_apply(work): 그림이 붙고 그림 줄이 photo:<첨부 id> 로 바뀌며, 곧바로 "
+            "서버 본문과 sha256 으로 견준다(화면이 편하면 jobs[].link 에서 「적용」 뒤 "
+            "document_check)",
+            "not_moved(못 옮긴 그림)는 사람에게 알린다",
         ],
     }
+
+
+@mcp.tool()
+def document_push(
+    work: str,
+    manifest: str = "",
+    type_slug: str = "",
+    object_id: str = "",
+    key: str = "",
+    path: str = "",
+    base_revision: int | None = None,
+    note: str = "",
+) -> dict[str, Any]:
+    """**로컬 마크다운을 파일 그대로** 플랫폼 객체의 문서 칸에 넣는 미리 보기 — 본문이 도구
+    인자를 거치지 않는다(Word 수백 건을 옮겨 적지 않는다).
+    그림(`![캡션](media/image3.png?w=60)`)도 함께 싣는다. **플랫폼에 아무것도 쓰지 않는다** —
+    플랫폼이 계획(새로 · 고침 · 그대로 · 오류, 판 · 글자 수)을 세운다. **그 계획을 사람에게
+    보이고 묻는다** — 「좋다」 하면 `document_apply(work)`(화면이 편하면 `jobs[].link` 에서
+    「적용」). 적용하면 그림을 붙이고(같은 그림이 그 문서 칸에 이미 있으면 그것) 그림 자리를
+    `photo:<첨부 id>` 로 바꿔 쓴다.
+
+    - 한 건이면 `type_slug` · `object_id` · `key`(문서 칸) · `path`(작업 폴더에서 본 마크다운 —
+      `docx_extract` 의 `draft` 등) · `base_revision`(읽고 고친 판, 비우면 지금 판).
+    - 여러 건이면 **`manifest`** — 작업 폴더의 JSON 파일(`work_write` 로 쓴다) `[{"type_slug",
+      "object_id", "key", "path", "base_revision"?, "note"?}, …]`. 수백 건도 한 번에 (크면
+      키트가 나눠 작업 여럿으로 올린다 — 링크도 여럿).
+    - 올리기 전에 키트가 막는 것: 없는 파일 · 폴더 밖 · 100만 자 넘음 · 개인 정보 꼴 · 없는
+      그림 · 같은 칸 둘. 플랫폼이 막는 것: 없는 객체 · 문서 칸 아님 · 권한 · 원천 잠금 · 판이
+      다름 · 이미지 아님. **한 줄이라도 오류면 적용되지 않는다** — 그 줄을 목록에서 빼거나 고쳐
+      다시 올린다.
+    - 돌려주는 것: `counts` · `jobs`(작업 · 화면 링크) · `rows`(문제 줄 먼저 30줄) ·
+      `record`(올린 기록 — `document_check` 가 쓴다). 적용 뒤의 새 판 · sha256 은
+      `document_apply` 가 대조까지 해서 돌려준다(화면에서 적용했으면 `document_check`)."""
+    folder = _work(work)
+    if manifest:
+        listed = _inside_file(folder, manifest)
+        items = sp_docpush.items_of(pipeline._read_json(listed, []))
+    else:
+        if not (type_slug and object_id and key and path):
+            raise Stop(
+                "한 건이면 type_slug · object_id · key · path 를, 여러 건이면 manifest 를 "
+                "줍니다"
+            )
+        items = [sp_docpush.Item(type_slug, object_id, key, path, base_revision, note)]
+    chosen = _target(folder)
+    out = sp_docpush.push(
+        folder, items, server=chosen.server, token=chosen.token, platform=chosen.name
+    )
+    return {
+        "platform": chosen.shown,
+        **out,
+        "note": "계획(counts · 문제 줄)을 사람에게 보이고 묻는다 — 사람이 「좋다」 고 하면 "
+        "document_apply(work) 로 적용하고 곧바로 대조한다. 화면에서 보고 싶다면 jobs[].link "
+        "(그 플랫폼 「작업」 — 이 토큰의 주인으로 로그인)에서 「적용」 을 눌러도 된다.",
+    }
+
+
+@mcp.tool()
+def document_apply(work: str, record: str = "") -> dict[str, Any]:
+    """`document_push` 의 계획을 **적용한다** — **사람이 대화에서 계획(`counts` · 문제 줄 ·
+    화면의 `jobs[].link`)을 보고 「좋다 · 적용해」 라고 한 뒤에만** 부른다. 사람의 말 없이,
+    짐작으로, 또는 오류가 있는 계획에 부르지 않는다(묶음의 `run_apply` 와 같은 규칙, ADR 0100).
+    문서는 판이 남아 사람이 옛 판으로 되돌릴 수 있다.
+
+    `record` 를 비우면 마지막으로 올린 기록. 작업마다 적용하고 끝나기를 기다린 뒤 **곧바로
+    대조한다** (`check` — `document_check` 와 같다, 본문을 다시 받지 않는다). 사람이 화면에서
+    먼저 적용한 작업은 건너뛴다(`already`). 그 사이 누가 그 문서를 고쳤으면 그 작업은
+    거절된다(`failed` — 다시 올려 미리 본다). 돌려주는 것: `applied`(작업마다 `applied` ·
+    `already` · `refused` · `failed`) · `all_applied` · `check`(`counts` · `all_same` ·
+    다른 줄)."""
+    folder = _work(work)
+    path = _inside_file(folder, record) if record else sp_docpush.latest(folder)
+    chosen = _target(folder)
+    return {
+        "platform": chosen.shown,
+        **sp_docpush.apply(folder, path, server=chosen.server, token=chosen.token),
+    }
+
+
+@mcp.tool()
+def document_check(work: str, record: str = "") -> dict[str, Any]:
+    """`document_push` 로 올린 것과 **서버의 지금 본문이 같은가** — 본문을 다시 받지 않는다(판
+    · sha256 · 붙은 그림만). 로컬 파일을 플랫폼이 쓰는 꼴(그림 자리 → 붙은 첨부의
+    `photo:<id>`)로 바꿔 sha256 을 견준다.
+
+    `record` 를 비우면 마지막 기록. 줄마다 `same`(같음) · `different`(다름 — 적용 전 · 그 뒤
+    누가 고침 · 그림이 안 붙음) · `not_written`(판 0) · `local_changed`(올린 뒤 로컬 파일이
+    바뀜) · `error`. `all_same` 이 참이면 전부 같다."""
+    folder = _work(work)
+    path = _inside_file(folder, record) if record else sp_docpush.latest(folder)
+    chosen = _target(folder)
+    return {
+        "platform": chosen.shown,
+        **sp_docpush.check(folder, path, server=chosen.server, token=chosen.token),
+    }
+
+
+def _inside_file(folder: Path, relative: str) -> Path:
+    path = (folder / relative).resolve()
+    if folder.resolve() not in path.parents or not path.is_file():
+        raise Stop(f"작업 폴더 안의 파일이 아닙니다: {relative}")
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -473,7 +583,8 @@ def run_init(work: str, name: str, title: str = "", backfill: bool = False) -> s
 @mcp.tool()
 def hub_pull(work: str, group: str | list[str], name: str = "") -> str:
     """허브가 내보낸 사이드바 묶음(PLM 기준정보면 `plm`)을 **새 실행 폴더로** 받는다 — 이 PC 가
-    쌍둥이 플랫폼에 넣을 때. 그 뒤는 `run_validate` → `run_preview` → 사람이 적용. 받은 타입은
+    쌍둥이 플랫폼에 넣을 때. 그 뒤는 `run_validate` → `run_preview` → 사람이 「좋다」 하면
+    `run_apply`. 받은 타입은
     받는 플랫폼에서 허브 관리가 되어 거기서는 못 고친다. env 에 SP_HUB_SERVER · SP_HUB_TOKEN 이
     있어야 한다.
 
@@ -512,12 +623,13 @@ def run_validate(work: str, run: str, ask_platform: bool = True) -> dict[str, An
 
 @mcp.tool()
 def run_preview(work: str, run: str) -> dict[str, Any]:
-    """플랫폼에 **아무것도 저장하지 않고** 미리 본다. 요약을 사람에게 보이고, 괜찮으면 **사람이
-    직접** 적용하게 안내한다 — 이 도구들에는 적용이 없다.
+    """플랫폼에 **아무것도 저장하지 않고** 미리 본다. **요약을 사람에게 보이고 묻는다** —
+    어느 플랫폼에(`platform` 먼저), 정의 변경 · 경고(「비슷한 정의」 · 「같은 칸 다른 모양」
+    이면 따로 묻는다), 타입마다 새로 · 고침 · 그대로 · 오류, 끊을 선 · 사라질 것.
 
-    적용하는 길은 **`apply_on_screen` 이 먼저다**: 그 플랫폼 화면 「작업」 에 이 계획이 펼쳐진
-    채로 열리고, 사람이 「적용」 을 누른다(명령 창이 필요 없다 · 그 플랫폼의 화면이니 엉뚱한
-    곳에 안 들어간다). 명령 창이 편한 사람에게는 `apply_command`.
+    사람이 **「좋다 · 적용해」** 라고 하면 `run_apply(work, run)` — 이 계획 그대로 넣는다.
+    사람이 화면에서 보겠다면 `apply_on_screen`(그 플랫폼 화면 「작업」 에 이 계획이 펼쳐진 채로
+    열린다 — 「적용」 을 누른다), 명령 창이 편하면 `apply_command`.
     """
     folder = _work(work)
     path = _run(folder, run)
@@ -538,9 +650,34 @@ def run_preview(work: str, run: str) -> dict[str, Any]:
         "summary": summary,
         "apply_on_screen": pipeline.jobs_link(chosen.server, job) if ok and job else None,
         "apply_command": (pipeline.command_line("apply", f'"{path}"') if ok else None),
-        "note": "사람이 apply_on_screen 을 열어 「적용」 을 누른다(계획을 본 사람 — 이 토큰의 "
-        "주인 — 으로 로그인해 있어야 한다). 명령 창이면 apply_command 를 아무 창에나.",
+        "note": "요약을 사람에게 보이고 묻는다 — 「좋다 · 적용해」 면 run_apply(work, run). "
+        "화면에서 하겠다면 apply_on_screen 에서 「적용」(계획을 본 사람 — 이 토큰의 주인 — "
+        "으로 로그인해 있어야 한다), 명령 창이면 apply_command.",
     }
+
+
+@mcp.tool()
+def run_apply(work: str, run: str) -> dict[str, Any]:
+    """`run_preview` 로 미리 본 계획을 **적용한다** — **사람이 대화에서 그 요약을 보고 「좋다 ·
+    적용해」 라고 한 뒤에만** 부른다. 사람의 말 없이, 짐작으로, 앞선 다른 실행의 「좋다」 로,
+    또는 오류가 있는 미리 보기에 부르지 않는다(ADR 0100).
+
+    **미리 본 그 계획 작업**을 넣는다 — 화면의 「적용」 과 같은 길(같은 파일 · 같은 지문).
+    넣는 곳은 미리 본 플랫폼이다. 보내지 않는 것: 미리 본 뒤 파일이 바뀜 · 미리 보기 오류 ·
+    정의 확정 전 · 이미 적용한 실행 · 같은 묶음을 다른 실행에서 이미 적용함 · 닫은 실행. 그
+    사이 누가 바꿔 계획과 달라졌으면 플랫폼이 거절한다(`failed` — 다시 미리 보고 다시
+    묻는다). 화면에서 먼저 적용했으면 또 넣지 않는다(`already`).
+
+    돌려주는 것: `state`(`applied` · `already` · `refused` · `failed`) · `applied` ·
+    `summary` · `run_id`(넣은 판 — 되돌릴 때 `run_undo` 에)."""
+    folder = _work(work)
+    path = _run(folder, run)
+    sp_work.before_apply(folder, path)
+    seen = pipeline.preview_platform(path)
+    chosen = pipeline.target(seen) if seen else _target(folder)
+    out = pipeline.cmd_apply_plan(path, server=chosen.server, token=chosen.token)
+    out.pop("result", None)
+    return {"platform": chosen.shown, **out}
 
 
 @mcp.tool()
@@ -566,21 +703,42 @@ def runs_list(limit: int = 20, platform: str = "") -> dict[str, Any]:
 def run_undo(run_id: str, platform: str = "") -> dict[str, Any]:
     """넣은 판 하나를 되돌리면 **무엇이 되돌아가나** — 계획만. 아무것도 안 바뀐다.
 
-    요약을 사람에게 보이고, 되돌릴지는 사람이 `undo_command` 를 실행해 정한다(이 서버에는
-    되돌리는 도구가 없다 — 적용과 같은 규칙이다). 건너뛰는 줄의 이유도 함께 보인다.
+    **요약을 사람에게 보이고 묻는다**(건너뛰는 줄의 이유도 함께). 사람이 「되돌려」 라고 하면
+    `run_undo_apply(run_id, plan_job)` — 이 계획 그대로 되돌린다(적용과 같은 규칙이다).
+    명령 창이 편하면 `undo_command`, 화면이면 `on_screen`.
     """
     chosen = _target(platform=platform)
-    ok, summary = pipeline.cmd_undo(run_id, server=chosen.server, token=chosen.token)
+    ok, summary, job = pipeline.undo_job(run_id, server=chosen.server, token=chosen.token)
     where = f" --platform {chosen.name}" if chosen.name else ""
     return {
         "ok": ok,
         "platform": chosen.shown,
         "summary": summary,
+        "plan_job": job if ok else None,
+        "on_screen": pipeline.jobs_link(chosen.server, job) if ok and job else None,
         "undo_command": (
             pipeline.command_line("undo", f"{run_id}{where}", "--apply") if ok else None
         ),
-        "note": "사람이 아무 명령 창에서 undo_command 를 실행한다.",
+        "note": "요약을 사람에게 보이고 묻는다 — 「되돌려」 면 run_undo_apply(run_id, "
+        "plan_job). 명령 창이면 undo_command, 화면이면 on_screen.",
     }
+
+
+@mcp.tool()
+def run_undo_apply(run_id: str, plan_job: str, platform: str = "") -> dict[str, Any]:
+    """`run_undo` 가 보인 되돌리기 계획을 **적용한다** — **사람이 대화에서 그 요약을 보고
+    「되돌려」 라고 한 뒤에만** 부른다. 사람의 말 없이 · 짐작으로 부르지 않는다(ADR 0100).
+
+    `plan_job` 은 `run_undo` 가 준 그 계획 — 그 판의 되돌리기 계획이 아니면 보내지 않는다.
+    그 사이 누가 고쳐 계획과 달라졌으면 플랫폼이 거절한다(`failed` — `run_undo` 로 다시 보고
+    다시 묻는다). 이미 되돌렸으면 `already`. 그 사이 남이 고친 줄은 되돌리지 않고 이유가 줄에
+    온다. 돌려주는 것: `state` · `undone` · `summary`."""
+    chosen = _target(platform=platform)
+    out = pipeline.cmd_undo_apply(
+        run_id.strip(), plan_job, server=chosen.server, token=chosen.token
+    )
+    out.pop("result", None)
+    return {"platform": chosen.shown, **out}
 
 
 if __name__ == "__main__":

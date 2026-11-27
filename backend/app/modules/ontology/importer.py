@@ -213,6 +213,10 @@ class Plan:
     retypes: list[retype.Target] = field(default_factory=list)
     """**종류가 바뀌는** 타입 속성 — 파일이 바꾼 것과 인터페이스를 따라 바뀌는 것(ADR 0007).
     적용이 정의를 고친 뒤 저장값을 같은 규칙으로 변환한다."""
+    keep_reserved: bool = False
+    """플랫폼 칸과 같은 키(`status` …)의 새 속성을 **경고로만** 둔다 — 옛 스냅샷 복원 ·
+    허브에서
+    받는 정의(코어 구독)는 그 키를 이미 쓰던 정의라 막으면 복원 · 수신이 통째로 멈춘다."""
 
 
 def _reject_unknown(payload: dict[str, Any], allowed: set[str], *, what: str) -> None:
@@ -383,7 +387,9 @@ def _lifted(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
+def plan(
+    db: Session, payload: dict[str, Any], *, source: str = "", keep_reserved: bool = False
+) -> Plan:
     """적용하면 무엇이 바뀌는지 — **적용하지 않고** 돌려준다.
 
     `source` 는 허브에서 받는 묶음만 적는다 — 그 허브가 관리하는 정의를 고칠 수 있고,
@@ -398,7 +404,7 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
     _require_shape(payload)
     payload = _lifted(payload)
     _reject_unknown(payload, TOP_KEYS, what="스키마")
-    out = Plan()
+    out = Plan(keep_reserved=keep_reserved)
 
     groups = {row.slug: row for row in db.scalars(select(NavGroup))}
     types = {row.slug: row for row in db.scalars(select(ObjectType))}
@@ -1068,7 +1074,16 @@ def _plan_properties(
         if found is None:
             if owner_kind != "relation" and key in RESERVED_PROPERTY_KEYS:
                 # 관계의 칸은 행의 `properties` 안에 있어 겹치지 않는다 — 타입 · 공통 속성만.
-                out.errors.append(f"속성 {name}: {reserved_key_message(key)}")
+                if out.keep_reserved:
+                    out.warnings.append(
+                        f"속성 {name}: 플랫폼 칸과 같은 키라 일괄 입력 · 묶음의 행에서는 이 "
+                        "칸을 "
+                        "채우지 못합니다(행의 그 열은 객체의 칸으로 읽힌다) — 「키 변경」 "
+                        "으로 "
+                        "다른 키를 권합니다"
+                    )
+                else:
+                    out.errors.append(f"속성 {name}: {reserved_key_message(key)}")
             out.changes.append(Change(kind_name, name, "create", owner_kind=owner_kind))
             continue
 
@@ -1493,6 +1508,7 @@ def apply(
     source: str = "",
     actor: User | None = None,
     reason: str = "정의 가져오기",
+    keep_reserved: bool = False,
 ) -> Plan:
     """**한 트랜잭션으로** 적용한다. 부르는 쪽이 커밋한다.
 
@@ -1502,7 +1518,7 @@ def apply(
     순서: 묶음 → 인터페이스 → 타입(과 파일에 적힌 속성) → **인터페이스를 따라 바뀌는 속성** →
     타입의 화면 모양 검증 → 관계 종류. 화면 모양은 구현으로 생긴 속성을 가리킬 수 있어 그 뒤다.
     """
-    prepared = plan(db, payload, source=source)
+    prepared = plan(db, payload, source=source, keep_reserved=keep_reserved)
     if prepared.errors:
         return prepared
     payload = _lifted(payload)

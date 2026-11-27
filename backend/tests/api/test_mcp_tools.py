@@ -1288,9 +1288,12 @@ def test_정의_지우기는_미리_보기가_먼저고_지운_것은_스냅샷�
 
     # 되살릴 자리 — 지우기 직전 스냅샷. 미리 보기 → 적용. (시험 DB 는 스위트가 함께 써서
     # 통째 스냅샷은 남의 정의에 걸린다 — 그 스냅샷에서 이 타입만 덜어 되돌린다.)
+    # **맨 앞이 내 것이라고 믿지 않는다** — 나란히 도는 다른 시험(옮기기 · 이름 바꾸기 ·
+    # 삭제)도 그 사이 스냅샷을 남긴다. 까닭으로 찾는다.
     snapshots = bot.call(server.ontology_restore)["snapshots"]
-    assert snapshots[0]["reason"] == f"삭제 직전: 속성 {kind}.w"
-    only = _only(db, snapshots[0]["id"], kind)
+    mine = [one for one in snapshots if one["reason"] == f"삭제 직전: 속성 {kind}.w"]
+    assert len(mine) == 1, snapshots[:5]
+    only = _only(db, mine[0]["id"], kind)
     preview = bot.call(server.ontology_restore, only)
     assert preview["applied"] is False
     back = bot.call(server.ontology_restore, only, apply=True)

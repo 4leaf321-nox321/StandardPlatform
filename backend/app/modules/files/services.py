@@ -22,7 +22,7 @@ from app.modules.accounts.models import User
 from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.files.schemas import AttachmentOut, TicketOut
 from app.shared import extensions, filestore, images, public_url
-from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
+from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import (
     require_owner_edit,
     resolve_owner_workspace,
@@ -331,7 +331,9 @@ def ensure_readable(path_exists: bool) -> None:
     그것을 원본이라고 믿는다.
     """
     if not path_exists:
-        raise Forbidden(
+        # 404 다 — 403(권한 없음)이면 사람은 「권한을 받으면 보인다」 고 읽는다(그림이 깨져
+        # 보이는 것도 권한 문제로 찾았다). 첨부 행은 있는데 원본이 없다는 말은 그대로.
+        raise NotFound(
             code("FILES", 6),
             "파일이 저장소에 없습니다. 백업에서 파일스토어가 함께 복구됐는지 확인하세요.",
         )

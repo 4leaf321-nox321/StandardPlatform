@@ -67,10 +67,12 @@ from app.modules.ontology.rename import (
     _setter,
 )
 from app.modules.ontology.retype import KIND_LABELS
+from app.modules.ontology.services import require_new_key
 from app.modules.ontology.similar import norm
 from app.modules.semantic.models import ObjectEmbedding, SemanticMark, SemanticTarget
 from app.modules.slides.models import SlideTemplate
 from app.modules.webhooks.models import Webhook
+from app.shared.errors import AppError
 
 #: 객체가 이만큼 넘으면 요청 안에서 안 옮기고 작업으로 — 키 변경 · 종류 변경과 같은 문턱.
 INLINE_OBJECTS = 20_000
@@ -223,6 +225,15 @@ def _fields(
             one = FieldMap(key, src.label, by_label[norm(src.label)].key, "map", values)
         else:
             one = FieldMap(key, src.label, key, "create", values)
+        if one.action == "create" and one.target:
+            # 대상에 **새로 만드는** 칸 — 화면 · 가져오기의 새 속성과 같은 규칙(모양 · 길이 ·
+            # 플랫폼 칸과 겹치는 키). 전에는 그대로 만들어 `status` 가 생기거나 49자에서 DB
+            # 오류(500)가 났다.
+            problem = _new_key_problem(one.target)
+            if problem:
+                one.note, one.blocked = problem, True
+                out.fields.append(one)
+                continue
         dst = theirs.get(one.target or "")
         if src.data_type in DETACHED_KINDS and one.target != key:
             one.note = "문서 · 파일 속성은 같은 키로만 옮깁니다(첨부 · 판 표가 키를 쥔다)"
@@ -247,12 +258,53 @@ def _fields(
                 one.blocked = True
             taken[one.target] = key
         out.fields.append(one)
+    # **정의 없이 남은 옛 값**(예전에 지운 속성의 저장값) — 그대로 옮기면 대상에 같은 키의 칸이
+    # 있을 때 그 칸의 값으로 살아난다(키 변경은 이것을 막는다 — 옮기기도 같게).
+    landing = set(theirs) | {
+        one.target for one in out.fields if one.target and one.action != "drop"
+    }
+    orphans = {key: count for key, count in counts.items() if key not in mine}
+    for key, count in sorted(orphans.items()):
+        if key in mapping:
+            if mapping[key] is None:
+                out.fields.append(
+                    FieldMap(
+                        key,
+                        f"(정의 없는 옛 값) {key}",
+                        None,
+                        "drop",
+                        count,
+                        note=f"정의 없이 남은 옛 값 {count:,}건을 버립니다",
+                    )
+                )
+            else:
+                out.errors.append(
+                    f"정의 없이 남은 옛 값 「{key}」 은 버리기(null)만 적을 수 있습니다 — "
+                    "살릴 "
+                    "값이면 원 타입에 그 속성을 먼저 다시 만드십시오."
+                )
+        elif key in landing:
+            out.errors.append(
+                f"원 타입에 정의 없이 남은 옛 값 「{key}」({count:,}건 — 예전에 지운 속성의 "
+                f"저장값)이 대상의 칸 「{key}」 과 겹칩니다 — 옮기면 그 칸의 값으로 "
+                "살아납니다. "
+                f'버리려면 mapping 에 {{"{key}": null}} 을 적으십시오.'
+            )
     for one in out.fields:
         if one.blocked:
             out.errors.append(f"속성 「{one.label}」({one.source}): {one.note}")
-    unknown = sorted(set(mapping) - set(mine))
+    unknown = sorted(set(mapping) - set(mine) - set(orphans))
     if unknown:
         out.errors.append(f"원 타입에 없는 키를 적었습니다: {', '.join(unknown)}")
+
+
+def _new_key_problem(key: str) -> str:
+    """새로 만드는 속성 키의 문제 — 없으면 빈 글자."""
+    try:
+        require_new_key(key)
+    except AppError as refused:
+        return refused.message
+    return ""
 
 
 def _scope_clause(target: ObjectType, alias: Any, other: Any) -> Any:
@@ -286,6 +338,26 @@ def _duplicates(db: Session, source: ObjectType, target: ObjectType, out: Plan) 
             seen.add(mid)
             out.pairs.append((mid, tid))
     out.duplicates = len(out.pairs)
+    if source.key_scope == "workspace" and target.key_scope != "workspace":
+        # 범위가 **부서 → 전사**로 넓어진다 — 옮길 것끼리(부서가 다른) 같은 식별자가 있으면
+        # 대상에서 같은 식별자가 둘 산다(유일은 서비스가 지킨다 — DB 제약이 아니다).
+        clashing = db.execute(
+            select(ObjectInstance.key, func.count())
+            .where(
+                ObjectInstance.type_id == source.id,
+                ObjectInstance.deleted_at.is_(None),
+                ObjectInstance.key.is_not(None),
+            )
+            .group_by(ObjectInstance.key)
+            .having(func.count() > 1)
+            .limit(6)
+        ).all()
+        if clashing:
+            shown = " · ".join(f"{key}({count})" for key, count in clashing[:5])
+            out.errors.append(
+                f"옮길 객체끼리 같은 식별자가 부서마다 있습니다 — {shown}. 대상은 식별자가 "
+                "전사에 하나인 타입이라 겹칩니다 — 식별자를 먼저 정리하십시오."
+            )
 
 
 def _aliases(db: Session, source: ObjectType, target: ObjectType, out: Plan) -> None:
@@ -337,6 +409,23 @@ def _unique(db: Session, source: ObjectType, target: ObjectType, out: Plan) -> N
             out.errors.append(
                 f"대상의 유일 칸 「{one.target}」 에 같은 값이 이미 있는 객체가 {count:,}건 "
                 "있습니다 — 같은 것이면 겹치는 객체로 병합하거나 값을 정리하십시오."
+            )
+        # 옮길 것**끼리** 같은 값 — 원 타입에서는 유일이 아니었을 수 있다.
+        among = int(
+            db.scalar(
+                text(
+                    "SELECT count(*) FROM (SELECT m.properties -> CAST(:src AS text) FROM "
+                    "objects m WHERE m.type_id = :source AND m.deleted_at IS NULL AND "
+                    "m.properties ? CAST(:src AS text) GROUP BY 1 HAVING count(*) > 1) d"
+                ),
+                {"source": source.id, "src": one.source},
+            )
+            or 0
+        )
+        if among:
+            out.errors.append(
+                f"옮길 객체끼리 대상의 유일 칸 「{one.target}」 에 같은 값을 가진 묶음이 "
+                f"{among:,}개 있습니다 — 값을 먼저 정리하십시오."
             )
 
 

@@ -3107,6 +3107,38 @@ def _profile_type(db: Session, slug: str, object_id: uuid.UUID) -> ObjectType:
     return kind
 
 
+def _moved_along(db: Session, origin: str, current: str, hops: int = 6) -> bool:
+    """`origin` 타입에서 옮기기(`ontology.type.move`)를 따라가면 `current` 에 닿나 — A → B → C
+    로
+    두 번 옮긴 객체의 A 주소도 C 로 안내한다(전에는 마지막 한 단계만 봤다)."""
+    reached = {origin}
+    frontier = {origin}
+    for _hop in range(hops):
+        if not frontier:
+            break
+        labels = db.scalars(
+            select(AuditEntry.target_label).where(
+                AuditEntry.action == "ontology.type.move",
+                or_(
+                    *(
+                        AuditEntry.target_label.startswith(f"{one} → ", autoescape=True)
+                        for one in sorted(frontier)
+                    )
+                ),
+            )
+        )
+        following: set[str] = set()
+        for label in labels:
+            _from, _arrow, to = (label or "").partition(" → ")
+            if to and to not in reached:
+                following.add(to)
+        if current in following:
+            return True
+        reached |= following
+        frontier = following
+    return False
+
+
 def _raise_if_moved(
     db: Session, user: User, object_type: ObjectType, object_id: uuid.UUID
 ) -> None:
@@ -3125,16 +3157,7 @@ def _raise_if_moved(
     if here is None:
         return
     row, slug = here
-    moved = db.scalar(
-        select(AuditEntry.id)
-        .where(
-            AuditEntry.action == "ontology.type.move",
-            AuditEntry.target_id == row.type_id,
-            AuditEntry.target_label.startswith(f"{object_type.slug} → ", autoescape=True),
-        )
-        .limit(1)
-    )
-    if moved is None:
+    if not _moved_along(db, object_type.slug, slug):
         return
     target_id = row.id
     if row.deleted_at is not None:

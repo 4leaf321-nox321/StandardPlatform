@@ -28,7 +28,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import engine
@@ -42,10 +42,11 @@ from app.modules.objects.models import ObjectDocument, ObjectInstance
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
-from app.modules.ontology import importer, similar
+from app.modules.ontology import importer, managed, similar
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.schemas import ChangeOut
 from app.modules.ontology.schemas import ImportPlanOut as SchemaPlanOut
+from app.modules.workspaces.models import Workspace
 from app.shared import audit, events
 from app.shared.errors import AppError, code
 from app.shared.permissions import resolve_owner_workspace
@@ -75,6 +76,7 @@ class DocumentPlan:
     chars: int
     digest: str
     message: str = ""
+    workspace_slug: str = ""
 
 
 @dataclass
@@ -134,6 +136,7 @@ def run(
     on_progress: bulk.Progress = None,
     before_commit: Callable[[Outcome], None] | None = None,
     commit_check: Callable[[Session], None] | None = None,
+    keep_reserved: bool = False,
 ) -> Outcome:
     """미리 보기(`apply` 거짓)는 늘 롤백, 적용은 **전부 괜찮을 때만** 커밋.
 
@@ -165,7 +168,15 @@ def run(
                 label=_label_of(bundle),
                 origin=bundle.origin.model_dump() if bundle.origin else None,
             )
-        _stages(db, user, bundle, outcome, max_rows=max_rows, on_progress=on_progress)
+        _stages(
+            db,
+            user,
+            bundle,
+            outcome,
+            max_rows=max_rows,
+            on_progress=on_progress,
+            keep_reserved=keep_reserved,
+        )
         if bundle.apply and outcome.ok and before_commit is not None:
             before_commit(outcome)
         if bundle.apply and outcome.ok:
@@ -265,6 +276,7 @@ def _stages(
     *,
     max_rows: int = bulk.MAX_ROWS,
     on_progress: bulk.Progress = None,
+    keep_reserved: bool = False,
 ) -> None:
     if bundle.source and not user.is_system_admin:
         out.errors.append(
@@ -283,7 +295,12 @@ def _stages(
             out.snapshot_id = importer.take_snapshot(db, user, reason="묶음 가져오기").id
         try:
             planned = importer.apply(
-                db, bundle.ontology, source=bundle.source, actor=user, reason="묶음 가져오기"
+                db,
+                bundle.ontology,
+                source=bundle.source,
+                actor=user,
+                reason="묶음 가져오기",
+                keep_reserved=keep_reserved,
             )
         except ValueError as caught:
             out.errors.append(f"정의: {caught}")
@@ -444,8 +461,13 @@ def _documents(
     """**문서 본문을 쓴다**(ADR 0053) — 객체 · 관계 단계 뒤라 이 묶음이 만든 객체에도 쓴다.
     미리 보기도 쓴다(바깥이 롤백한다 — 적용과 같은 판정). 가벼운 미리 보기는 쓰지 않고, 이
     묶음이 만들 객체는 `pending` 이다. 권한은 화면의 문서 수정과 같다(그 객체를 고칠 수 있는
-    사람)."""
+    사람 · 원천 잠금)."""
     defs: dict[str, dict[str, Any]] = {}
+    seen: set[tuple[str, str, str, str]] = set()
+    spaces: dict[str, uuid.UUID | None] = {}
+    # 객체 단계(COPY)가 적은 「고친 때」 와 같은 시각 — 묶음 되돌리기가 이 묶음이 만든 객체를
+    # 「그 뒤에 고쳐졌다」 로 보지 않게(ADR 0097 보강).
+    touched_at = db.scalar(select(func.now()))
     for doc in bundle.documents:
         body = doc.body.replace("\r\n", "\n")
         plan = DocumentPlan(
@@ -455,8 +477,18 @@ def _documents(
             "error",
             len(body),
             hashlib.sha256(body.encode("utf-8")).hexdigest()[:16],
+            workspace_slug=doc.workspace_slug or "",
         )
         out.documents.append(plan)
+        mark = (doc.type_slug, doc.workspace_slug or "", doc.key, doc.property)
+        if mark in seen:
+            # 같은 칸에 본문 둘 — 어느 것이 남을지 모른다. 전에는 둘째가 아직 안 내린 첫째를 못
+            # 봐 같은 판을 두 번 넣어 작업 전체가 DB 오류로 죽었다.
+            plan.message = (
+                "같은 객체 · 문서 칸의 본문이 이 묶음에 또 있습니다 — 하나만 보냅니다"
+            )
+            continue
+        seen.add(mark)
         object_type = types.get(doc.type_slug)
         if object_type is None:
             plan.message = f"타입을 찾을 수 없습니다: {doc.type_slug}"
@@ -467,13 +499,36 @@ def _documents(
         if definition is None or definition.data_type != "document":
             plan.message = f"{doc.type_slug} 에 문서 칸 {doc.property!r} 이 없습니다"
             continue
-        row = db.scalar(
-            select(ObjectInstance).where(
-                ObjectInstance.type_id == object_type.id,
-                ObjectInstance.key == doc.key,
-                ObjectInstance.deleted_at.is_(None),
-            )
+        refused = managed.objects_refusal(
+            object_type, source=bundle.source or "", what="문서를 고치지"
         )
+        if refused:
+            plan.message = refused
+            continue
+        where: list[Any] = [
+            ObjectInstance.type_id == object_type.id,
+            ObjectInstance.key == doc.key,
+            ObjectInstance.deleted_at.is_(None),
+        ]
+        if object_type.key_scope == "workspace" and doc.workspace_slug:
+            # 범위가 부서면 **그 부서 안에서만** 같은 식별자다(객체 단계와 같다).
+            if doc.workspace_slug not in spaces:
+                spaces[doc.workspace_slug] = db.scalar(
+                    select(Workspace.id).where(Workspace.slug == doc.workspace_slug)
+                )
+            space = spaces[doc.workspace_slug]
+            if space is None:
+                plan.message = f"부서를 찾을 수 없습니다: {doc.workspace_slug}"
+                continue
+            where.append(ObjectInstance.owner_workspace_id == space)
+        rows = list(db.scalars(select(ObjectInstance).where(*where).limit(2)))
+        if len(rows) > 1:
+            plan.message = (
+                f"식별자 {doc.key} 인 {doc.type_slug} 가 부서 여럿에 있습니다 — "
+                "workspace_slug 로 어느 부서의 것인지 적어 주세요"
+            )
+            continue
+        row = rows[0] if rows else None
         if row is None:
             if light and doc.key in (pending or {}).get(doc.type_slug, set()):
                 plan.action = "pending"
@@ -483,8 +538,8 @@ def _documents(
             continue
         try:
             access.require_edit(db, user, object_type, row, code_value=code("BUNDLES", 35))
-        except AppError as refused:
-            plan.message = refused.message
+        except AppError as denied:
+            plan.message = denied.message
             continue
         found = db.scalar(
             select(ObjectDocument).where(
@@ -508,8 +563,10 @@ def _documents(
             # 묶음은 작업(워커)이 쓴다 — 요청의 토큰이 없고, 화면에서 사람이 적용하기도 한다.
             # 누가 적용했는지는 묶음의 판(`run_id`)이 남긴다.
             via=BUNDLE_VIA,
+            touched_at=touched_at,
         )
-    db.flush()
+        # 세션은 저절로 내리지 않는다 — 다음 줄의 질의가 이 판 · 언급을 보게 바로 내린다.
+        db.flush()
 
 
 def _staged(on_progress: bulk.Progress, prefix: str) -> bulk.Progress:
@@ -544,6 +601,7 @@ def outcome_out(outcome: Outcome) -> BundleOut:
         documents=[
             DocumentPlanOut(
                 type_slug=one.type_slug,
+                workspace_slug=one.workspace_slug or None,
                 key=one.key,
                 property=one.property,
                 action=one.action,  # type: ignore[arg-type]
@@ -594,7 +652,15 @@ def fingerprint(outcome: Outcome) -> str:
         ],
         # 본문의 지문까지 — 미리 본 뒤 본문이 바뀌면 다른 계획이다.
         "documents": [
-            (one.type_slug, one.key, one.property, one.action, one.digest, one.message)
+            (
+                one.type_slug,
+                one.workspace_slug,
+                one.key,
+                one.property,
+                one.action,
+                one.digest,
+                one.message,
+            )
             for one in outcome.documents
         ],
         "errors": outcome.errors,

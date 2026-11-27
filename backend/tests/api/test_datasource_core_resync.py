@@ -254,7 +254,7 @@ def test_한꺼번에_절반_넘게_안_오면_끊지_않고_멈춘다(
     held = _sync(client, admin, source["slug"])
     assert held["run"]["status"] == "failed", held["run"]
     assert held["counts"]["relations_unlink"] == 0, held["counts"]
-    assert any("절반이 넘어 끊지 않았습니다" in one for one in held["run"]["errors"])
+    assert any("절반이 넘거나 전부라 끊지 않았습니다" in one for one in held["run"]["errors"])
     assert len(_edges(db, kind)) == 12
     # 시계는 옮긴다 — 안 옮기면 다음 차례마다 같은 전량을 다시 받는다.
     assert _saved(client, admin, source["slug"])["relations_since_mark"] == sibling.edges_as_of

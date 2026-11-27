@@ -42,3 +42,15 @@ def test_긴_제목은_이름_칸에_맞게_줄인다() -> None:
     label = ra_reports.flatten({"id": 1, "title": long})["label"]
     assert len(label) == ra_reports.TITLE_MAX and label.endswith("…")
     assert ra_reports.flatten({"id": 1, "title": "  강성\n해석  "})["label"] == "강성 해석"
+
+
+def test_가진_것이_전부_안_오면_작은_소스도_멈춘다() -> None:
+    """바닥(10)에 걸려 10건 이하인 소스는 바깥이 한 번 빈 응답을 주면 전부가 사용 중지 · 끊김 ·
+    「내려감」 이 됐다(ADR 0098)."""
+    assert ra_reports.too_many_gone(3, 3) is True
+    assert ra_reports.too_many_gone(1, 1) is True
+    assert ra_reports.too_many_gone(1, 3) is False, "몇 건짜리에서 하나 빠지는 것은 정상"
+    assert ra_reports.too_many_gone(0, 0) is False
+    assert ra_reports.too_many_gone(11, 20) is True
+    assert ra_reports.too_many_gone(11, 30) is False
+    assert ra_reports.too_many_gone(10, 15) is False, "바닥 아래는 비율을 안 본다"

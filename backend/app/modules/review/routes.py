@@ -579,6 +579,7 @@ def review_undo(
 @router.post("/bulk", response_model=ReviewBulkOut, status_code=202)
 def review_bulk(
     payload: ReviewBulkRequest,
+    request: Request,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ReviewBulkOut:
@@ -595,6 +596,7 @@ def review_bulk(
         filters=payload.filters.model_dump(),
         threshold=payload.threshold,
         action=payload.action,
+        by_token=_by_token(request),
     )
     return ReviewBulkOut(job_id=job.id)
 

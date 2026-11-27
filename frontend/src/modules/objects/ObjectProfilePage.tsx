@@ -106,6 +106,11 @@ function ObjectProfile() {
   const defs = profile.data?.properties_schema ?? []
   /** 원 표를 비추는 객체 — 속성·첨부·이력·연도가 없고, 고치는 곳은 그 표의 화면이다. */
   const isSystem = objectType?.kind_class === 'system'
+  /**
+   * 이 객체 **자신의** 둘레(언급 · 이력)를 물어도 되나 — 타입을 아직 모르면 기다린다. 모르는 채로
+   * 그리면 원 표 객체(부서)에도 언급 · 이력을 먼저 물어 404 가 났다(타입이 오면 바로 사라진다).
+   */
+  const ownSide = objectType !== undefined && !isSystem
   /** 허브가 내려준 객체 — 값은 허브에서 고치고, 여기서는 관계로 가리키기만 한다. */
   const managed = Boolean(objectType?.managed_by)
   /**
@@ -472,7 +477,7 @@ function ObjectProfile() {
           <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
 
           {/* 이 객체를 링크로 가리킨 문서(ADR 0053) — 없으면 안 선다. */}
-          {!isSystem && (
+          {ownSide && (
             <MentionsPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} />
           )}
 
@@ -493,7 +498,7 @@ function ObjectProfile() {
 
           {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
           안 건드리므로 응답 객체 자체를 키로 쓴다). 원 표의 객체는 이력이 그 표에 있다. */}
-          {!isSystem && (
+          {ownSide && (
             <ObjectHistory
               typeSlug={typeSlug}
               objectId={objectId}

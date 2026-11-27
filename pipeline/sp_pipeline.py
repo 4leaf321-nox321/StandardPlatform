@@ -60,6 +60,8 @@ PREVIEWS = "previews.json"
 APPLIED = "applied.json"
 #: 쓰지 않기로 한 실행 — 작업 상태의 할 일에서 뺀다(`run_close`).
 CLOSED = "closed.json"
+#: 적용이 거절된 마지막 결과 — 잠그지 않고 까닭만 남긴다(다시 미리 보고 적용).
+APPLY_FAILED = "apply_failed.json"
 
 #: 감사 기록에 남는 통로 이름 — 사람이 화면에서 넣은 것과 가른다.
 CLIENT = "sp-pipeline"
@@ -402,13 +404,41 @@ def load(path: Path) -> Run:
 # 문서 본문 — 행에 붙인 마크다운 · 이름 · 전화 검사
 # --------------------------------------------------------------------------
 
-#: 전화 · 메일 · 주민등록번호 꼴 — 본문에 있으면 **오류**(가리거나 빼고 보낸다).
+#: 전화 · 메일 · 주민등록번호 꼴 — 본문에 있으면 **오류**(가리거나 빼고 보낸다). 번호는 국내
+#: 앞자리(0 으로 시작, 국제 표기는 +82)만 본다 — 「18-2024-0012」 같은 문서 · 시험 번호가
+#: 전화로 막혔다(0.4.106).
 PHONE = re.compile(
-    r"(?<![\d-])(?:\+82[-.\s]?)?(?:0\d{1,2}|1[016789])[-.\s)]\d{3,4}[-.\s]\d{4}(?![\d-])"
+    r"(?<![\d-])(?:\+82[-.\s]?(?:1[016789]|[2-6]\d?|70)|\(?0(?:1[016789]|2|[3-6]\d|70|50\d)\)?)"
+    r"[-.\s)]\s?\d{3,4}[-.\s]\d{4}(?![\d-])"
     r"|(?<!\d)01[016789]\d{7,8}(?!\d)"
 )
-EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-RESIDENT = re.compile(r"(?<!\d)\d{6}[-\s]?[1-8]\d{6}(?!\d)")
+#: 끝이 글자 도메인(.com · .kr …)인 것만 — 「react@18.3.1」 같은 판 표기는 메일이 아니다.
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}(?![\w-])")
+#: 앞 여섯이 날짜(YYMMDD)이고 뒤 첫 자리가 1 ~ 8 인 13자리. 가운데 줄표가 있거나 검증
+#: 숫자가 맞으면 오류, 줄표 없이 붙은 13자리는 검증 숫자가 안 맞으면 **경고** — 바코드 ·
+#: 밀리초 시각 · 일련번호도 13자리다(2020-10 뒤 새 번호는 검증 숫자가 없어 경고로 남는다).
+RESIDENT = re.compile(r"(?<![\d-])(\d{2})(\d{2})(\d{2})([-\s]?)([1-8])(\d{6})(?![\d-])")
+_RESIDENT_WEIGHTS = (2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5)
+
+
+def _resident_kind(found: re.Match[str]) -> str:
+    """「error」 · 「warning」 · 「」(주민등록번호가 아님)."""
+    _year, month, day, joint, first, rest = found.groups()
+    if not (1 <= int(month) <= 12 and 1 <= int(day) <= 31):
+        return ""
+    if joint:
+        return "error"
+    digits = [int(one) for one in f"{found.group(1)}{month}{day}{first}{rest}"]
+    # 바코드(EAN-13 — 국내 상품은 880 으로 시작해 날짜처럼 읽힌다)의 검증 숫자가 맞으면 경고만.
+    barcode = (10 - sum(d * (3 if i % 2 else 1) for i, d in enumerate(digits[:12])) % 10) % 10
+    if barcode == digits[12]:
+        return "warning"
+    check = (
+        11 - sum(a * b for a, b in zip(digits[:12], _RESIDENT_WEIGHTS, strict=True)) % 11
+    ) % 10
+    return "error" if check == digits[12] else "warning"
+
+
 #: 사람 이름 꼴 — 직함이 붙은 이름 · 「담당: 홍길동」. 짐작이라 **경고**(사람에게 묻는다).
 PERSON = re.compile(
     r"(?<![가-힣])[가-힣]{2,4}\s?(?:님|씨|책임|선임|수석|과장|대리|부장|차장|팀장|사원|주임|"
@@ -433,11 +463,20 @@ def personal_info(body: str) -> tuple[list[str], list[str]]:
         for what, pattern, out in (
             ("전화번호", PHONE, errors),
             ("메일 주소", EMAIL, errors),
-            ("주민등록번호 꼴", RESIDENT, errors),
             ("사람 이름 꼴", PERSON, warnings),
         ):
             for found in pattern.finditer(line):
                 out.append(f"{number}줄 {what} {_masked(found.group(0))}")
+        for found in RESIDENT.finditer(line):
+            kind = _resident_kind(found)
+            if kind == "error":
+                errors.append(f"{number}줄 주민등록번호 꼴 {_masked(found.group(0))}")
+            elif kind == "warning":
+                warnings.append(
+                    f"{number}줄 주민등록번호일 수 있는 13자리 {_masked(found.group(0))} — "
+                    "바코드 · "
+                    "일련번호면 그대로 둔다"
+                )
     return errors, warnings
 
 
@@ -452,6 +491,7 @@ class Document:
     path: str
     body: str | None
     problem: str = ""
+    workspace_slug: str | None = None
 
 
 def documents_of(run: Run) -> list[Document]:
@@ -481,7 +521,15 @@ def documents_of(run: Run) -> list[Document]:
                 )
                 continue
             for prop, relative in attached.items():
-                doc = Document(where, batch.type_slug, key, prop, relative, None)
+                doc = Document(
+                    where,
+                    batch.type_slug,
+                    key,
+                    prop,
+                    relative,
+                    None,
+                    workspace_slug=batch.workspace_slug,
+                )
                 out.append(doc)
                 if not key:
                     doc.problem = "문서 본문을 붙이려면 식별자(key)가 있어야 합니다"
@@ -522,11 +570,19 @@ def _check_documents(run: Run, report: Report) -> None:
         for one in ((run.ontology or {}).get("types") or [])
         if isinstance(one, dict)
     }
+    seen: dict[tuple[str, str, str, str], str] = {}
     for doc in documents_of(run):
         label = f"{doc.where} 문서 {doc.property or '?'}"
         if doc.problem:
             report.errors.append(f"{label}: {doc.problem}")
             continue
+        mark = (doc.type_slug, doc.workspace_slug or "", doc.key, doc.property)
+        if mark in seen:
+            report.errors.append(
+                f"{label}: {seen[mark]} 과 같은 객체 · 문서 칸입니다 — 본문은 하나만 붙인다"
+            )
+            continue
+        seen[mark] = doc.where
         props = kinds.get(doc.type_slug)
         if props is not None and props.get(doc.property) not in (None, "document"):
             report.errors.append(
@@ -548,8 +604,8 @@ def _check_documents(run: Run, report: Report) -> None:
         if maybe:
             shown = " · ".join(maybe[:5]) + (f" 외 {len(maybe) - 5}" if len(maybe) > 5 else "")
             report.warnings.append(
-                f"{label}({doc.path}): 사람 이름 꼴 {len(maybe)}곳 — {shown}. 실은 사람 "
-                "이름이면 직함 · 역할로 바꾸거나 사람에게 확인받는다"
+                f"{label}({doc.path}): 확인할 꼴 {len(maybe)}곳 — {shown}. 실은 사람 이름 · "
+                "주민등록번호면 직함 · 역할로 바꾸거나 빼고, 아니면 사람에게 확인받는다"
             )
 
 
@@ -594,6 +650,8 @@ def payload(run: Run) -> dict[str, Any]:
             "property": one.property,
             "body": one.body,
         }
+        # 부서 범위 식별자 타입이면 어느 부서의 것인지 — 객체 묶음의 부서를 그대로.
+        | ({"workspace_slug": one.workspace_slug} if one.workspace_slug else {})
         for one in documents_of(run)
         if one.body is not None and not one.problem
     ]
@@ -989,6 +1047,52 @@ def plan_applied(server: str, token: str, job_id: str) -> bool | None:
     if status != 200 or not isinstance(answer, dict):
         return None
     return bool(answer.get("applied_by"))
+
+
+def apply_plan(server: str, token: str, job_id: str) -> dict[str, Any]:
+    """플랫폼의 **그 계획 작업**을 적용한다 — 화면의 「적용」 과 같은 길(같은 파일 · 같은 지문,
+    계획을 세운 토큰의 주인으로). 사람이 대화에서 계획을 보고 「좋다」 한 뒤에만 부른다.
+
+    돌려주는 `state`: `applied`(이번에 적용함) · `already`(화면 등에서 먼저 적용함 — 그 적용
+    작업의 결과를 싣는다, JOBS-22) · `refused`(플랫폼이 받지 않음 — 오류가 있는 계획 · 권한 ·
+    남의 계획) · `failed`(적용하다 멈춤 — 그 사이 누가 바꿔 지문이 다름 등). 멈추지 않고
+    돌려준다 — 여러 작업을 한 번에 적용하는 쪽이 줄마다 가른다.
+    """
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    url = f"{server.rstrip('/')}/api/jobs/{job_id}/apply"
+    status, answer = _send(server, "POST", url, headers, None, who="플랫폼")
+    if status != 202:
+        error = answer.get("error", {}) if isinstance(answer, dict) else {}
+        applied_by = str((error.get("details") or {}).get("applied_by") or "")
+        if applied_by:
+            earlier = _get_json(server, token, f"/api/jobs/{applied_by}", who="플랫폼")
+            result = earlier.get("result") if isinstance(earlier, dict) else None
+            return {
+                "state": "already",
+                "apply_job_id": applied_by,
+                "status": str((earlier or {}).get("status") or ""),
+                "result": result if isinstance(result, dict) else {},
+            }
+        return {
+            "state": "refused",
+            "message": f"[{error.get('code', status)}] {error.get('message', answer)}",
+            "result": {},
+        }
+    try:
+        finished = _wait_job(server, token, answer)
+    except Stop as failure:
+        return {
+            "state": "failed",
+            "apply_job_id": str((answer or {}).get("id") or ""),
+            "message": str(failure),
+            "result": {},
+        }
+    result = finished.get("result")
+    return {
+        "state": "applied",
+        "apply_job_id": str(finished.get("id") or ""),
+        "result": result if isinstance(result, dict) else {},
+    }
 
 
 def jobs_link(server: str, job_id: str) -> str:
@@ -1488,14 +1592,10 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
     return report
 
 
-def cmd_validate(
-    path: Path,
-    *,
-    allow_unresolved: bool = False,
-    server: str = "",
-    token: str = "",
-) -> tuple[bool, str]:
-    run = load(path)
+def known_on(server: str, token: str) -> KnownKeys:
+    """플랫폼에 이미 있는 식별자를 묻는 검사의 눈 — 검사 · 미리 보기 · 적용이 **같은 것**을
+    쓴다. 검사만 묻고 미리 보기가 안 물으면, 검사를 통과한 고치기 행(이름 없이 식별자만)이
+    미리 보기에서 「이름이 빈 행」 으로 막힌다(0.4.106)."""
 
     def known(type_slug: str, keys: list[str]) -> set[str]:
         found = resolve_names(server, token, type_slug, keys) or {}
@@ -1505,8 +1605,21 @@ def cmd_validate(
             if one.get("match") == "exact" and (one.get("object") or {}).get("key") == name
         }
 
+    return known
+
+
+def cmd_validate(
+    path: Path,
+    *,
+    allow_unresolved: bool = False,
+    server: str = "",
+    token: str = "",
+) -> tuple[bool, str]:
+    run = load(path)
     report = validate(
-        run, allow_unresolved=allow_unresolved, known=known if server and token else None
+        run,
+        allow_unresolved=allow_unresolved,
+        known=known_on(server, token) if server and token else None,
     )
     asked = ""
     if server and token:
@@ -1536,7 +1649,7 @@ def cmd_preview(
     path: Path, *, server: str, token: str, platform: str = ""
 ) -> tuple[bool, str]:
     run = load(path)
-    report = validate(run)
+    report = validate(run, known=known_on(server, token))
     if report.errors:
         raise Stop(
             "검증을 먼저 통과하세요:\n" + "\n".join(f"오류: {e}" for e in report.errors)
@@ -1574,12 +1687,14 @@ def cmd_preview(
 
 def cmd_apply(path: Path, *, server: str, token: str) -> tuple[bool, str]:
     run = load(path)
-    report = validate(run)
+    report = validate(run, known=known_on(server, token))
     if report.errors:
         raise Stop(
             "검증을 먼저 통과하세요:\n" + "\n".join(f"오류: {e}" for e in report.errors)
         )
     body = payload(run)
+    if (path / APPLIED).exists():
+        raise Stop("이미 적용한 실행입니다 — 바꿔 넣으려면 새 실행으로")
     seen = _read_json(path / PREVIEW, [])
     # **미리 본 것만 넣는다.** 미리 본 뒤 파일을 고쳤으면 사람이 본 적 없는 것이 들어간다.
     if not isinstance(seen, dict):
@@ -1593,11 +1708,75 @@ def cmd_apply(path: Path, *, server: str, token: str) -> tuple[bool, str]:
     if not (seen.get("result") or {}).get("ok"):
         raise Stop("미리 보기에서 오류가 있었습니다 — 고치고 preview 를 다시 하세요")
     result = _post_bundle(server, token, {**body, "apply": True})
-    _write(
-        path / APPLIED,
-        {"at": _stamp(), "server": server, "digest": digest(body), "result": result},
-    )
+    record = {"at": _stamp(), "server": server, "digest": digest(body), "result": result}
+    if result.get("applied"):
+        _write(path / APPLIED, record)
+        (path / APPLY_FAILED).unlink(missing_ok=True)
+    else:
+        # **적용이 안 됐으면 잠그지 않는다** — `applied.json` 이 있으면 실행이 「적용함」 이
+        # 되어
+        # 다시 미리 보지도 닫지도 못한다. 적용 때 다시 판정해 거절된 것(그새 지워진 참조 대상 ·
+        # 권한)은 고친 뒤 다시 미리 보고 적용한다.
+        _write(path / APPLY_FAILED, record)
     return bool(result.get("applied")), summarize(result)
+
+
+def cmd_apply_plan(path: Path, *, server: str, token: str) -> dict[str, Any]:
+    """미리 본 **그 계획**(`preview.json` 의 작업)을 적용한다 — 키트 MCP 의 `run_apply`.
+
+    `cmd_apply`(명령 창)는 묶음을 다시 보내 새 작업으로 넣는다. 여기는 화면의 「적용」 과 같은
+    길이다: 사람이 본 계획의 지문으로 넣고(그 사이 누가 바꿨으면 거절된다), 화면에서 먼저
+    적용했으면 또 넣지 않는다. 미리 본 뒤 파일이 바뀌었거나 미리 보기에 오류가 있었으면 보내지
+    않는다.
+    """
+    run = load(path)
+    body = payload(run)
+    if (path / APPLIED).exists():
+        raise Stop("이미 적용한 실행입니다 — 바꿔 넣으려면 새 실행으로")
+    if (path / CLOSED).exists():
+        raise Stop("닫은 실행입니다(run_close) — 새 실행으로")
+    read = _read_json(path / PREVIEW, [])
+    seen: dict[str, Any] = read if isinstance(read, dict) else {}
+    job = str((seen.get("result") or {}).get("job_id") or "")
+    if not job:
+        raise Stop("먼저 run_preview 로 미리 보고, 그 요약을 사람에게 보여 확인받으세요")
+    if seen.get("digest") != digest(body):
+        raise Stop(
+            "미리 본 뒤에 묶음이 바뀌었습니다 — run_preview 를 다시 하고 그 요약을 사람에게 "
+            "다시 보이세요"
+        )
+    if str(seen.get("server") or "").rstrip("/") != server.rstrip("/"):
+        raise Stop(
+            f"미리 본 플랫폼({seen.get('server')})과 다른 곳입니다 — 그 플랫폼으로 다시 "
+            "미리 보세요"
+        )
+    if not (seen.get("result") or {}).get("ok"):
+        raise Stop("미리 보기에 오류가 있었습니다 — 고쳐 새 실행으로 다시 미리 보세요")
+    outcome = apply_plan(server, token, job)
+    result = outcome["result"]
+    record = {
+        "at": _stamp(),
+        "server": server,
+        "digest": digest(body),
+        "job_id": job,
+        "apply_job_id": outcome.get("apply_job_id", ""),
+        "via": "kit" if outcome["state"] == "applied" else "screen",
+        "result": result,
+    }
+    if outcome["state"] in ("applied", "already") and (
+        result.get("applied") or outcome.get("status") in ("queued", "running")
+    ):
+        _write(path / APPLIED, record)
+        (path / APPLY_FAILED).unlink(missing_ok=True)
+    elif outcome["state"] in ("applied", "already", "failed"):
+        # **적용이 안 됐으면 잠그지 않는다**(`cmd_apply` 와 같다) — 까닭을 고쳐 다시 미리 본다.
+        _write(path / APPLY_FAILED, record | {"message": outcome.get("message", "")})
+    return {
+        **outcome,
+        "applied": bool(result.get("applied")),
+        "summary": summarize(result) if result else outcome.get("message", ""),
+        "run_id": str(result.get("run_id") or ""),
+    }
 
 
 def cmd_runs(*, server: str, token: str, limit: int = 20) -> tuple[bool, str]:
@@ -1626,6 +1805,15 @@ def cmd_undo(run_id: str, *, server: str, token: str, apply: bool = False) -> tu
     **계획을 사람이 읽은 뒤** `--apply` 로 되돌린다. 그 사이 남이 고친 줄은 되돌리지 않고
     이유가 줄에 적혀 온다 — 남의 변경을 조용히 덮지 않는다.
     """
+    ok, text, _ = undo_job(run_id, server=server, token=token, apply=apply)
+    return ok, text
+
+
+def undo_job(
+    run_id: str, *, server: str, token: str, apply: bool = False
+) -> tuple[bool, str, str]:
+    """`cmd_undo` 와 같고 **계획 작업의 번호**도 — 키트 MCP 의 `run_undo_apply` 가 사람이 본
+    그 계획을 적용한다."""
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -1642,6 +1830,41 @@ def cmd_undo(run_id: str, *, server: str, token: str, apply: bool = False) -> tu
     result = job.get("result")
     if not isinstance(result, dict):
         raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {job!r}")
+    return bool(result.get("ok")), undo_summary(result), str(job.get("id") or "")
+
+
+def cmd_undo_apply(run_id: str, plan_job: str, *, server: str, token: str) -> dict[str, Any]:
+    """**사람이 본 되돌리기 계획**(`run_undo` 의 `plan_job`)을 적용한다 — 사람이 대화에서
+    「되돌려」 한 뒤에만. 그 계획이 이 판의 되돌리기 계획인지 먼저 본다(다른 작업을 이 길로
+    적용하지 않는다). 그 사이 누가 고쳐 계획과 달라졌으면 플랫폼이 거절한다(지문)."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", plan_job.strip()):
+        raise Stop(
+            f"계획 작업의 번호가 아닙니다: {plan_job!r} — run_undo 가 준 plan_job 을 주세요"
+        )
+    plan_job = plan_job.strip()
+    plan = _get_json(server, token, f"/api/jobs/{plan_job}", who="플랫폼")
+    params = (plan.get("params") or {}) if isinstance(plan, dict) else {}
+    if (
+        not isinstance(plan, dict)
+        or plan.get("kind") != "bundle_undo"
+        or str(params.get("run_id") or "") != run_id
+        or params.get("apply")
+    ):
+        raise Stop(
+            f"{plan_job} 은(는) 판 {run_id} 의 되돌리기 계획이 아닙니다 — run_undo 로 계획을 "
+            "다시 보고 그 plan_job 을 주세요"
+        )
+    outcome = apply_plan(server, token, plan_job)
+    result = outcome["result"]
+    return {
+        **outcome,
+        "undone": bool(result.get("applied")),
+        "summary": undo_summary(result) if result else outcome.get("message", ""),
+    }
+
+
+def undo_summary(result: dict[str, Any]) -> str:
+    """되돌리기 계획 · 결과를 사람이 읽는 말로 — 건너뛰는 줄의 이유까지."""
     counts = result.get("counts") or {}
     did = "되돌렸습니다" if result.get("applied") else "계획입니다 — 아무것도 안 바뀌었습니다"
     head = (
@@ -1656,7 +1879,7 @@ def cmd_undo(run_id: str, *, server: str, token: str, apply: bool = False) -> tu
         if one.get("action") == "unchanged" and one.get("message")
     ][:20]
     errors = [f"  오류: {one}" for one in (result.get("errors") or [])]
-    return bool(result.get("ok")), "\n".join([head, *errors, *skipped])
+    return "\n".join([head, *errors, *skipped])
 
 
 def _chosen(args: argparse.Namespace, platform: str) -> Target:

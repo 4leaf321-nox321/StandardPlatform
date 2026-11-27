@@ -1210,7 +1210,7 @@ def test_바깥이_한꺼번에_비면_사용_중지하지_않고_멈춘다(
     done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["run"]["status"] == "failed", done["run"]
     assert done["counts"]["gone_held_back"] == 12 and done["counts"]["deprecated"] == 0
-    assert any("절반이 넘어" in one for one in done["errors"])
+    assert any("절반이 넘거나 전부라" in one for one in done["errors"])
     assert {one["status"] for one in _by_key(client, admin, vendor).values()} == {"active"}
 
 

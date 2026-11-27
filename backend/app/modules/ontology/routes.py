@@ -14,9 +14,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.coreapi.schemas import CoreStatusOut
@@ -138,6 +139,7 @@ from app.modules.ontology.services import (
     reserved_slug_error,
     validate_properties,
 )
+from app.modules.semantic.models import SemanticTarget
 from app.modules.slides.models import SlideTemplate
 from app.shared import sheets, system_sources
 from app.shared.audit import record as record_audit
@@ -1266,6 +1268,13 @@ def update_relation_type(
 def _relation_type_deletion(db: Session, row: RelationType, *, source: str = "") -> _Deletion:
     found = _Deletion(label=row.label, managed_by=managed.owner_of(row))
     found.check(lambda: managed.require_definition_deletable(row, source=source))
+    if row.slug in [
+        one.strip() for one in get_settings().graph_calc_whole_relations.split(",")
+    ]:
+        found.warnings.append(
+            f".env 의 GRAPH_CALC_WHOLE_RELATIONS 에 「{row.slug}」 가 있습니다 — 지운 뒤에는 "
+            "서버 설정에서 빼십시오(무리 · 다리 역할을 그 선 없이 짓습니다)."
+        )
     # 선은 두 표에 있다 — 양끝이 객체면 `object_relations`, 한쪽이 원 표(계정 · 부서)면
     # `object_links`. 뒤쪽을 안 세서, 계정 → 과제 같은 관계 종류는 맺힌 선이 있어도 지워졌고
     # 그 선은 이름 없이 남았다(2026-10-08).
@@ -3185,6 +3194,23 @@ def _property_deletion(
                 f"데이터 소스 「{feed.name}」 이 이 속성에 넣습니다 — 지운 뒤에는 그 열의 "
                 "대응을 고치세요(안 고치면 다음 동기화가 그 열을 넣을 곳이 없습니다)."
             )
+    env = rename._env_mentions(field.replace("properties.", f"{owner.slug}.", 1))
+    if env:
+        found.warnings.append(
+            f".env 의 {' · '.join(env)} 에 이 칸이 있습니다 — 지운 뒤에는 서버 설정에서 "
+            "빼십시오(그 색인 · 그래프 계산에서 빠집니다)."
+        )
+    if db.scalar(
+        select(SemanticTarget.type_id).where(
+            SemanticTarget.type_id == owner.id,
+            func.coalesce(SemanticTarget.fields, text("'[]'::jsonb")).op("?")(row.key),
+        )
+    ):
+        found.warnings.append(
+            "뜻으로 찾기가 이 칸의 글을 읽습니다 — 지우면 그 칸 없이 읽고, 고른 칸이 모두 "
+            "없어지면 그 타입은 뜻으로 찾기에서 멈춥니다(서버 › 뜻으로 찾기에서 칸을 다시 "
+            "고르세요)."
+        )
     # 막지는 않는다 — 확인을 받는다(`accept_core`). 그 확인은 삭제 경로가 따로 묻는다.
     found.core_consumers = _core_consumers(db, owner)
     if owner.core:
@@ -3918,7 +3944,7 @@ def restore_snapshot(
     schema, notes = importer.upgrade_snapshot(row.schema or {})
     if dry_run:
         try:
-            planned = importer.plan(db, schema)
+            planned = importer.plan(db, schema, keep_reserved=True)
         except ValueError as caught:
             db.rollback()
             raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
@@ -3930,7 +3956,9 @@ def restore_snapshot(
     before = _snapshot(db, user, reason=f"복원 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
     try:
         # 누가 되돌렸는지가 값 변환의 이력에도 남는다(종류가 바뀐 뒤의 복원은 값도 변환한다).
-        prepared = importer.apply(db, schema, actor=user, reason="스냅샷 복원")
+        prepared = importer.apply(
+            db, schema, actor=user, reason="스냅샷 복원", keep_reserved=True
+        )
     except ValueError as caught:
         db.rollback()
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None

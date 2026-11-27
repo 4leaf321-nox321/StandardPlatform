@@ -208,7 +208,22 @@ def run(
 
     progress("군집 · 다리 역할", 2, 4)
     mark = time.monotonic()
-    whole = engine.whole(n, loaded.a, loaded.b)
+    if loaded.whole_unknown and not loaded.whole:
+        # 고른 선이 **전부** 지금은 없다 — 전부로 짓지 않는다(무리의 뜻이 바뀐다).
+        reason = (
+            "GRAPH_CALC_WHOLE_RELATIONS 의 이름이 모두 지금은 없습니다"
+            f"({', '.join(loaded.whole_unknown)}) — 쓸 수 있는 이름: {loaded.whole_known}"
+        )
+        whole = calcengine.Whole(None, None, None, {"cluster": reason, "bridge": reason})
+    else:
+        whole = engine.whole(n, loaded.a, loaded.b)
+    if loaded.whole_unknown and loaded.whole:
+        stats["whole_unknown"] = loaded.whole_unknown
+        stats["skipped"]["whole_relations"] = (
+            f"GRAPH_CALC_WHOLE_RELATIONS 의 {', '.join(loaded.whole_unknown)} 은(는) 지금 "
+            "없어 "
+            f"빼고 지었습니다 — 쓸 수 있는 이름: {loaded.whole_known}"
+        )
     seconds["whole"] = round(time.monotonic() - mark, 2)
     stats["skipped"].update(whole.skipped)
     degree = (

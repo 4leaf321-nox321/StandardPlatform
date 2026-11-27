@@ -186,7 +186,7 @@ def test_무리는_고른_관계로만_짓고_모르는_이름이면_말한다(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """무리는 고른 선에 따라 뜻이 바뀐다 — 기준정보 전체면 공급사 중심, 구성만이면 제품군
-    (견주기). 고른 것을 판에 적는다. 모르는 이름은 조용히 빼지 않는다."""
+    (견주기). 고른 것을 판에 적는다. 모르는 이름은 조용히 빼지 않는다 — 판에 적는다."""
     monkeypatch.setattr(get_settings(), "graph_calc_whole_relations", f" {world['kind']} ,")
     result = _calc(client, admin)
     assert result["whole_relations"] == [world["kind"]]
@@ -196,11 +196,21 @@ def test_무리는_고른_관계로만_짓고_모르는_이름이면_말한다(
         world["kind"]
     ]
 
+    # 모르는 이름은 **빼고 짓고 판에 적는다** — 전에는 계산 전체가 실패해, 이 설정과 상관없는
+    # 기대는 수 · 비슷한 것까지 밤마다 멈췄다(ADR 0098).
+    monkeypatch.setattr(
+        get_settings(), "graph_calc_whole_relations", f"{world['kind']},없는_관계"
+    )
+    partial = _calc(client, admin)
+    assert partial["whole_relations"] == [world["kind"]], partial
+    assert partial["whole_unknown"] == ["없는_관계"], partial
+    assert "없는_관계" in partial["skipped"]["whole_relations"], partial
+    assert world["kind"] in partial["skipped"]["whole_relations"]
+    # 전부 모르면 무리 · 다리 역할만 건너뛴다(전부로 짓지 않는다 — 무리의 뜻이 바뀐다).
     monkeypatch.setattr(get_settings(), "graph_calc_whole_relations", "없는_관계")
-    made = client.post("/api/graph/calc/run", headers=admin.headers)
-    failed = finish_job(client, admin, made.json())
-    assert failed["status"] == "failed"
-    assert "없는_관계" in failed["error"] and world["kind"] in failed["error"]
+    unknown = _calc(client, admin)
+    assert "없는_관계" in unknown["skipped"]["cluster"], unknown
+    assert unknown["relations"], "기대는 수 · 비슷한 것은 그대로 셌다"
     # 비우면 전부 — 예전 그대로.
     monkeypatch.setattr(get_settings(), "graph_calc_whole_relations", "")
     assert _calc(client, admin)["whole_relations"] == []

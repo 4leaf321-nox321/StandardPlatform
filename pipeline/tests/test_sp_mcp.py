@@ -34,14 +34,19 @@ TOOLS = {
     "source_profile",
     "source_head",
     "docx_extract",
+    "document_push",
+    "document_apply",
+    "document_check",
     "table_convert",
     "run_init",
     "run_close",
     "hub_pull",
     "run_validate",
     "run_preview",
+    "run_apply",
     "runs_list",
     "run_undo",
+    "run_undo_apply",
 }
 
 

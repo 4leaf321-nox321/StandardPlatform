@@ -27,7 +27,6 @@ from app.modules.graph.calcengine import Ints
 from app.modules.objects import edges as edge_rule
 from app.modules.objects.scope import as_scope
 from app.modules.ontology.models import ObjectType, RelationType
-from app.shared.errors import AppError, code
 
 _EMPTY = np.zeros(0, np.int64)
 
@@ -46,6 +45,10 @@ class Loaded:
     """이어지는 관계 slug → (부모 번호, 자식 번호)."""
     whole: list[str] = field(default_factory=list)
     """방향 없는 짝을 지은 선의 이름 — 비면 전부."""
+    whole_unknown: list[str] = field(default_factory=list)
+    """설정에 적었지만 지금은 없는 이름(지운 관계 · 칸, 기록으로 바꾼 타입) — 빼고 짓는다."""
+    whole_known: str = ""
+    """그때 쓸 수 있던 이름들 — 건너뜀 까닭에 함께 적는다."""
 
     @property
     def n(self) -> int:
@@ -56,15 +59,14 @@ def _ints(values: list[int] | None) -> Ints:
     return np.asarray(values or [], dtype=np.int64)
 
 
-class UnknownWhole(AppError):
-    """무리 · 다리 역할을 지을 선의 이름을 모른다(설정이 틀렸다)."""
-
-
 def _whole_names(
     db: Session, types: list[ObjectType], wanted: list[str]
-) -> tuple[list[str], list[str]]:
-    """설정의 이름들 → (관계 slug, `<타입>.<칸>` 참조 칸). 모르는 이름이면 아는 것을 말하고
-    실패한다 — 조용히 빼면 「무리가 왜 이렇지」 를 아무도 못 푼다."""
+) -> tuple[list[str], list[str], list[str], str]:
+    """설정의 이름들 → (관계 slug, `<타입>.<칸>` 참조 칸, 모르는 이름, 아는 이름들).
+
+    모르는 이름은 **빼고 짓고 판에 적는다**(건너뜀 까닭 · 화면). 전에는 계산 전체가 실패했다 —
+    관계 하나를 지우거나 이름을 바꾸면 이 설정과 상관없는 기대는 수 · 비슷한 것까지 밤마다
+    멈췄고, 자동 계산도 멈췄다. 조용히 빼지는 않는다 — 판의 `skipped` 에 이름이 남는다."""
     relations = set(db.scalars(select(RelationType.slug)))
     # 타입의 칸 — 인터페이스에서 받은 공통 속성까지(`Scope.defs`).
     refs = {
@@ -74,15 +76,13 @@ def _whole_names(
         if one.data_type == "object_ref"
     }
     unknown = [one for one in wanted if one not in relations and one not in refs]
-    if unknown:
-        known = ", ".join(sorted(relations | refs)) or "(없음)"
-        raise UnknownWhole(
-            code("GRAPH", 44),
-            f"GRAPH_CALC_WHOLE_RELATIONS 에 모르는 이름이 있습니다: {', '.join(unknown)} — "
-            f"관계 slug 또는 참조 칸 `<타입>.<칸>`: {known}",
-            status=422,
-        )
-    return [one for one in wanted if one in relations], [one for one in wanted if one in refs]
+    known = ", ".join(sorted(relations | refs)) or "(없음)"
+    return (
+        [one for one in wanted if one in relations],
+        [one for one in wanted if one in refs],
+        unknown,
+        known,
+    )
 
 
 def load(db: Session, *, whole: list[str] | None = None) -> Loaded:
@@ -92,7 +92,11 @@ def load(db: Session, *, whole: list[str] | None = None) -> Loaded:
     types = list(db.scalars(select(ObjectType).where(ObjectType.id.in_(master_ids))))
     types.sort(key=lambda row: row.slug)
     wanted = [one.strip() for one in whole or [] if one.strip()]
-    pick_relations, pick_refs = _whole_names(db, types, wanted) if wanted else ([], [])
+    pick_relations, pick_refs, unknown, known = (
+        _whole_names(db, types, wanted) if wanted else ([], [], [], "")
+    )
+    # 모르는 이름을 뺀 것 — 전부 몰랐으면 비지만 「전부」 가 아니다(`wanted` 가 그대로 있다).
+    wanted = [one for one in wanted if one not in unknown] or (["\0"] if unknown else [])
     seat = {row.id: at for at, row in enumerate(types)}
     db.execute(text("DROP TABLE IF EXISTS graph_calc_nodes"))
     db.execute(
@@ -110,7 +114,14 @@ def load(db: Session, *, whole: list[str] | None = None) -> Loaded:
     rows = db.execute(text("SELECT id, type_id FROM graph_calc_nodes ORDER BY i")).all()
     ids = [row[0] for row in rows]
     type_index = np.asarray([seat[row[1]] for row in rows], dtype=np.int64)
-    out = Loaded(ids, type_index, types, whole=wanted)
+    out = Loaded(
+        ids,
+        type_index,
+        types,
+        whole=[one for one in wanted if one != "\0"],
+        whole_unknown=unknown,
+        whole_known=known,
+    )
     if not ids:
         return out
 

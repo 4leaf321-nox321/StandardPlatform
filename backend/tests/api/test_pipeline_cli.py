@@ -793,3 +793,126 @@ def test_플랫폼_칸_목록은_한_벌이다() -> None:
 
     assert tuple(RESERVED_PROPERTY_KEYS) == tuple(FIXED_COLUMNS)
     assert tuple(pipeline.RESERVED_ROW_KEYS) == tuple(FIXED_COLUMNS)
+
+
+def test_이름_없이_식별자만_있는_고치기_행도_미리_보기_적용이_받는다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """검사(`ask_platform`)는 통과하는데 미리 보기 · 적용이 플랫폼에 묻지 않고 다시 검사해
+    「이름이
+    빈 행」 으로 막았다(0.4.106) — 있는 객체에 문서 본문만 붙이는 행이 바로 이 모양이다."""
+    token = _token(client, admin)
+    first = tmp_path / "first"
+    pipeline.cmd_init(first)
+    names = _fill(first, admin.workspace)
+    assert pipeline.cmd_preview(first, server=SERVER, token=token)[0] is True
+    assert pipeline.cmd_apply(first, server=SERVER, token=token)[0] is True
+
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    _write(
+        run / "ontology.json",
+        {
+            "types": [
+                {
+                    "slug": names["company"],
+                    "label": "기업",
+                    "key_policy": "required",
+                    "properties": [{"key": "paper", "label": "백서", "data_type": "document"}],
+                }
+            ]
+        },
+    )
+    (run / "documents").mkdir()
+    (run / "documents" / "C-1.md").write_text(_report_body("기업1"), encoding="utf-8")
+    _write(
+        run / "objects" / "company.json",
+        {
+            "type_slug": names["company"],
+            "workspace_slug": admin.workspace,
+            "rows": [{"key": "C-1", "_documents": {"paper": "documents/C-1.md"}}],
+        },
+    )
+    ok, text = pipeline.cmd_preview(run, server=SERVER, token=token)
+    assert ok is True, text
+    ok, text = pipeline.cmd_apply(run, server=SERVER, token=token)
+    assert ok is True, text
+    company = client.get(f"/api/objects/{names['company']}", headers=admin.headers).json()
+    one = next(row for row in company["items"] if row["key"] == "C-1")
+    assert one["label"] == "기업1", "이름은 그대로"
+    doc = client.get(
+        f"/api/objects/{names['company']}/{one['id']}/documents/paper", headers=admin.headers
+    ).json()
+    assert doc["body"] == _report_body("기업1"), doc
+
+
+def test_적용이_거절되면_실행을_잠그지_않는다(
+    client: TestClient,
+    admin: Signed,
+    platform: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """적용 결과가 `applied: false` 여도 `applied.json` 을 적어 실행이 「적용함」 으로 잠겼다 —
+    다시 미리 보지도 닫지도 못했다."""
+    token = _token(client, admin)
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    _fill(run, admin.workspace)
+    assert pipeline.cmd_preview(run, server=SERVER, token=token)[0] is True
+    refused = {"applied": False, "ok": False, "errors": ["그새 참조 대상이 지워졌습니다"]}
+    real = pipeline._post_bundle
+    monkeypatch.setattr(pipeline, "_post_bundle", lambda *_a, **_k: refused)
+    ok, _text = pipeline.cmd_apply(run, server=SERVER, token=token)
+    assert ok is False
+    assert not (run / pipeline.APPLIED).exists()
+    assert (run / pipeline.APPLY_FAILED).exists()
+    monkeypatch.setattr(pipeline, "_post_bundle", real)
+    assert pipeline.cmd_preview(run, server=SERVER, token=token)[0] is True, "다시 미리 본다"
+    assert pipeline.cmd_apply(run, server=SERVER, token=token)[0] is True
+    assert (run / pipeline.APPLIED).exists() and not (run / pipeline.APPLY_FAILED).exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "errors", "warnings"),
+    [
+        ("연락처 010-1234-5678", 1, 0),
+        ("02-123-4567 로", 1, 0),
+        ("+82-10-1234-5678", 1, 0),
+        ("시험 번호 18-2024-0012", 0, 0),
+        ("react@18.3.1 로 고정", 0, 0),
+        ("kim@company.co.kr", 1, 0),
+        ("900101-1234567", 1, 0),
+        ("밀리초 1764158400000", 0, 0),
+        ("바코드 8806011234561", 0, 1),
+        ("일련번호 2411261234567", 0, 1),
+    ],
+)
+def test_개인_정보_검사는_확실한_꼴만_막는다(text: str, errors: int, warnings: int) -> None:
+    """문서 · 시험 번호(「18-2024-0012」) · 판 표기(「react@18.3.1」) · 13자리 숫자(바코드 ·
+    밀리초 시각)가 전화 · 메일 · 주민등록번호로 막혔다(0.4.106)."""
+    found, maybe = pipeline.personal_info(text)
+    assert (len(found), len(maybe)) == (errors, warnings), (text, found, maybe)
+
+
+def test_같은_문서를_두_번_붙이면_검사가_막고_부서를_싣는다(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    names = _fill(run, "cae")
+    (run / "documents").mkdir()
+    (run / "documents" / "a.md").write_text("본문", encoding="utf-8")
+    _write(
+        run / "objects" / "c_docs.json",
+        {
+            "type_slug": names["company"],
+            "workspace_slug": "cae",
+            "rows": [
+                {"key": "C-5", "label": "a", "_documents": {"paper": "documents/a.md"}},
+                {"key": "C-5", "label": "a", "_documents": {"paper": "documents/a.md"}},
+            ],
+        },
+    )
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is False and "같은 객체 · 문서 칸" in text, text
+    sent = pipeline.payload(pipeline.load(run))
+    assert {one.get("workspace_slug") for one in sent["documents"]} == {"cae"}

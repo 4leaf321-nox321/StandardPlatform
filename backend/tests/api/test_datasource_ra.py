@@ -484,7 +484,7 @@ def test_한꺼번에_사라지면_내려감을_적지_않고_멈춘다(
     done = _sync(client, admin, w["source"])
     assert done["run"]["status"] == "failed"
     assert done["counts"]["gone_held_back"] == 13 and done["counts"]["gone"] == 0
-    assert any("절반이 넘어" in str(one) for one in done["errors"])
+    assert any("절반이 넘거나 전부라" in str(one) for one in done["errors"])
     # 「언제까지 들어왔나」 는 앞의 성공에 머문다 — 멈춘 대조는 성공이 아니다.
     saved = client.get(f"/api/datasources/{w['source']}", headers=admin.headers).json()
     assert _when(saved["last_success_at"]) == _when(first["run"]["finished_at"])

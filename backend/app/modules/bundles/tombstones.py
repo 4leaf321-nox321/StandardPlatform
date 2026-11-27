@@ -133,17 +133,30 @@ def _no_type(index: int, label: str, slug: str) -> bulk.RowPlan:
     )
 
 
-def _find(db: Session, object_type: ObjectType, key: str) -> ObjectInstance | None:
-    """식별자(없으면 이름)로 — 허브가 보낸 값은 그 둘 중 하나다. 이름이 여럿에 맞으면
-    못 찾은 것으로 본다: 엉뚱한 것을 사용 중지로 만드는 것보다 낫다."""
+def _lookup(
+    db: Session, object_type: ObjectType, key: str
+) -> tuple[ObjectInstance | None, str]:
+    """식별자(없으면 이름)로 — 허브가 보낸 값은 그 둘 중 하나다. (찾은 것, 못 고른 까닭).
+    이름이 여럿에 맞으면 못 찾은 것으로 본다: 엉뚱한 것을 사용 중지로 만드는 것보다 낫다.
+    **식별자가 여럿에 맞으면**(범위가 부서인 타입은 부서마다 같은 식별자를 쓴다) 줄 오류다 —
+    전에는 그중 아무것이나 집어 다른 부서의 객체를 지울 수 있었다."""
     stmt = select(ObjectInstance).where(
         ObjectInstance.type_id == object_type.id, ObjectInstance.deleted_at.is_(None)
     )
-    found = db.scalar(stmt.where(ObjectInstance.key == key))
-    if found is not None:
-        return found
+    by_key = list(db.scalars(stmt.where(ObjectInstance.key == key).limit(2)))
+    if len(by_key) > 1:
+        return None, (
+            f"식별자 {key} 인 {object_type.slug} 가 부서 여럿에 있어 어느 것인지 모릅니다 — "
+            "받는 쪽에서 화면으로 처리합니다"
+        )
+    if by_key:
+        return by_key[0], ""
     rows = list(db.scalars(stmt.where(ObjectInstance.label == key).limit(2)))
-    return rows[0] if len(rows) == 1 else None
+    return (rows[0] if len(rows) == 1 else None), ""
+
+
+def _find(db: Session, object_type: ObjectType, key: str) -> ObjectInstance | None:
+    return _lookup(db, object_type, key)[0]
 
 
 def _object_row(
@@ -156,7 +169,9 @@ def _object_row(
     source: str,
     apply: bool,
 ) -> bulk.RowPlan:
-    row = _find(db, object_type, grave.key)
+    row, unsure = _lookup(db, object_type, grave.key)
+    if unsure:
+        return bulk.RowPlan(row=index, action="error", label=grave.key, message=unsure)
     if row is None:
         # 이미 없다 — 애초에 안 받았거나 지난번에 처리했다.
         return bulk.RowPlan(
@@ -246,7 +261,12 @@ def _delete_rows(
     out: list[bulk.RowPlan] = []
     candidates: dict[uuid.UUID, _Doomed] = {}
     for index, object_type, grave in deleting:
-        row = _find(db, object_type, grave.key)
+        row, unsure = _lookup(db, object_type, grave.key)
+        if unsure:
+            out.append(
+                bulk.RowPlan(row=index, action="error", label=grave.key, message=unsure)
+            )
+            continue
         if row is None:
             out.append(
                 bulk.RowPlan(
@@ -262,7 +282,19 @@ def _delete_rows(
                 bulk.RowPlan(row=index, action="error", label=grave.key, message=refused)
             )
             continue
-        candidates.setdefault(row.id, _Doomed(index, object_type, grave, row))
+        if row.id in candidates:
+            # 같은 객체를 지우는 줄이 앞에 있다 — 전에는 이 줄이 계획에서 말없이 빠졌다.
+            out.append(
+                bulk.RowPlan(
+                    row=index,
+                    action="unchanged",
+                    label=grave.key,
+                    object_id=row.id,
+                    message=f"같은 객체를 {candidates[row.id].index}번 줄이 지웁니다",
+                )
+            )
+            continue
+        candidates[row.id] = _Doomed(index, object_type, grave, row)
     # 함께 지우는 것끼리는 서로 막지 않는다 — 그러나 **밖에서 막힌 것은 빠지고**, 그것이
     # 가리키는 것은 다시 센다(빠진 것이 지운 것을 가리키게 두지 않는다).
     doomed = set(candidates)
@@ -342,7 +374,9 @@ def _relation_row(
     apply: bool,
 ) -> bulk.RowPlan:
     label = f"{grave.src} -{grave.relation}-> {grave.dst}"
-    src = _find(db, object_type, grave.src)
+    src, unsure = _lookup(db, object_type, grave.src)
+    if unsure:
+        return bulk.RowPlan(row=index, action="error", label=label, message=unsure)
     if src is None:
         return bulk.RowPlan(
             row=index, action="unchanged", label=label, message="출발점이 이미 없습니다"

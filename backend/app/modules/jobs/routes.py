@@ -206,7 +206,9 @@ def create_job(
         # 워커가 돌릴 때도 다시 보지만(`services.run`), 넣는 순간에 거절해야 사람이 몇 분 뒤가
         # 아니라 지금 안다.
         raise Forbidden(code("JOBS", 24), f"{spec.label}은(는) 시스템 관리자만 돌립니다.")
-    reserved = sorted(key for key in ("apply", "needs_scope") if key in parsed)
+    reserved = sorted(
+        key for key in ("apply", "needs_scope", "human_only", "by_token") if key in parsed
+    )
     if reserved:
         # 계획 없이 곧장 적용하는 길을 막는다 — 적용은 계획을 본 뒤 `/{id}/apply` 로만.
         raise AppError(
@@ -259,6 +261,11 @@ def get_job(
     return _out(db, row, services.trim_rows(row.result, keep))
 
 
+def _from_token(request: Request) -> bool:
+    """토큰이 보낸 요청인가 — 사람 세션에는 범위가 없다."""
+    return getattr(request.state, "token_scopes", None) is not None
+
+
 def _require_apply_scope(request: Request, plan_job: Job) -> None:
     """이 계획을 적용할 범위가 토큰에 있나 — **사람 세션에는 범위가 없다**(None 이면 통과).
 
@@ -267,6 +274,16 @@ def _require_apply_scope(request: Request, plan_job: Job) -> None:
     """
     needed = (plan_job.params or {}).get("needs_scope")
     granted: list[str] | None = getattr(request.state, "token_scopes", None)
+    if (plan_job.params or {}).get("human_only") and granted is not None:
+        # **사람만 적용하는 계획** — 토큰으로는 계획을 세울 길도 없는 일(부서 자료 통째
+        # 옮기기).
+        # 전에는 `needs_scope` 가 없어 `objects:write` 토큰이 남이 세운 계획을 적용했다.
+        raise AppError(
+            code("JOBS", 31),
+            "이 작업의 적용은 사람이 화면에서 합니다 — 토큰(AI · 스크립트)으로는 하지 "
+            "않습니다.",
+            status=403,
+        )
     if needed and granted is not None and needed not in granted:
         raise AppError(
             code("JOBS", 18),
@@ -294,7 +311,7 @@ def apply_many(
         try:
             plan_job = services.get_visible(db, user, job_id)
             _require_apply_scope(request, plan_job)
-            made = services.make_apply(db, user, plan_job)
+            made = services.make_apply(db, user, plan_job, by_token=_from_token(request))
             db.commit()
             db.refresh(made)
             out.append(
@@ -348,7 +365,7 @@ def apply_job(
     """계획을 본 뒤 **사람이 누르는 자리.** 같은 파일 · 같은 지문으로 적용 작업을 만든다."""
     plan_job = services.get_visible(db, user, job_id)
     _require_apply_scope(request, plan_job)
-    job = services.make_apply(db, user, plan_job)
+    job = services.make_apply(db, user, plan_job, by_token=_from_token(request))
     db.commit()
     db.refresh(job)
     return _out(db, job)

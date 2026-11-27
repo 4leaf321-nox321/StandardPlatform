@@ -284,6 +284,29 @@ def _previews(run: Path) -> list[dict[str, Any]]:
     return list(reversed(out))
 
 
+def before_apply(folder: Path, run: Path) -> None:
+    """키트가 적용하기 전에(`run_apply`) — 사람이 「좋다」 해도 **작업의 절차가 아직이면**
+    멈춘다: 정의가 확정 전이거나 확정 뒤 바뀜, 같은 묶음(지문)을 이 작업의 다른 실행이 이미
+    적용함. 화면의 「적용」 은 이 작업 폴더를 모르므로 여기서 본다."""
+    current = _sha(folder / ONTOLOGY)
+    confirmed = (load(folder).get("confirmed") or {}).get("ontology_sha256")
+    if current is not None and confirmed != current:
+        raise Stop(
+            "정의가 확정 전입니다(또는 확정 뒤 바뀌었습니다) — 판단표를 사람에게 보이고 "
+            "decision_record(confirms_ontology=true) 로 확정받은 뒤 적용합니다"
+        )
+    mine = pipeline.digest(pipeline.payload(pipeline.load(run)))
+    for other in sorted((folder / RUNS).glob("*")):
+        if other == run:
+            continue
+        record = pipeline._read_json(other / pipeline.APPLIED, [])
+        if isinstance(record, dict) and record.get("digest") == mine:
+            raise Stop(
+                f"같은 묶음(지문)을 {other.relative_to(folder).as_posix()} 에서 이미 "
+                "적용했습니다 — 또 넣지 않습니다. 쓰지 않으면 run_close"
+            )
+
+
 def close(folder: Path, run: Path, *, reason: str) -> str:
     """쓰지 않을 실행을 닫는다 — 할 일 목록에서 빠지고 다시 미리 보지 않는다. 지우지 않는다
     (무엇을 했는지 남는다)."""
@@ -296,23 +319,48 @@ def close(folder: Path, run: Path, *, reason: str) -> str:
 
 
 def _run_state(folder: Path, run: Path) -> dict[str, Any]:
-    loaded = pipeline.load(run)
-    body = pipeline.payload(loaded)
     state: dict[str, Any] = {
         "run": run.relative_to(folder).as_posix(),
-        "sources": [str(one.get("name")) for one in loaded.manifest.get("sources") or []],
-        "unresolved": len(loaded.unresolved),
-        "objects": sum(len(batch.rows) for batch in loaded.objects),
+        "sources": [],
+        "unresolved": 0,
+        "objects": 0,
         "preview": "없음",
         "applied": (run / pipeline.APPLIED).exists(),
         "closed": "",
         "screen": "",
-        "digest": pipeline.digest(body),
+        "digest": "",
         "same_as": "",
+        "broken": "",
+        "apply_failed": "",
     }
     closed = pipeline._read_json(run / pipeline.CLOSED, [])
     if isinstance(closed, dict):
         state["closed"] = str(closed.get("reason") or "닫음")
+    try:
+        loaded = pipeline.load(run)
+        body = pipeline.payload(loaded)
+    except (pipeline.Stop, ValueError, OSError) as error:
+        # **실행 하나가 틀려도 상태 전체는 낸다** — 묶음 하나(빠진 참조 · 깨진 JSON)가 전에는
+        # work_status 를 통째로 멈춰, 다른 실행의 할 일까지 안 보였다.
+        state["broken"] = (
+            str(error).splitlines()[0][:300] if str(error) else type(error).__name__
+        )
+        return state
+    state["sources"] = [str(one.get("name")) for one in loaded.manifest.get("sources") or []]
+    state["unresolved"] = len(loaded.unresolved)
+    state["objects"] = sum(len(batch.rows) for batch in loaded.objects)
+    state["digest"] = pipeline.digest(body)
+    failed = pipeline._read_json(run / pipeline.APPLY_FAILED, [])
+    if isinstance(failed, dict) and not state["applied"]:
+        # 적용하다 멈춘 것(키트의 `run_apply` — 지문이 다름 등)은 결과 없이 까닭만 남는다.
+        said = (
+            [str(failed["message"])]
+            if failed.get("message") and not failed.get("result")
+            else pipeline.summarize(failed.get("result") or {}).splitlines()
+        )
+        state["apply_failed"] = " · ".join(line.strip() for line in said[:3] if line.strip())[
+            :300
+        ]
     jobs = _previews(run)
     if not state["applied"] and not state["closed"]:
         # **미리 본 잡 전부에** 묻는다 — 같은 실행을 다시 미리 보면 마지막 잡만 남아, 앞
@@ -392,9 +440,11 @@ def status(folder: Path) -> dict[str, Any]:
     ]
     # **같은 묶음(지문)을 이미 적용한 실행이 있으면** 그 실행은 또 넣을 것이 아니다 — 같은
     # 원천을 다시 변환하면 실행 폴더는 새로 생기지만 묶음은 같다.
-    applied_by = {one["digest"]: one["run"] for one in runs if one["applied"]}
+    applied_by = {
+        one["digest"]: one["run"] for one in runs if one["applied"] and one["digest"]
+    }
     for one in runs:
-        if not one["applied"] and one["digest"] in applied_by:
+        if not one["applied"] and one["digest"] and one["digest"] in applied_by:
             one["same_as"] = applied_by[one["digest"]]
             one["screen"] = ""
 
@@ -439,6 +489,13 @@ def status(folder: Path) -> dict[str, Any]:
     for run in runs:
         if run["applied"] or run["closed"]:
             continue
+        if run["broken"]:
+            steps.append(
+                f"{run['run']}: 실행을 읽지 못했습니다 — {run['broken']}. 고치거나, 쓰지 "
+                "않으면 "
+                "run_close"
+            )
+            continue
         if run["same_as"]:
             steps.append(
                 f"{run['run']}: {run['same_as']} 에서 이미 적용한 묶음과 같습니다(지문) — "
@@ -454,6 +511,11 @@ def status(folder: Path) -> dict[str, Any]:
             steps.append(f"{run['run']}: 검증 · 미리 보기 — run_validate → run_preview")
         elif run["preview"] == "오류 있음":
             steps.append(f"{run['run']}: 미리 보기 오류를 고쳐 새 실행으로 다시")
+        elif run["apply_failed"]:
+            steps.append(
+                f"{run['run']}: 적용이 거절됐습니다({run['apply_failed']}) — 까닭을 고친 뒤 "
+                "run_preview 로 다시 미리 보고 적용"
+            )
         else:
             where = (
                 f"그 플랫폼 화면 「작업」 에서 「적용」 — {run['screen']}"
@@ -461,7 +523,8 @@ def status(folder: Path) -> dict[str, Any]:
                 else "그 플랫폼 화면 「작업」 에서 「적용」"
             )
             steps.append(
-                f"{run['run']}: 사람이 미리 보기를 확인하고 **직접** 적용 — {where} "
+                f"{run['run']}: 미리 보기 요약을 사람에게 보이고 묻는다 — 「좋다 · 적용해」 "
+                f"하면 run_apply(work, run). 사람이 화면에서 하겠다면 {where} "
                 "(명령 창이면 "
                 + pipeline.command_line("apply", f'"{(folder / run["run"]).resolve()}"')
                 + ")"
@@ -517,8 +580,12 @@ def render(state: dict[str, Any]) -> str:
             if run.get("closed")
             else "적용함"
             if run["applied"]
+            else f"읽지 못함({run['broken']})"
+            if run.get("broken")
             else f"같은 묶음을 {run['same_as']} 에서 적용함"
             if run.get("same_as")
+            else "적용 거절됨"
+            if run.get("apply_failed")
             else "적용 전"
         )
         lines.append(

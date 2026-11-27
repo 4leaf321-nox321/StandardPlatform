@@ -1128,7 +1128,9 @@ def bulk_plan(
         action=action,
         whole=True,
     )
-    outcomes = plan(db, user, resolved, progress=progress)
+    outcomes = plan(
+        db, user, resolved, progress=progress, by_token=bool(params.get("by_token"))
+    )
     progress("미리 보기", len(resolved), len(resolved))
     if mode == "recommended" and skipped:
         notes.append(
@@ -1175,13 +1177,15 @@ def bulk_apply(
     같을 때만. 그 사이 새로 생긴 항목은 들지 않는다(다음에 다시)."""
     mode = str(params.get("mode") or "recommended")
     threshold = params.get("threshold")
-    outcomes = plan(db, user, decisions, progress=progress)
+    by_token = bool(params.get("by_token"))
+    outcomes = plan(db, user, decisions, progress=progress, by_token=by_token)
     require_same(outcomes, str(params.get("fingerprint") or ""))
     result = apply(
         db,
         user,
         decisions,
         str(params.get("fingerprint") or ""),
+        by_token=by_token,
         mode=mode,
         threshold=float(threshold)
         if mode == "recommended" and threshold is not None
@@ -1217,9 +1221,11 @@ def enqueue_bulk(
     filters: dict[str, Any],
     threshold: float,
     action: str,
+    by_token: bool = False,
 ) -> Job:
     """「전부 작업으로」 의 미리 보기 작업을 넣는다 — 적용은 그 작업의 `POST
-    /api/jobs/{id}/apply`."""
+    /api/jobs/{id}/apply`. `by_token` 은 워커의 계획 · 적용이 사람만 정하는 종류를 다시 막게
+    작업 인자로 넘긴다(워커에는 요청의 토큰이 없다)."""
     job = job_services.enqueue(
         db,
         kind="review_bulk",
@@ -1228,6 +1234,7 @@ def enqueue_bulk(
             "filters": filters,
             "threshold": threshold,
             "action": action,
+            **({"by_token": True} if by_token else {}),
         },
         user=user,
         workspace_id=None,

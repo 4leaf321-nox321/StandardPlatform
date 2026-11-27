@@ -996,6 +996,7 @@ def filestore_gc(work: Work) -> dict[str, Any]:
     found = gc.scan(work.db, progress=work.progress)
     size = _megabytes(found.orphan_bytes + found.temp_bytes)
     if not work.params.get("apply"):
+        foreign = gc.looks_foreign(found)
         return {
             "applied": False,
             "ok": bool(found.orphans or found.temp),
@@ -1005,10 +1006,12 @@ def filestore_gc(work: Work) -> dict[str, Any]:
             "recent": found.recent,
             "scanned": found.scanned,
             "sample": [relative for relative, _ in found.orphans[: gc.SAMPLE]],
+            # 저장소 대부분이 고아 — 적용 전에 사람이 읽을 경고(자동 정리는 여기서 멈춘다).
+            "warnings": [foreign] if foreign else [],
             "summary": (
                 f"지울 것 — 고아 파일 {len(found.orphans):,}개 · 임시 파일 "
                 f"{len(found.temp):,}개({size}) · 훑은 파일 {found.scanned:,}개 · 하루가 안 "
-                f"지나 남길 것 {found.recent:,}개"
+                f"지나 남길 것 {found.recent:,}개" + (f" — 주의: {foreign}" if foreign else "")
             ),
         }
     work.progress("지우기", 0, 0)
@@ -1226,6 +1229,16 @@ def objects_photos(work: Work) -> dict[str, Any]:
         return photos.run(work.db, _user(work), work.params, source, progress=work.progress)
 
 
+def documents_push(work: Work) -> dict[str, Any]:
+    """문서 올리기 — zip 하나(목록 · 마크다운 · 그림)로 여러 객체의 문서 칸에 본문을 쓴다
+    (`objects/docpush.py`, ADR 0099). 계획 → 사람 확정 → 적용. 정제 키트의 `document_push` 가
+    zip 을 만들어 넣는다 — 본문이 모델의 도구 인자를 거치지 않는다."""
+    from app.modules.objects import docpush
+
+    with work.open_input() as source:
+        return docpush.run(work.db, _user(work), work.params, source, progress=work.progress)
+
+
 # --- 부서 통폐합 -----------------------------------------------------------------
 
 
@@ -1283,6 +1296,18 @@ register(
         True,
         True,
         objects_photos,
+        max_file_setting="job_photos_max_bytes",
+    )
+)
+register(
+    Kind(
+        "documents_push",
+        "문서 올리기",
+        True,
+        True,
+        documents_push,
+        public=True,
+        # 그림이 든 zip — 사진 일괄 업로드와 같은 상한.
         max_file_setting="job_photos_max_bytes",
     )
 )

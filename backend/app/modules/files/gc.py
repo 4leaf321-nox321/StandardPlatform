@@ -47,6 +47,10 @@ INCOMING = "_incoming"
 JOBS = "_jobs"
 #: 결과에 싣는 예시 수.
 SAMPLE = 20
+#: 자동 정리가 멈추는 문턱 — 훑은 파일 가운데 이 비율보다 많이(그리고 `FOREIGN_FLOOR` 개보다
+#: 많이) 고아이거나, **전부가** 고아면 지우지 않는다.
+FOREIGN_LIMIT = 0.5
+FOREIGN_FLOOR = 20
 
 Progress = Callable[[str, int, int], None] | None
 
@@ -142,6 +146,33 @@ class Cleaned:
     temp: int = 0
     kept: int = 0
     """훑은 뒤 지우기 직전에 다시 보니 가리키는 행이 생겼거나 새로워져 남긴 것."""
+
+
+def looks_foreign(found: Found) -> str:
+    """이 DB 가 저장소의 파일 대부분을 모른다 — **다른 DB 의 저장소일 수 있다.** 까닭 또는 빈
+    글자.
+
+    파일스토어는 DB 와 짝인데 그것을 묶는 표지가 없다. 다른 DB(시험 · 규모 실측 · 복원
+    리허설)에
+    붙은 워커가 같은 폴더를 보면, 그 DB 가 가리키지 않는 파일이 모두 고아로 보여 하루 지난 것이
+    다 지워졌다(개발 환경의 첨부 16개 원본이 그렇게 사라진 것으로 본다, 2026-11-26). 자동
+    정리는
+    여기서 멈추고, 사람이 「지금 정리」 의 계획을 읽고 적용할 때만 지운다."""
+    orphans = len(found.orphans)
+    if not orphans:
+        return ""
+    if orphans >= found.scanned or (
+        orphans > FOREIGN_FLOOR and orphans > FOREIGN_LIMIT * found.scanned
+    ):
+        return (
+            f"훑은 파일 {found.scanned:,}개 가운데 {orphans:,}개가 이 DB 의 어느 첨부도 "
+            "가리키지 "
+            "않습니다 — 다른 DB 의 저장소를 보고 있을 수 있습니다(FILESTORE_DIR · "
+            "DATABASE_URL 을 "
+            "확인하세요). 자동 정리는 지우지 않습니다 — 맞으면 「지금 정리」 로 계획을 보고 "
+            "적용합니다."
+        )
+    return ""
 
 
 def clean(db: Session, found: Found, *, now: datetime | None = None) -> Cleaned:

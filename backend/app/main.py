@@ -335,11 +335,18 @@ def _register_extensions() -> None:
     # 거절하며, 질의는 메모리에 세운 사본 그래프에서 돌아 DB 를 바꿀 길이 없다. 안 열면 읽기
     # 토큰으로 들어온 AI(MCP `rdf_query`)가 여러 타입을 잇는 물음을 못 묻는다.
     scopes.register_read_only_post("/api/rdf/query")
+    # 바깥 SPARQL 도구의 창구(SPARQL 1.1 Protocol)도 같다 — 질의가 길면 POST 로 보낸다.
+    scopes.register_read_only_post("/api/rdf/sparql")
     # **바깥 시스템에 주는 토큰은 코어만 읽는다.** `read` 를 주면 그 계정이 볼 수 있는 전부가
     # 나간다 — 연동 하나 때문에 사내 전체를 여는 일이 된다.
     scopes.register_read_scope("/api/core", coreapi_routes.SCOPE)
     # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
     scopes.register_write_scope("/api/datasources", "objects:write")
+    # 그러나 **정의를 바꾸는 두 자리는 정의 범위다** — RA 보고서 기록 타입 만들기와 코어 구독
+    # (허브의 정의를 받아 적용 · 보류된 정의 변경 승인). 전에는 `objects:write` 만 받은 토큰이
+    # 이 길로 타입 · 칸을 만들었다(「객체만 넣게」 하려던 토큰).
+    scopes.register_write_scope("/api/datasources/ra-report-type", "ontology:write")
+    scopes.register_write_scope("/api/datasources/core-subscriptions", "ontology:write")
     # 지표 정의는 화면의 모양을 정하는 일이라 정의 범위다. 계획은 POST 지만 읽기다.
     scopes.register_write_scope("/api/metrics", "ontology:write")
     # 플랫폼의 자기소개 — 에이전트가 이 글로 어느 플랫폼에 물을지 고른다. 서버 화면의 다른 쓰기

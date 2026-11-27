@@ -385,6 +385,8 @@ def _apply(
             events="summary",
         ),
         commit_check=commit_check,
+        # 허브가 예전부터 쓰던 `status` 같은 칸 — 받는 쪽이 막으면 수신이 통째로 보류된다.
+        keep_reserved=True,
     )
     if not outcome.ok or not outcome.applied:
         said = [
@@ -412,7 +414,7 @@ def settle(
     `apply` 가 거짓이면 계획만 세운다(구독의 미리 보기)."""
     payload = prepared.payload
     out = Settled(payload=payload)
-    full = importer.plan(db, payload, source=source_name)
+    full = importer.plan(db, payload, source=source_name, keep_reserved=True)
     if clean(full):
         if apply and _changes(full):
             db.commit()  # 따로 연 연결이 넣는다 — 이 세션이 쥔 것을 먼저 놓는다.
@@ -421,7 +423,7 @@ def settle(
         out.applied = _changes(full)
         return out
     safe = soften(db, payload)
-    partial = importer.plan(db, safe, source=source_name)
+    partial = importer.plan(db, safe, source=source_name, keep_reserved=True)
     if not clean(partial) or not _changes(partial):
         # 되돌려도 위험이 남거나, 되돌리면 바뀌는 것이 없다 — 통째로 남긴다.
         out.held = lines_of(full)
@@ -434,7 +436,7 @@ def settle(
     _apply(actor, safe, source_name, commit_check)
     db.expire_all()
     # 남은 것만 — 되돌린 변경이 그대로 다시 나온다.
-    out.held = lines_of(importer.plan(db, payload, source=source_name))
+    out.held = lines_of(importer.plan(db, payload, source=source_name, keep_reserved=True))
     return out
 
 
@@ -808,7 +810,9 @@ def _reconcile(
             added = {str(k): str(v) for k, v in (definitions.get("added") or {}).items()}
             if approve:
                 out.applied = _changes(
-                    importer.plan(db, prepared.payload, source=row.source_name)
+                    importer.plan(
+                        db, prepared.payload, source=row.source_name, keep_reserved=True
+                    )
                 )
                 db.commit()
                 _apply(actor, prepared.payload, row.source_name, commit_check)

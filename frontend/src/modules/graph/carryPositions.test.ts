@@ -9,6 +9,8 @@
  * 계산하는 함수만 떼어 글자로 잡아 둔다.
  */
 
+// 소스 파일을 글자로 읽는 시험 — Node 의 타입이 필요하다(vitest 4 는 그것을 함께 들여오지 않는다).
+/// <reference types="node" />
 import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'

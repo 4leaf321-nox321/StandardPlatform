@@ -5,7 +5,8 @@
 `pipeline/tests` 가 갈라진 환경에서 본다.
 
 여기서 보는 것: 작업 폴더 밖을 못 건드리나, 원천 · 결정기록을 AI 가 못 쓰나, **적용 도구가
-없나**, 그리고 조사 → 정의 확정 → 변환 → 검증 → 미리 보기가 이어지나.
+미리 본 그 계획만 넣나**(ADR 0100), 그리고 조사 → 정의 확정 → 변환 → 검증 → 미리 보기 →
+적용 → 되돌리기가 이어지나.
 """
 
 from __future__ import annotations
@@ -91,7 +92,7 @@ def platform(client: TestClient) -> Iterator[None]:
         yield
 
 
-def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
+def test_적용_도구는_사람의_확인_뒤에만이고_안내는_정본을_내려준다() -> None:
     assert set(REGISTERED) == {
         "pipeline_guide",
         "work_list",
@@ -105,18 +106,27 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "source_profile",
         "source_head",
         "docx_extract",
+        "document_push",
+        "document_apply",
+        "document_check",
         "table_convert",
         "run_init",
         "run_close",
         "hub_pull",
         "run_validate",
         "run_preview",
+        "run_apply",
         "runs_list",
         "run_undo",
+        "run_undo_apply",
     }
-    # **사람이 확인한 뒤에만 넣는다** — 도구의 모양으로. 되돌리기도 같다: 계획을 보여 주는
-    # 도구만 있고, 되돌리는 것은 사람이 `undo_command` 로 한다.
-    assert not any("apply" in name for name in REGISTERED)
+    # **사람이 대화에서 확인한 뒤에만 넣는다**(ADR 0100, 2026-11-27 사용자 결정). 적용하는
+    # 도구는 이 셋뿐이고, 셋 다 미리 본 그 계획만 넣으며 설명에 「사람이 … 한 뒤에만」 이 있다.
+    applying = {name for name in REGISTERED if "apply" in name}
+    assert applying == {"document_apply", "run_apply", "run_undo_apply"}
+    for name in applying:
+        said = getattr(server, name).__doc__ or ""
+        assert "한 뒤에만" in said and "짐작으로" in said, name
     assert "계획만" in (server.run_undo.__doc__ or "")
 
     overview = server.pipeline_guide()
@@ -220,17 +230,56 @@ def test_조사부터_미리_보기까지_한_바퀴(
     # 올린다. `python …` 이면 파이썬을 안 깐 PC 에서 「찾을 수 없다」 로 멈춘다.
     assert preview["apply_command"].startswith(f'"{sys.executable}" -X utf8 ')
     status = server.work_status(work)
-    assert "미리 보기 괜찮음" in status and "**직접** 적용" in status
+    assert "미리 보기 괜찮음" in status and "「좋다 · 적용해」 하면 run_apply" in status
 
-    # 넣는 것은 사람이 명령으로 — 도구가 아니다.
+    # 미리 보기는 아무것도 안 넣었다.
     assert (
         client.get(f"/api/objects/{slugs['model']}", headers=admin.headers).status_code == 404
     )
-    ok, _ = server.pipeline.cmd_apply(
-        root / work / run, server=SERVER, token=made.json()["token"]
-    )
-    assert ok is True
+    # **사람이 본 것과 다르면 보내지 않는다** — 미리 본 뒤 묶음이 바뀜 · 정의가 확정 뒤 바뀜.
+    batch = next((root / work / run / "objects").glob("*.json"))
+    kept = batch.read_text(encoding="utf-8")
+    rows_now = json.loads(kept)
+    rows_now["rows"][0]["label"] = "미리 본 뒤 고침"
+    batch.write_text(json.dumps(rows_now, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(server.Stop, match="미리 본 뒤에 묶음이 바뀌었습니다"):
+        server.run_apply(work, run)
+    batch.write_text(kept, encoding="utf-8")
+    definition = root / work / "02-정의" / "ontology.json"
+    confirmed = definition.read_text(encoding="utf-8")
+    definition.write_text(confirmed + "\n", encoding="utf-8")
+    with pytest.raises(server.Stop, match="정의가 확정 전"):
+        server.run_apply(work, run)
+    definition.write_text(confirmed, encoding="utf-8")
+
+    # 사람이 대화에서 「좋다」 — **미리 본 그 계획**을 넣는다(화면의 「적용」 과 같은 길).
+    applied = server.run_apply(work, run)
+    assert applied["state"] == "applied" and applied["applied"] is True, applied
+    assert applied["platform"] and "적용함" in applied["summary"]
+    plan_job = json.loads((root / work / run / "preview.json").read_text())["result"]["job_id"]
+    plan = client.get(f"/api/jobs/{plan_job}", headers=admin.headers).json()
+    assert plan["applied_by"] == applied["apply_job_id"], plan
     assert "적용함" in server.work_status(work)
+    with pytest.raises(server.Stop, match="이미 적용한 실행"):
+        server.run_apply(work, run)
+    models = client.get(f"/api/objects/{slugs['model']}", headers=admin.headers).json()
+    assert models["total"] > 0, models
+
+    # 되돌리기도 같다 — 계획을 보이고, 사람이 「되돌려」 하면 **그 계획**을 넣는다.
+    undo = server.run_undo(applied["run_id"])
+    assert undo["ok"] is True and undo["plan_job"], undo
+    assert "계획입니다" in undo["summary"] and undo["on_screen"].endswith(undo["plan_job"])
+    with pytest.raises(server.Stop, match="되돌리기 계획이 아닙니다"):
+        server.run_undo_apply(applied["run_id"], plan_job)  # 묶음 가져오기의 계획
+    with pytest.raises(server.Stop, match="계획 작업의 번호가 아닙니다"):
+        server.run_undo_apply(applied["run_id"], "../../auth/tokens")
+    undone = server.run_undo_apply(applied["run_id"], undo["plan_job"])
+    assert undone["state"] == "applied" and undone["undone"] is True, undone
+    assert "되돌렸습니다" in undone["summary"]
+    gone = client.get(f"/api/objects/{slugs['model']}", headers=admin.headers).json()
+    assert gone["total"] == 0, gone
+    twice = server.run_undo_apply(applied["run_id"], undo["plan_job"])
+    assert twice["state"] == "already", twice
 
     # 같은 원천을 고쳐 다시 돌리면 **새** 실행 폴더.
     again = server.table_convert(work, "03-대응/표.table.json", "표.csv")

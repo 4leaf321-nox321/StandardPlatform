@@ -134,7 +134,9 @@ def may_read(path: str, token_scopes: list[str]) -> bool:
 
 
 def register_read_only_post(path_prefix: str) -> None:
-    """POST 지만 읽기인 경로. 읽기 범위로 통과시킨다."""
+    """POST 지만 읽기인 경로 — **그 주소 하나만**(아래는 아니다). 읽기 범위로 통과시킨다.
+    아래까지 열면 `/api/metrics/plan` 이 slug 가 `plan` 인 지표의 재계산 · 경보
+    (`/api/metrics/plan/recompute` …)까지 읽기로 열었다."""
     if path_prefix not in _read_only_posts:
         _read_only_posts.append(path_prefix)
 
@@ -190,7 +192,7 @@ def is_reading(method: str, path: str) -> bool:
         return True
     if method != "POST":
         return False
-    if any(_under(path, prefix) for prefix in _read_only_posts):
+    if any(path == prefix.rstrip("/") for prefix in _read_only_posts):
         return True
     return any(_matches(path, pattern) for pattern in _read_only_post_patterns)
 

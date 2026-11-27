@@ -34,12 +34,14 @@ os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
 # 정제 도구 키트의 **이 PC 설정**(등록한 플랫폼 · 토큰)을 시험이 읽지 않게 — 없는 자리를
 # 가리킨다. 필요한 시험은 제 임시 파일로 바꾼다(`SP_SETTINGS`).
 os.environ["SP_SETTINGS"] = os.path.join(os.devnull, "sp-pipeline-settings.json")
-# 설정을 처음 읽기 **전에** — 앱의 설정은 한 번 읽고 기억한다.
-if WORKER:
-    _scratch = tempfile.mkdtemp(prefix=f"sp-pytest-{WORKER}-")
-    atexit.register(shutil.rmtree, _scratch, ignore_errors=True)
-    os.environ["FILESTORE_DIR"] = os.path.join(_scratch, "filestore")
-    os.environ["LOG_DIR"] = os.path.join(_scratch, "logs")
+# 설정을 처음 읽기 **전에** — 앱의 설정은 한 번 읽고 기억한다. **병렬이 아니어도** 시험의 임시
+# 폴더로 — 전에는 작업자(`-n`)일 때만 옮겨, 한 줄로 돌린 시험이 개발 환경의 파일스토어 ·
+# 로그(`backend/filestore` · `backend/logs`)를 시험 DB 와 함께 썼다(시험 DB 가 모르는 개발
+# 첨부가 고아로 보인다).
+_scratch = tempfile.mkdtemp(prefix=f"sp-pytest-{WORKER or 'main'}-")
+atexit.register(shutil.rmtree, _scratch, ignore_errors=True)
+os.environ["FILESTORE_DIR"] = os.path.join(_scratch, "filestore")
+os.environ["LOG_DIR"] = os.path.join(_scratch, "logs")
 
 
 def _test_database_url() -> str:

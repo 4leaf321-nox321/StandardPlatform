@@ -63,6 +63,22 @@ OVERLAP = timedelta(minutes=5)
 GONE_LIMIT = 0.5
 #: 그 비율을 보지 않는 작은 수 — 보고서 몇 건짜리 조직에서 두 건이 내려간 것은 정상이다.
 GONE_FLOOR = 10
+
+
+def too_many_gone(gone: int, held: int) -> bool:
+    """한 번에 너무 많이 안 왔나 — 그러면 표시 · 중지 · 끊기를 하지 않고 멈춘다.
+
+    비율(`GONE_LIMIT`)은 바닥(`GONE_FLOOR`) 위에서만 본다. 그러나 **가진 것이 전부 안 왔으면**
+    작은 소스여도 멈춘다 — 바깥이 한 번 빈 응답을 주면(필터 · 권한이 바뀜) 10건 이하인 소스는
+    바닥에 걸려 전부가 사용 중지 · 끊김 · 「내려감」 이 됐다. 정말 다 지워진 것이면 사람이
+    화면에서 처리한다."""
+    if gone <= 0:
+        return False
+    if gone >= held:
+        return True
+    return gone > GONE_FLOOR and gone > GONE_LIMIT * held
+
+
 #: 전량 대조의 간격 — 태그만 바뀐 것(RA 는 `updated_at` 을 안 움직인다)과 내려간 것을 잡는다.
 RECONCILE_EVERY = timedelta(hours=24)
 MAX_PAGES = 1_000
@@ -601,7 +617,7 @@ def reconcile(
             for row in held
             if row.id not in came and (row.properties or {}).get("origin_state") != ORIGIN_GONE
         )
-        if candidates > GONE_FLOOR and candidates > GONE_LIMIT * len(held):
+        if too_many_gone(candidates, len(held)):
             # **표시하지 않고 멈춘다** — 부르는 쪽이 실패로 적고 사람에게 알린다.
             full = False
             gone = -candidates

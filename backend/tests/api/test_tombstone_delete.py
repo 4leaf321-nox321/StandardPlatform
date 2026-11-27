@@ -321,3 +321,21 @@ def test_잠금이_없는_정의는_원천_이름을_적어도_평소의_삭제�
     )
     assert gone.status_code == 204, gone.text
     assert _reason(db, "ontology.type.delete", hand) is None
+
+
+def test_같은_객체를_지우는_줄이_둘이면_뒤의_줄을_알린다(
+    client: TestClient, admin: Signed
+) -> None:
+    """전에는 뒤의 줄이 계획에서 말없이 빠졌다 — 보낸 줄과 계획의 줄 수가 달랐다."""
+    w = _world(client, admin)
+    objects = [
+        {"type_slug": w["company"], "key": "C-1", "action": "delete"},
+        {"type_slug": w["company"], "key": "C-1", "action": "delete"},
+        {"type_slug": w["tool"], "key": "T-1", "action": "delete"},
+        {"type_slug": w["tool"], "key": "T-2", "action": "delete"},
+    ]
+    planned = _graves(client, admin, objects)
+    rows = planned["tombstones"]["rows"]
+    assert len(rows) == 4, rows
+    second = next(one for one in rows if one["row"] == 2)
+    assert second["action"] == "unchanged" and "1번 줄" in second["message"], rows

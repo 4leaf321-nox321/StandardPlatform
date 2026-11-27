@@ -1792,7 +1792,8 @@ def _sync_body(
     if held_back:
         warnings.append(
             f"바깥에서 한꺼번에 {held_back}건이 오지 않았습니다 — 이 소스가 넣어 쓰는 것의 "
-            "절반이 넘어 사용 중지하지 않았습니다(받은 행은 반영했습니다). 바깥 표의 필터 · "
+            "절반이 넘거나 전부라 사용 중지하지 않았습니다(받은 행은 반영했습니다). 바깥 "
+            "표의 필터 · "
             "권한 · 쪽 넘김을 확인하세요. 정말 사라진 것이면 객체 화면에서 골라 사용 "
             "중지하세요 — 그 뒤로는 멈추지 않습니다."
         )
@@ -2193,7 +2194,8 @@ def _sync_ra(
         # 대조 시각을 안 옮긴다 — 다음 차례에 다시 대조하고, 그사이 사람이 본다.
         warnings.append(
             f"전량 대조에서 보고서 {held_back}건이 한꺼번에 수신되지 않았습니다 — 보유한 "
-            "것의 절반이 넘어 「원본에서 내려감」 을 표시하지 않았습니다. RA 읽기 계정의 "
+            "것의 절반이 넘거나 전부라 「원본에서 내려감」 을 표시하지 않았습니다. RA 읽기 "
+            "계정의 "
             "권한과 선택한 조직을 확인하세요(수신한 보고서는 반영했습니다)."
         )
     elif full:
@@ -3003,11 +3005,12 @@ def _prune_unseen(
         fresh = made >= started or (last_seen is not None and last_seen >= started)
         if not fresh and edge_id not in seen:
             doomed.append(edge_id)
-    if len(doomed) > GONE_FLOOR and len(doomed) > GONE_LIMIT * held:
+    if ra_reports.too_many_gone(len(doomed), held):
         out.held_back = len(doomed)
         out.notes.append(
             f"처음부터 다시 받았는데 이 소스가 이은 선 {held:,}줄 가운데 {len(doomed):,}줄이 "
-            "오지 않았습니다 — 절반이 넘어 끊지 않았습니다(받은 선은 반영했습니다). 상대 "
+            "오지 않았습니다 — 절반이 넘거나 전부라 끊지 않았습니다(받은 선은 반영했습니다). "
+            "상대 "
             "토큰의 부서 · 공개 범위가 바뀌었는지 확인하세요. 정말 끊긴 것이면 화면에서 "
             "끊거나 관계 파일을 「파일대로 맞춤」 으로 넣으세요."
         )
@@ -3165,7 +3168,13 @@ def _actor(db: Session, user: User | None) -> User:
         return user
     found = db.scalar(
         select(User)
-        .where(User.is_system_admin.is_(True), User.deleted_at.is_(None))
+        .where(
+            User.is_system_admin.is_(True),
+            User.deleted_at.is_(None),
+            # **정지된 관리자를 빌리지 않는다** — 작업 틀(`_why_cannot_run_as`)은 정지된 사람의
+            # 작업을 막는데, 이 길만 그 계정의 권한으로 동기화를 돌렸다.
+            User.status == "active",
+        )
         .order_by(User.created_at)
     )
     if found is None:
@@ -3279,7 +3288,7 @@ def _deprecate_missing(
         if norm in seen or row.id in seen_ids:
             present.add(row.id)
     gone = [row for object_id, row in held.items() if object_id not in present]
-    if len(gone) > GONE_FLOOR and len(gone) > GONE_LIMIT * len(held):
+    if ra_reports.too_many_gone(len(gone), len(held)):
         # **중지하지 않고 멈춘다** — 부르는 쪽이 실패로 적고 사람에게 알린다.
         return 0, len(gone)
     for row in gone:

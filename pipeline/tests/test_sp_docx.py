@@ -583,8 +583,9 @@ def test_MCP_도구는_작업_폴더_안만_읽고_쓴다(
     assert len(result["files"]) == 4
     assert result["figures"][0]["line"] == "![그림 1. 구성도](media/image1.png?w=60)"
     assert [one["order"] for one in result["not_moved"]] == [4, 5]
-    assert any("attachment_upload_prepare" in step for step in result["next"])
+    assert any("document_push" in step for step in result["next"])
+    assert any("document_check" in step for step in result["next"])
     # 그 뒤의 차례는 안내의 정본(AGENTS.md)에 — 도구가 그 절을 내려준다.
     guide = sp_mcp.pipeline_guide("docx")["content"]
-    assert "attachment_upload_prepare" in guide and "photo:<첨부 id>" in guide
+    assert "document_push" in guide and "photo:<첨부 id>" in guide
     assert "ADR 0053" in guide
