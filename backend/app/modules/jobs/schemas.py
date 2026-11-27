@@ -33,6 +33,10 @@ class JobOut(BaseModel):
     """이 **계획**을 적용한(또는 적용 중인) 작업 — 있으면 화면이 「적용」 을 안 세우고, 정제
     도구가 「적용함」 을 안다. 계획의 `result.applied` 는 영영 거짓이라(적용은 새 작업이다)
     이것이 「적용됐나」 의 답이다."""
+    applied_status: str | None = None
+    """그 적용 작업의 상태(`queued` · `running` · `done`) — `applied_by` 는 **대기 · 도는
+    중인 적용도** 센다. 그 작업이 이 사람에게 안 보여도(시스템 관리자가 남의 전역 계획을
+    적용함) 정제 도구가 끝났는지를 가른다(ADR 0101)."""
     input_file_name: str | None
     has_output: bool
     requested_by_name: str | None

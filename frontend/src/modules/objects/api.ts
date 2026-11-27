@@ -312,15 +312,20 @@ export interface ImportRow {
   /** 바뀌는 칸. 「고침」 이 무엇을 고치는지 — 안 보여 주면 사람은 안 누른다. */
   changes: string[]
   message: string
+  /** 막지 않지만 읽고 적용할 것 — 문서 올리기의 빈 본문 · 그림 꼴로 못 읽은 자리(ADR 0099). */
+  warnings?: string[]
 }
 
 export interface ImportPlan {
   applied: boolean
   rows: ImportRow[]
-  /** 행과 무관한 오류(모르는 열, 상한). **하나라도 있으면 아무것도 안 넣는다.** */
+  /** 행과 무관한 오류(모르는 열, 상한). **하나라도 있으면 아무것도 안 넣는다.** 문서 올리기의
+   *  0.4.107 결과에는 없다 — 읽는 쪽이 없는 것으로 본다. */
   errors: string[]
   counts: Record<'create' | 'update' | 'unchanged' | 'unlink' | 'error', number> &
     Partial<Record<'delete' | 'merge' | 'deprecate', number>>
+  /** 경고가 있는 줄 수(문서 올리기). */
+  warned?: number
 }
 
 /** 여럿 골라 한 칸 바꾸기의 계획 — 행마다 무엇이 되는지. */

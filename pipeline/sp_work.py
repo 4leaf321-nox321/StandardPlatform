@@ -253,18 +253,60 @@ def record(
     return f"{DECISIONS} 에 적었습니다: {topic.strip()}"
 
 
-def _applied_on_screen(seen: dict[str, Any], job: str) -> bool:
-    """화면에서 적용했는지 **미리 본 그 플랫폼에** 묻는다 — 못 닿거나 등록이 바뀌었으면 모른다.
-
-    안 물으면 화면에서 적용한 뒤에도 상태가 「적용 전 — 적용하라」 고 조른다(실측).
-    """
+def _target_of(seen: dict[str, Any]) -> pipeline.Target | None:
+    """**미리 본 그 플랫폼** — 등록이 바뀌었거나 주소가 다르면 None(다른 플랫폼의 토큰으로 묻지
+    않는다)."""
     try:
         chosen = pipeline.target(str(seen.get("platform") or ""))
     except Stop:
-        return False
+        return None
     if chosen.server.rstrip("/") != str(seen.get("server") or "").rstrip("/"):
-        return False
-    return bool(pipeline.plan_applied(chosen.server, chosen.token, job))
+        return None
+    return chosen
+
+
+def _applied_elsewhere(run: Path, seen: dict[str, Any]) -> str:
+    """그 계획을 화면(또는 어디서든) 적용했는지 **미리 본 그 플랫폼에** 묻는다 — `applied`(끝나
+    들어감 — `applied.json` 을 쓴다) · `waiting`(적용 작업이 대기 · 도는 중 —
+    `applying.json`) · 빈 값(안 했거나 모름).
+
+    안 물으면 화면에서 적용한 뒤에도 상태가 「적용 전 — 적용하라」 고 조른다(실측). 그런데
+    플랫폼은 **대기 중인 적용도** 「적용한 것」 으로 센다 — 그것만 보고 「적용함」 으로 적으면
+    그 적용이 실패해도 실행이 영영 잠겼다(0.4.107 점검). 그래서 적용 작업에 끝났는지 묻는다.
+    """
+    chosen = _target_of(seen)
+    if chosen is None:
+        return ""
+    apply_id = pipeline.plan_apply_job(chosen.server, chosen.token, str(seen["job_id"]))
+    if not apply_id:
+        return ""
+    outcome = pipeline.apply_job_state(
+        chosen.server, chosen.token, apply_id, plan_job_id=str(seen["job_id"])
+    )
+    record = {
+        "at": _now(),
+        "server": seen.get("server"),
+        "digest": seen.get("digest"),
+        "job_id": seen.get("job_id"),
+        "apply_job_id": apply_id,
+        "via": "screen",
+    }
+    if outcome["state"] == "applied":
+        pipeline._write(run / pipeline.APPLIED, record | {"result": outcome["result"]})
+        (run / pipeline.APPLY_FAILED).unlink(missing_ok=True)
+        return "applied"
+    if outcome["state"] in ("waiting", "unknown"):
+        pipeline._write(run / pipeline.APPLYING, record)
+        return "waiting"
+    return ""
+
+
+def _definition(body: Any) -> str | None:
+    """정의의 **내용**의 지문 — 파일의 바이트가 아니라 읽은 JSON 으로(변환이 실행 폴더에 다시
+    써서 들여쓰기가 달라도 같은 정의는 같다). 실을 것이 없으면 None."""
+    if not isinstance(body, dict) or not any(body.get(key) for key in pipeline.ONTOLOGY_KEYS):
+        return None
+    return pipeline.digest(body)
 
 
 def _previews(run: Path) -> list[dict[str, Any]]:
@@ -286,16 +328,65 @@ def _previews(run: Path) -> list[dict[str, Any]]:
 
 def before_apply(folder: Path, run: Path) -> None:
     """키트가 적용하기 전에(`run_apply`) — 사람이 「좋다」 해도 **작업의 절차가 아직이면**
-    멈춘다: 정의가 확정 전이거나 확정 뒤 바뀜, 같은 묶음(지문)을 이 작업의 다른 실행이 이미
-    적용함. 화면의 「적용」 은 이 작업 폴더를 모르므로 여기서 본다."""
+    멈춘다: 정의가 확정 전이거나 확정 뒤 바뀜, **이 실행이 싣는 정의가 확정한 정의가 아님**,
+    미리 본 뒤 이 작업의 넣을 곳이 바뀜, 같은 묶음(지문)을 이 작업의 다른 실행이 이미 적용함.
+    화면의 「적용」 은 이 작업 폴더를 모르므로 여기서 본다.
+
+    허브에서 받은 실행(`bundle.json` 의 `source`)의 정의는 허브의 것이라 `02-정의` 와 견주지
+    않는다(받는 플랫폼에서 허브 관리가 된다)."""
+    work = load(folder)
     current = _sha(folder / ONTOLOGY)
-    confirmed = (load(folder).get("confirmed") or {}).get("ontology_sha256")
-    if current is not None and confirmed != current:
+    confirmed = (work.get("confirmed") or {}).get("ontology_sha256")
+    loaded = pipeline.load(run)
+    shown = run.relative_to(folder).as_posix() if folder in run.parents else run.name
+    from_hub = bool(str(loaded.manifest.get("source") or "").strip())
+    # **실행이 실제로 싣는 정의** — 변환할 때 쓴 정의가 실행 폴더의 `ontology.json` 이 된다.
+    # `02-정의` 의 지문만 보면, v1 을 확정해 변환한 실행을 v2 를 확정한 뒤에 넣을 수 있었다
+    # (0.4.107 점검).
+    sends = None if from_hub else _definition(loaded.ontology)
+    if current is None:
+        if confirmed and confirmed != NO_DEFINITION:
+            raise Stop(
+                f"확정한 정의 파일({ONTOLOGY})이 없어졌습니다 — 확정한 것과 견줄 수 없어 넣지 "
+                "않습니다. 정의를 되살려 다시 확정받거나, 새 정의 없이 넣는 작업이면 판단표에 "
+                "그렇게 적어 decision_record(confirms_ontology=true) 로 「새 정의 없음」 을 "
+                "확정받습니다"
+            )
+        if sends is not None:
+            raise Stop(
+                f"이 실행({shown})은 정의를 싣는데 확정한 정의가 없습니다 — 정의는 {ONTOLOGY} "
+                "에 쓰고 판단표와 함께 사람에게 확정받은 뒤(decision_record(confirms_ontology="
+                "true)) 다시 변환합니다. 새 정의 없이 넣는 것이면 정의를 싣지 않은 새 실행으로"
+            )
+    else:
+        if confirmed != current:
+            raise Stop(
+                "정의가 확정 전입니다(또는 확정 뒤 바뀌었습니다) — 판단표를 사람에게 보이고 "
+                "decision_record(confirms_ontology=true) 로 확정받은 뒤 적용합니다"
+            )
+        if sends is not None:
+            try:
+                defined = json.loads((folder / ONTOLOGY).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                defined = None
+            if sends != _definition(defined):
+                raise Stop(
+                    f"이 실행({shown})의 정의가 지금 확정한 정의({ONTOLOGY})와 다릅니다 — "
+                    "정의가 확정된 뒤 다시 변환하세요(table_convert 로 새 실행 → "
+                    "run_validate → run_preview → 사람에게 다시 묻는다). 실행의 "
+                    "ontology.json 을 손으로 맞추지 않는다"
+                )
+    # **미리 본 곳에만 넣는다** — 그 뒤 work_platform 으로 넣을 곳을 바꿨으면 사람이 본 계획은
+    # 옛 곳의 것이다. 바꾼 곳에 넣으려면 거기서 다시 미리 본다.
+    now = str(work.get("platform") or "")
+    previewed = pipeline.preview_platform(run)
+    if previewed and now and previewed != now:
         raise Stop(
-            "정의가 확정 전입니다(또는 확정 뒤 바뀌었습니다) — 판단표를 사람에게 보이고 "
-            "decision_record(confirms_ontology=true) 로 확정받은 뒤 적용합니다"
+            f"이 작업의 넣을 곳이 미리 본 뒤 바뀌었습니다(미리 본 곳 {previewed} → "
+            f"지금 {now}) — 미리 본 계획은 {previewed} 의 것입니다. {now} 에 넣으려면 "
+            "run_preview 로 다시 미리 보고 그 요약을 사람에게 다시 보인 뒤 적용합니다"
         )
-    mine = pipeline.digest(pipeline.payload(pipeline.load(run)))
+    mine = pipeline.digest(pipeline.payload(loaded))
     for other in sorted((folder / RUNS).glob("*")):
         if other == run:
             continue
@@ -305,6 +396,34 @@ def before_apply(folder: Path, run: Path) -> None:
                 f"같은 묶음(지문)을 {other.relative_to(folder).as_posix()} 에서 이미 "
                 "적용했습니다 — 또 넣지 않습니다. 쓰지 않으면 run_close"
             )
+        # **대기 중인 적용도** 같은 묶음이다 — 그것이 들어가면 두 번 넣은 것이 된다(백필의
+        # 가벼운 미리 보기는 지문이 없어 플랫폼도 못 막는다, 0.4.107 재점검).
+        waiting = pipeline._read_json(other / pipeline.APPLYING, [])
+        if isinstance(waiting, dict) and waiting.get("digest") == mine:
+            raise Stop(
+                f"같은 묶음(지문)을 {other.relative_to(folder).as_posix()} 에서 넣었고 아직 "
+                "플랫폼의 대기열에 있습니다 — 또 넣지 않습니다. 끝나면 work_status 가 알려 "
+                "준다(실패면 그 실행을 다시 미리 보고 적용한다)"
+            )
+
+
+def _settle(run: Path, pending: dict[str, Any]) -> dict[str, Any] | None:
+    """넣었는데 끝을 못 본 적용(`applying.json`)을 **미리 본 그 플랫폼에** 다시 묻는다 — 못
+    물으면 None.
+
+    등록한 주소가 그 뒤 바뀌었으면(설치기를 다시 돌려 포털 주소로 등) **같은 이름의 지금
+    등록**으로 묻는다 — 옛 주소로만 물으면 그 기록이 영영 「적용 대기 중」 이고, 다시 미리
+    보기 · 닫기가 막혀 도구로는 풀 길이 없었다(0.4.107 재점검). 같은 이름이 이제 다른
+    플랫폼이면 그 작업이 거기 없어(404) 「거절됨」 으로 풀린다."""
+    name = pipeline.preview_platform(run)
+    chosen = _target_of({"platform": name, "server": pending.get("server")})
+    if chosen is not None:
+        return pipeline.settle_pending(run, chosen.server, chosen.token)
+    try:
+        moved = pipeline.target(name)
+    except Stop:
+        return None
+    return pipeline.settle_pending(run, moved.server, moved.token, moved=True)
 
 
 def close(folder: Path, run: Path, *, reason: str) -> str:
@@ -312,6 +431,20 @@ def close(folder: Path, run: Path, *, reason: str) -> str:
     (무엇을 했는지 남는다)."""
     if (run / pipeline.APPLIED).exists():
         raise Stop("이미 적용한 실행입니다 — 닫을 것이 없습니다(되돌리려면 run_undo)")
+    if (run / pipeline.APPLYING).exists():
+        pending = pipeline._read_json(run / pipeline.APPLYING, [])
+        settled = _settle(run, pending if isinstance(pending, dict) else {})
+        if settled is not None and settled["state"] == "applied":
+            raise Stop(
+                "이미 적용한 실행입니다 — 넣은 적용이 그 사이 끝났습니다(되돌리려면 run_undo)"
+            )
+        if settled is not None and settled["state"] == "waiting":
+            raise Stop(
+                "이 실행의 적용이 아직 플랫폼의 대기열에 있습니다 — 끝난 뒤에(work_status 가 "
+                "알려 준다) 닫거나 되돌린다"
+            )
+        # 못 물었다(그 플랫폼이 이제 등록에 없다) — 닫게 둔다. 그 적용이 어떻게 됐는지는 그
+        # 플랫폼 화면에서 본다.
     if not reason.strip():
         raise Stop("왜 닫는지(reason)를 적으세요 — 뒤에 보는 사람이 압니다")
     pipeline._write(run / pipeline.CLOSED, {"at": _now(), "reason": reason.strip()})
@@ -332,6 +465,7 @@ def _run_state(folder: Path, run: Path) -> dict[str, Any]:
         "same_as": "",
         "broken": "",
         "apply_failed": "",
+        "applying": "",
     }
     closed = pipeline._read_json(run / pipeline.CLOSED, [])
     if isinstance(closed, dict):
@@ -350,6 +484,21 @@ def _run_state(folder: Path, run: Path) -> dict[str, Any]:
     state["unresolved"] = len(loaded.unresolved)
     state["objects"] = sum(len(batch.rows) for batch in loaded.objects)
     state["digest"] = pipeline.digest(body)
+    if not state["applied"] and not state["closed"] and (run / pipeline.APPLYING).exists():
+        # **넣었는데 끝을 못 본 적용** — 그 적용 작업에 다시 묻는다. 끝났으면 「적용함」,
+        # 실패면 「적용 거절됨」 으로 옮기고, 아직이면 대기로 둔다(거절이 아니다 — 또 넣지
+        # 않는다).
+        pending = pipeline._read_json(run / pipeline.APPLYING, [])
+        pending = pending if isinstance(pending, dict) else {}
+        settled = _settle(run, pending)
+        if settled is not None and settled["state"] == "applied":
+            state["applied"] = True
+        elif settled is None or settled["state"] == "waiting":
+            state["applying"] = str(pending.get("apply_job_id") or "?")
+            if pending.get("server") and pending.get("apply_job_id"):
+                state["screen"] = pipeline.jobs_link(
+                    str(pending["server"]), str(pending["apply_job_id"])
+                )
     failed = pipeline._read_json(run / pipeline.APPLY_FAILED, [])
     if isinstance(failed, dict) and not state["applied"]:
         # 적용하다 멈춘 것(키트의 `run_apply` — 지문이 다름 등)은 결과 없이 까닭만 남는다.
@@ -362,29 +511,35 @@ def _run_state(folder: Path, run: Path) -> dict[str, Any]:
             :300
         ]
     jobs = _previews(run)
-    if not state["applied"] and not state["closed"]:
+    if not state["applied"] and not state["closed"] and not state["applying"]:
         # **미리 본 잡 전부에** 묻는다 — 같은 실행을 다시 미리 보면 마지막 잡만 남아, 앞
         # 잡으로 화면에서 이미 적용한 실행이 「적용 전」 으로 남고 다음 잡의 적용 링크가 또
         # 떴다(실측).
         for one in jobs:
-            if one.get("server") and _applied_on_screen(one, str(one["job_id"])):
+            if not one.get("server"):
+                continue
+            # 다음부터 다시 묻지 않게 적어 둔다 — 화면에서 적용한 것(끝났으면 applied.json,
+            # 대기 중이면 applying.json).
+            found = _applied_elsewhere(run, one)
+            if found == "applied":
                 state["applied"] = True
-                # 다음부터 다시 묻지 않게 적어 둔다 — 화면에서 적용한 것.
-                pipeline._write(
-                    run / pipeline.APPLIED,
-                    {
-                        "at": _now(),
-                        "server": one.get("server"),
-                        "digest": one.get("digest"),
-                        "job_id": one.get("job_id"),
-                        "via": "screen",
-                    },
-                )
+                state["apply_failed"] = ""
+                break
+            if found == "waiting":
+                pending = pipeline._read_json(run / pipeline.APPLYING, [])
+                state["applying"] = str((pending or {}).get("apply_job_id") or "?")
+                state["screen"] = pipeline.jobs_link(str(one["server"]), state["applying"])
                 break
     seen = pipeline._read_json(run / pipeline.PREVIEW, [])
     if isinstance(seen, dict):
         job = str((seen.get("result") or {}).get("job_id") or "")
-        if job and seen.get("server") and not state["applied"] and not state["closed"]:
+        if (
+            job
+            and seen.get("server")
+            and not state["applied"]
+            and not state["closed"]
+            and not state["applying"]
+        ):
             # 그 플랫폼 화면에서 이 계획을 펼친 채로 — 적용은 거기서 사람이 누른다.
             state["screen"] = pipeline.jobs_link(str(seen["server"]), job)
         if seen.get("digest") != state["digest"]:
@@ -441,10 +596,18 @@ def status(folder: Path) -> dict[str, Any]:
     # **같은 묶음(지문)을 이미 적용한 실행이 있으면** 그 실행은 또 넣을 것이 아니다 — 같은
     # 원천을 다시 변환하면 실행 폴더는 새로 생기지만 묶음은 같다.
     applied_by = {
-        one["digest"]: one["run"] for one in runs if one["applied"] and one["digest"]
+        one["digest"]: one["run"]
+        for one in runs
+        # 대기 중인 적용도 — 그것이 들어가면 또 넣을 것이 아니다.
+        if (one["applied"] or one.get("applying")) and one["digest"]
     }
     for one in runs:
-        if not one["applied"] and one["digest"] and one["digest"] in applied_by:
+        if (
+            not one["applied"]
+            and not one.get("applying")
+            and one["digest"]
+            and one["digest"] in applied_by
+        ):
             one["same_as"] = applied_by[one["digest"]]
             one["screen"] = ""
 
@@ -496,10 +659,19 @@ def status(folder: Path) -> dict[str, Any]:
                 "run_close"
             )
             continue
+        if run["applying"]:
+            steps.append(
+                f"{run['run']}: 적용을 넣었고 플랫폼이 받았는데 아직 끝나지 않았습니다"
+                f"(적용 작업 {run['applying']}) — 거절된 것이 아니다. 다시 적용하거나 다시 "
+                "미리 보지 않는다. 끝나면 work_status 가 「적용함」(실패면 「적용 "
+                "거절됨」)으로 바꾼다. 오래 그대로면 운영자에게 작업 워커를 확인해 달라고 한다"
+                + (f" — 그 플랫폼 화면 「작업」: {run['screen']}" if run.get("screen") else "")
+            )
+            continue
         if run["same_as"]:
             steps.append(
-                f"{run['run']}: {run['same_as']} 에서 이미 적용한 묶음과 같습니다(지문) — "
-                "또 넣지 않는다. 쓰지 않으면 run_close"
+                f"{run['run']}: {run['same_as']} 에서 이미 적용한 묶음과 같습니다(지문, "
+                "적용 대기 중 포함) — 또 넣지 않는다. 쓰지 않으면 run_close"
             )
             continue
         if run["unresolved"]:
@@ -580,9 +752,11 @@ def render(state: dict[str, Any]) -> str:
             if run.get("closed")
             else "적용함"
             if run["applied"]
+            else f"적용 대기 중(적용 작업 {run['applying']})"
+            if run.get("applying")
             else f"읽지 못함({run['broken']})"
             if run.get("broken")
-            else f"같은 묶음을 {run['same_as']} 에서 적용함"
+            else f"같은 묶음을 {run['same_as']} 에서 적용함(또는 적용 대기 중)"
             if run.get("same_as")
             else "적용 거절됨"
             if run.get("apply_failed")

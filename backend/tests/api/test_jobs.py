@@ -787,6 +787,10 @@ def test_실패한_적용은_다시_적용할_계획으로_홈에_남는다(
     applying = client.post(f"/api/jobs/{planned['id']}/apply", headers=admin.headers).json()
     # 걸려 있는(대기) 동안은 할 일이 아니다.
     assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before
+    # 계획은 그 적용이 **아직 대기 중**인 것도 싣는다 — `applied_by` 는 대기 중인 적용도 세어,
+    # 그 작업이 안 보이는 사람(정제 도구의 토큰)이 「적용함」 으로 잘못 알았다(ADR 0101).
+    shown = client.get(f"/api/jobs/{planned['id']}", headers=admin.headers).json()
+    assert (shown["applied_by"], shown["applied_status"]) == (applying["id"], "queued"), shown
 
     for status, result in (("failed", None), ("done", {"applied": False})):
         db.execute(
@@ -797,7 +801,7 @@ def test_실패한_적용은_다시_적용할_계획으로_홈에_남는다(
         db.commit()
         assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before + 1
         shown = client.get(f"/api/jobs/{planned['id']}", headers=admin.headers).json()
-        assert shown["applied_by"] is None, status
+        assert shown["applied_by"] is None and shown["applied_status"] is None, status
 
 
 def test_파일이_지워졌거나_오래된_계획은_할_일로_안_센다(

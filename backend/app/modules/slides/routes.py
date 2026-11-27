@@ -10,8 +10,19 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    delete,
+    exists,
+    func,
+    literal,
+    not_,
+    or_,
+    select,
+)
+from sqlalchemy.orm import Session, aliased
 
 from app.database import get_db
 from app.modules.accounts.models import User
@@ -42,6 +53,7 @@ from app.shared.pagination import Page, clamp_limit
 from app.shared.permissions import (
     can_edit_authored,
     require_authored_edit,
+    sees_every_department,
     visible_owner_clause,
 )
 
@@ -50,6 +62,9 @@ router = APIRouter(prefix="/slides", tags=["slides"])
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 #: 파일 이름에 못 쓰는 글자 — Windows 가 거절하는 것.
 _UNSAFE = re.compile(r'[\\/:*?"<>|\n\r\t]+')
+#: 볼 수 없는 주제의 장표 제목(`_shown_title`). 주제 칸은 「(볼 수 없는 객체)」(ADR 0098)인데
+#: 제목은 기본이 「<주제 이름> <틀 이름>」 이라 그 이름을 그대로 냈다 — 목록에도 검색(`q`)에도.
+HIDDEN_SUBJECT = "(볼 수 없는 주제)"
 
 
 # --- 틀 ----------------------------------------------------------------------
@@ -223,7 +238,7 @@ def list_slides(
         stmt = stmt.where(Slide.subject_id == subject_id)
     needle = (q or "").strip()
     if needle:
-        stmt = stmt.where(Slide.title.icontains(needle, autoescape=True))
+        stmt = stmt.where(_title_matches(user, needle))
     if mine:
         stmt = stmt.where(Slide.author_id == user.id)
     total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
@@ -293,6 +308,9 @@ def update_slide(
     """제목 · 글 영역의 글 · 고르기 영역의 기록을 고친다 — 작성자와 시스템 관리자."""
     row = _slide(db, slide_id)
     require_authored_edit(user, row.author_id, what="장표", code_value=code("SLIDES", 30))
+    # **쓰기 전에** 본다 — 전에는 저장(커밋)한 뒤 답을 그리다 403 이 나서, 거절된 요청의 글 ·
+    # 고른 기록이 남았다(2026-11-27 점검).
+    _seen_subject(db, user, row)
     template = _template(db, row.template_id)
     areas = {one["key"]: one for one in template.areas}
     content = {key: dict(value) for key, value in (row.content or {}).items()}
@@ -373,13 +391,14 @@ def pick_candidates(
 ) -> CandidatesOut:
     """선택 영역의 후보 — 틀의 조건(주제와 이어지는 칸 · 고정 조건)에 맞는 것, 50건까지."""
     row = _slide(db, slide_id)
+    # 후보는 주제와 이어진 기록이다 — 주제를 못 보는 사람에게는 한 장과 같이 403.
+    subject = _seen_subject(db, user, row)
     area = next(
         (one for one in _template(db, row.template_id).areas if one.get("key") == area_key),
         None,
     )
     if area is None or area.get("fill") != "pick" or area.get("pair_of"):
         raise NotFound(code("SLIDES", 38), f"선택 영역이 아닙니다: {area_key}")
-    subject = services.follow_merges(db, row.subject_id)
     found, total = services.candidates(db, user, area, subject, q, AREA_LIMIT_MAX)
     return CandidatesOut(
         items=[CandidateOut(id=one.id, label=one.label) for one in found], total=total
@@ -417,9 +436,12 @@ def used_in(
     db: Session = Depends(get_db),
 ) -> list[UsedInOut]:
     """이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는
-    살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`). 볼 수 없는 객체면 없는 것과 같다."""
+    살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`). 볼 수 없는 객체 · 없는 객체면 빈
+    목록이다 — 둘을 가르지 않는다(가르면 있는지가 드러난다). 원 표를 비추는 객체(부서 · 계정 —
+    객체 표에 행이 없다)도 쓰인 장표가 없다: 404 이던 때는 부서 화면이 열 때마다 오류를
+    남겼다(0.4.107)."""
     if not _sees(db, user, object_id):
-        raise NotFound(code("SLIDES", 41), "객체를 찾을 수 없습니다.")
+        return []
     out: list[UsedInOut] = []
     subjects = db.scalars(
         select(Slide)
@@ -546,32 +568,122 @@ def _sees(db: Session, user: User, object_id: uuid.UUID) -> bool:
     )
 
 
-def _subject_out(db: Session, user: User, subject_id: uuid.UUID | None) -> SubjectOut | None:
+def _seen_subject(db: Session, user: User, row: Slide) -> ObjectInstance | None:
+    """장표의 주제(합쳐졌으면 이긴 쪽) — **이 사람이 못 보면 403**(SLIDES-40). 주제 객체의
+    값으로 그리는 글이고 후보도 그 객체와 이어진 것이다 — 한 장 · pptx · 후보 · 저장이 같은
+    판정을 쓴다."""
+    subject = services.follow_merges(db, row.subject_id)
+    if subject is not None and not _sees(db, user, subject.id):
+        raise Forbidden(
+            code("SLIDES", 40),
+            "이 장표의 주제 객체를 볼 수 없습니다 — 그 부서의 사람에게 보여 달라고 하세요.",
+        )
+    return subject
+
+
+def _subject_out(
+    db: Session, user: User, subject_id: uuid.UUID | None
+) -> tuple[SubjectOut | None, bool]:
+    """(주제, 못 보나)."""
     if subject_id is None:
-        return None
+        return None, False
     found = services.follow_merges(db, subject_id)
     if found is None:
-        return None
+        return None, False
     if not _sees(db, user, found.id):
         # 볼 수 없는 부서의 객체 — 이름 · 타입을 싣지 않는다(장표 목록이 그것을 드러냈다).
-        return SubjectOut(id=found.id, label="(볼 수 없는 객체)", type_slug="", deleted=False)
+        return SubjectOut(
+            id=found.id, label="(볼 수 없는 객체)", type_slug="", deleted=False
+        ), True
     object_type = db.get(ObjectType, found.type_id)
     return SubjectOut(
         id=found.id,
         label=found.label,
         type_slug=object_type.slug if object_type else "",
         deleted=found.deleted_at is not None,
+    ), False
+
+
+def _shown_title(title: str, template_name: str) -> str:
+    """볼 수 없는 주제의 장표 제목 — **저장된 제목**을 가린다(만들 때 안 적으면 「<주제 이름>
+    <틀 이름>」 으로 저장된다). 그 기본 꼴이면 틀 이름은 남긴다(틀 이름은 목록이 따로
+    싣는다). 주제의 이름이 그 뒤에 바뀌었거나 다른 것에 합쳐졌어도 꼴은 같다. 사람이 적은
+    제목에도 주제의 이름이 들 수 있어 통째로 가린다. 검색(`_title_matches`)도 이 꼴로만
+    맞춘다."""
+    if template_name and title.endswith(f" {template_name}"):
+        return f"{HIDDEN_SUBJECT} {template_name}"
+    return HIDDEN_SUBJECT
+
+
+def _subject_hidden(user: User) -> ColumnElement[bool] | None:
+    """장표의 주제를 이 사람이 못 보나 — `_subject_out` 을 질의로(합쳐진 주제는 이긴 쪽을 한
+    걸음 — 장표를 열면 주제가 이긴 쪽으로 바뀌므로 두 걸음 넘는 사슬은 드물다). **이긴 쪽도 또
+    합쳐졌으면 못 보는 것으로 친다** — 끝까지 따라가는 `follow_merges` 와 어긋나면 목록은 가린
+    장표가 검색에는 옛 제목으로 걸려 주제의 이름이 드러났다(0.4.107 재점검). 보이는 주제를
+    가린 제목으로만 찾게 되는 쪽(드묾)이 낫다. 모든 부서를 보는 사람이면 None."""
+    if sees_every_department(user):
+        return None
+    subject = aliased(ObjectInstance)
+    winner = aliased(ObjectInstance)
+    return exists(
+        select(subject.id)
+        .outerjoin(
+            winner,
+            and_(subject.deleted_at.is_not(None), winner.id == subject.merged_into_id),
+        )
+        .where(
+            subject.id == Slide.subject_id,
+            or_(
+                and_(
+                    winner.id.is_(None),
+                    not_(visible_owner_clause(user, subject.owner_workspace_id)),
+                ),
+                and_(
+                    winner.id.is_not(None),
+                    not_(visible_owner_clause(user, winner.owner_workspace_id)),
+                ),
+                and_(winner.deleted_at.is_not(None), winner.merged_into_id.is_not(None)),
+            ),
+        )
+    )
+
+
+def _title_matches(user: User, needle: str) -> ColumnElement[bool]:
+    """제목 검색 — 볼 수 없는 주제의 장표는 **가린 제목**(`_shown_title`)으로만 맞춘다.
+    저장된 제목으로 맞추면 목록에서 가린 주제의 이름이 검색으로 드러난다(「갤럭시」 로 걸리면
+    그 장표의 주제가 갤럭시다)."""
+    plain = Slide.title.icontains(needle, autoescape=True)
+    hidden = _subject_hidden(user)
+    if hidden is None:
+        return plain
+    name = select(SlideTemplate.name).where(SlideTemplate.id == Slide.template_id)
+    template_name = name.scalar_subquery()
+    masked = case(
+        (
+            and_(
+                func.length(template_name) > 0,
+                func.right(Slide.title, func.length(template_name) + 1)
+                == literal(" ") + template_name,
+            ),
+            literal(f"{HIDDEN_SUBJECT} ") + template_name,
+        ),
+        else_=literal(HIDDEN_SUBJECT),
+    )
+    return or_(
+        and_(not_(hidden), plain), and_(hidden, masked.icontains(needle, autoescape=True))
     )
 
 
 def _summary(db: Session, user: User, row: Slide) -> SlideSummaryOut:
     template = db.get(SlideTemplate, row.template_id)
+    template_name = template.name if template else ""
+    subject, hidden = _subject_out(db, user, row.subject_id)
     return SlideSummaryOut(
         id=row.id,
-        title=row.title,
+        title=_shown_title(row.title, template_name) if hidden else row.title,
         template_id=row.template_id,
-        template_name=template.name if template else "",
-        subject=_subject_out(db, user, row.subject_id),
+        template_name=template_name,
+        subject=subject,
         author_name=row.author_name,
         created_at=row.created_at,
         edited_at=row.edited_at,
@@ -580,13 +692,8 @@ def _summary(db: Session, user: User, row: Slide) -> SlideSummaryOut:
 
 def _slide_out(db: Session, user: User, row: Slide) -> SlideOut:
     template = _template(db, row.template_id)
-    subject = services.follow_merges(db, row.subject_id)
-    if subject is not None and not _sees(db, user, subject.id):
-        # 주제 객체의 값으로 그리는 글이다 — 그 객체를 못 보는 사람에게는 안 그린다(pptx 도).
-        raise Forbidden(
-            code("SLIDES", 40),
-            "이 장표의 주제 객체를 볼 수 없습니다 — 그 부서의 사람에게 보여 달라고 하세요.",
-        )
+    # 주제 객체의 값으로 그리는 글이다 — 그 객체를 못 보는 사람에게는 안 그린다(pptx 도).
+    subject = _seen_subject(db, user, row)
     if subject is not None and subject.id != row.subject_id:
         # 주제가 다른 것에 합쳐졌다 — 장표는 이긴 쪽을 주제로 이어 간다(아래에서 커밋한다).
         row.subject_id = subject.id

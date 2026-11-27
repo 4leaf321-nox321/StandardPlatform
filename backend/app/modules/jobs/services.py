@@ -47,21 +47,36 @@ ROWS_SHOWN = 500
 5만 줄 계획을 통째로 실으면 17 ~ 19MB 이고, 화면은 그것을 표 한 장에 다 그리려다 멈췄다
 (2026-10-09). 사람이 읽는 것은 앞의 몇백 줄과 오류이고, 나머지는 파일로 보는 편이 낫다."""
 
-#: 문제 줄로 앞세우는 상태 — 가져오기의 `action`, 사진 일괄 업로드의 `status`.
+#: 문제 줄로 앞세우는 상태 — 가져오기의 `action`, 사진 일괄 업로드의 `status`(「너무 큼」 은
+#: `too_large` 다 — `too_big` 만 적혀 있던 때는 그 줄이 잘려 나갔다).
 _PROBLEM = frozenset(
-    {"error", "not_found", "ambiguous", "not_image", "too_big", "forbidden", "bad_entry"}
+    {
+        "error",
+        "not_found",
+        "ambiguous",
+        "not_image",
+        "too_big",
+        "too_large",
+        "forbidden",
+        "bad_entry",
+    }
 )
 #: 「아무 일도 없다」 — 맨 뒤로.
 _QUIET = frozenset({"unchanged", "skip"})
 
 
 def _rank(row: Any) -> int:
+    """자를 때의 차례 — 문제 줄, **경고가 있는 줄**(`warnings` — 문서 올리기의 빈 본문 · 그림
+    꼴로 못 읽은 자리), 나머지, 「아무 일도 없다」. 경고 줄을 나머지와 같게 두면 1천 건 계획의
+    뒤쪽 경고가 잘려, 계획을 읽는 쪽(키트 · AI)이 그것을 못 봤다(2026-11-27 점검)."""
     if not isinstance(row, dict):
-        return 1
+        return 2
     state = row.get("action") or row.get("status")
     if state in _PROBLEM or row.get("error"):
         return 0
-    return 2 if state in _QUIET else 1
+    if row.get("warnings"):
+        return 1
+    return 3 if state in _QUIET else 2
 
 
 def trim_rows(result: Any, keep: int | None = None) -> Any:

@@ -366,7 +366,9 @@ function OrphanFiles() {
       <h2 className="text-base font-semibold">첨부 저장소</h2>
       <p className="text-muted-foreground text-sm">
         첨부를 지우면 기록만 지우고 파일은 남깁니다(같은 파일을 다른 첨부가 쓸 수 있다). 아무 첨부도
-        안 쓰는 파일은 워커가 하루 한 번 지웁니다 — 올린 지 하루가 안 된 것은 남깁니다.
+        안 쓰는 파일은 워커가 하루 한 번 지웁니다 — 올린 지 하루가 안 된 것은 남깁니다. 저장소
+        파일 대부분을 이 DB 가 모르면 다른 DB 의 저장소일 수 있어 자동 정리를 멈추고 관리자에게
+        알립니다.
       </p>
       <Button type="button" variant="outline" size="sm" disabled={busy} onClick={count}>
         고아 파일 지금 세어 보기

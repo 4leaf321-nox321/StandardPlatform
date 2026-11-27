@@ -71,7 +71,10 @@ def too_many_gone(gone: int, held: int) -> bool:
     비율(`GONE_LIMIT`)은 바닥(`GONE_FLOOR`) 위에서만 본다. 그러나 **가진 것이 전부 안 왔으면**
     작은 소스여도 멈춘다 — 바깥이 한 번 빈 응답을 주면(필터 · 권한이 바뀜) 10건 이하인 소스는
     바닥에 걸려 전부가 사용 중지 · 끊김 · 「내려감」 이 됐다. 정말 다 지워진 것이면 사람이
-    화면에서 처리한다."""
+    화면에서 처리한다.
+
+    `held` 는 **이번에 안 오면 표시될 수 있는 것**만 센다 — 이미 표시된 것(「내려감」 · 사용
+    중지)을 넣으면 「전부」 가 「전부보다 하나 적음」 이 되어 이 규칙을 비껴 간다."""
     if gone <= 0:
         return False
     if gone >= held:
@@ -612,12 +615,14 @@ def reconcile(
     came = {row.id for row, norm in pairs if norm in seen}
     held = list({row.id: row for row, _norm in pairs}.values())
     if full:
-        candidates = sum(
-            1
-            for row in held
-            if row.id not in came and (row.properties or {}).get("origin_state") != ORIGIN_GONE
-        )
-        if too_many_gone(candidates, len(held)):
+        # **아직 게시 중인 것과 견준다** — 이미 「내려감」 인 것까지 가진 것으로 세면, 8건 중
+        # 1건이 내려간 뒤 바깥이 한 번 빈 응답을 주었을 때 「7 / 8」 이라 「전부 안 옴」 이
+        # 아니게 되어 남은 7건이 다 「내려감」 이 됐다(멈춤 규칙을 비껴 감, 2026-11-27).
+        live = [
+            row for row in held if (row.properties or {}).get("origin_state") != ORIGIN_GONE
+        ]
+        candidates = sum(1 for row in live if row.id not in came)
+        if too_many_gone(candidates, len(live)):
             # **표시하지 않고 멈춘다** — 부르는 쪽이 실패로 적고 사람에게 알린다.
             full = False
             gone = -candidates

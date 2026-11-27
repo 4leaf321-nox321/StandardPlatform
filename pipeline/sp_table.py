@@ -1122,11 +1122,41 @@ def _mapping_notes(mapping: Mapping, mapping_path: Path, digest: str) -> str:
     return "\n".join(lines)
 
 
+def _work_folder(path: Path) -> Path | None:
+    """그 파일이 든 작업 폴더(`work.json` 이 있는 곳) — 없으면 None."""
+    for parent in path.resolve().parents:
+        if (parent / sp_work.WORK).is_file():
+            return parent
+    return None
+
+
 def convert(
-    mapping_path: Path, source_path: Path, run: Path, *, server: str = "", token: str = ""
+    mapping_path: Path,
+    source_path: Path,
+    run: Path,
+    *,
+    server: str = "",
+    token: str = "",
+    root: Path | None = None,
 ) -> tuple[bool, str]:
     """실행 폴더를 만든다. (미해결이 없나, 보고서). 참조 대조(`match`)가 있으면 식별자를
-    플랫폼(`server` · `token`)이나 `@파일`에서 받는다."""
+    플랫폼(`server` · `token`)이나 `@파일`에서 받는다.
+
+    대응 파일이 가리키는 정의(`ontology`) · 식별자 파일(`@파일`)은 **작업 폴더 안의 것만**
+    읽는다(`root` — 비우면 대응 파일이 든 작업 폴더, 작업 폴더가 아니면 보지 않는다). 대응
+    파일은 AI 가 쓰는 자리라, 거기 `../../` 를 적으면 작업 폴더 밖의 파일을 읽어 실행 폴더에
+    옮겨 적었다(0.4.107 점검)."""
+    base = root if root is not None else _work_folder(mapping_path)
+
+    def within(relative: str) -> Path:
+        if base is None:
+            return (mapping_path.parent / relative).resolve()
+        folder = base.resolve()
+        target = (mapping_path.parent / relative).resolve()
+        if folder not in target.parents:
+            raise Stop(f"대응 파일이 작업 폴더 밖의 파일을 가리킵니다: {relative}")
+        return sp_work.inside(folder, target.relative_to(folder).as_posix())
+
     spec = _load_mapping(mapping_path)
     source = spec.get("source") or {}
     table = read_table(
@@ -1142,9 +1172,7 @@ def convert(
     def keys(target: str) -> set[str]:
         if target not in cache:
             if target.startswith("@"):
-                cache[target] = pipeline.read_keys_file(
-                    (mapping_path.parent / target[1:]).resolve()
-                )
+                cache[target] = pipeline.read_keys_file(within(target[1:]))
             elif not server or not token:
                 raise Stop(
                     f"참조 대조({target})에 플랫폼 식별자가 필요합니다 — SP_SERVER · SP_TOKEN"
@@ -1157,7 +1185,7 @@ def convert(
     _ask_platform(mapping, server, token)
     ontology: dict[str, Any] | None = None
     if spec.get("ontology"):
-        ontology_path = (mapping_path.parent / str(spec["ontology"])).resolve()
+        ontology_path = within(str(spec["ontology"]))
         loaded = _load_mapping(ontology_path)
         ontology = loaded
 

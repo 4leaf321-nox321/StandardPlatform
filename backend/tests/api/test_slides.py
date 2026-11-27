@@ -1027,9 +1027,176 @@ def test_볼_수_없는_부서의_주제는_장표가_이름도_값도_내지_�
     assert listed.status_code == 200, listed.text
     shown = next(one for one in listed.json()["items"] if one["id"] == made["id"])
     assert shown["subject"]["label"] == "(볼 수 없는 객체)", shown
+    # 기본 제목(「A <틀 이름>」)도 주제의 이름이다 — 틀 이름만 남긴다.
+    assert shown["title"] == f"(볼 수 없는 주제) {template['name']}", shown
     one = client.get(f"/api/slides/{made['id']}", headers=headers)
     assert one.status_code == 403, one.text
+    # 「쓰인 장표」 는 없는 객체와 같게 빈 목록 — 404 이던 때는 원 표를 비추는 객체(부서 · 계정
+    # 화면, 객체 표에 행이 없다)마다 화면이 오류를 남겼다.
     used = client.get(f"/api/slides/used-in/{subject}", headers=headers)
-    assert used.status_code == 404, used.text
+    assert used.status_code == 200 and used.json() == [], used.text
+    missing = client.get(f"/api/slides/used-in/{uuid.uuid4()}", headers=headers)
+    assert missing.status_code == 200 and missing.json() == [], missing.text
     mine = client.get(f"/api/slides/{made['id']}", headers=admin.headers)
     assert mine.status_code == 200 and mine.json()["subject"]["label"] == "A", mine.text
+
+
+@pytest.mark.usefixtures("department_scope")
+def test_볼_수_없는_주제의_장표는_검색도_가린_제목으로만_맞춘다(
+    client: TestClient, admin: Signed, db: Session, world: dict[str, Any]
+) -> None:
+    """목록은 주제 칸을 가렸는데 제목(기본 「<주제 이름> <틀 이름>」)과 그 검색(`q`)이 주제의
+    이름을 그대로 냈다(2026-11-27 점검)."""
+    from app.modules.workspaces.models import Workspace
+
+    template = _made_template(client, admin, world)
+    label = _uniq("갤럭시")
+    subject = _make_object(client, admin, world["model"], label=label)["id"]
+    default = _slide(client, admin, template, subject)
+    assert default["title"] == f"{label} {template['name']}", default
+    custom = client.post(
+        "/api/slides",
+        json={
+            "template_id": template["id"],
+            "subject_id": subject,
+            "title": f"{label} 분기 정리",
+        },
+        headers=admin.headers,
+    )
+    assert custom.status_code == 201, custom.text
+    team = Workspace(slug=f"team-{uuid.uuid4().hex[:8]}", name="다른 팀")
+    db.add(team)
+    db.commit()
+    outsider = _make_user(db, team, label="outsider", is_system_admin=False, role="member")
+    headers = {"Authorization": f"Bearer {_login(client, outsider.email)}"}
+
+    def titles(q: str, who: dict[str, str]) -> dict[str, str]:
+        got = client.get(
+            "/api/slides", params={"q": q, "template_id": template["id"]}, headers=who
+        )
+        assert got.status_code == 200, got.text
+        return {one["id"]: one["title"] for one in got.json()["items"]}
+
+    hidden = f"(볼 수 없는 주제) {template['name']}"
+    assert titles("", headers) == {
+        default["id"]: hidden,
+        custom.json()["id"]: "(볼 수 없는 주제)",
+    }
+    assert titles(label, headers) == {}, "가린 주제의 이름으로는 안 걸린다"
+    assert titles("볼 수 없는 주제", headers).keys() == {default["id"], custom.json()["id"]}
+    assert titles(template["name"], headers) == {default["id"]: hidden}
+    # 볼 수 있는 사람에게는 그대로다.
+    assert titles(label, admin.headers).keys() == {default["id"], custom.json()["id"]}
+    assert titles("볼 수 없는 주제", admin.headers) == {}
+
+
+@pytest.mark.usefixtures("department_scope")
+def test_두_번_합쳐진_주제도_검색이_옛_제목으로_걸리지_않는다(
+    client: TestClient, admin: Signed, db: Session, world: dict[str, Any]
+) -> None:
+    """목록은 합침을 끝까지 따라가 가렸는데(A → B → C, C 를 못 봄) 검색의 질의는 한 걸음(B)만
+    봐 옛 제목(A 의 이름)으로 걸렸다 — 주제의 이름이 드러났다(2026-11-27 재점검)."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.workspaces.models import Workspace
+
+    template = _made_template(client, admin, world)
+    label = _uniq("폴드")
+    first = _make_object(client, admin, world["model"], label=label)["id"]
+    middle = _make_object(client, admin, world["model"], label=_uniq("중간"))["id"]
+    last = _make_object(client, admin, world["model"], label=_uniq("끝"))["id"]
+    slide = _slide(client, admin, template, first)
+    team = Workspace(slug=f"team-{uuid.uuid4().hex[:8]}", name="다른 팀")
+    db.add(team)
+    db.commit()
+    now = datetime.now(UTC)
+    # A → B(그 팀의 것 — 보인다) → C(못 본다).
+    db.execute(
+        update(ObjectInstance)
+        .where(ObjectInstance.id == uuid.UUID(first))
+        .values(deleted_at=now, merged_into_id=uuid.UUID(middle))
+    )
+    db.execute(
+        update(ObjectInstance)
+        .where(ObjectInstance.id == uuid.UUID(middle))
+        .values(deleted_at=now, merged_into_id=uuid.UUID(last), owner_workspace_id=team.id)
+    )
+    db.commit()
+    outsider = _make_user(db, team, label="outsider", is_system_admin=False, role="member")
+    headers = {"Authorization": f"Bearer {_login(client, outsider.email)}"}
+
+    def titles(q: str) -> dict[str, str]:
+        got = client.get(
+            "/api/slides", params={"q": q, "template_id": template["id"]}, headers=headers
+        )
+        assert got.status_code == 200, got.text
+        return {one["id"]: one["title"] for one in got.json()["items"]}
+
+    assert titles("") == {slide["id"]: f"(볼 수 없는 주제) {template['name']}"}
+    assert titles(label) == {}, "끝까지 따라가면 못 보는 주제다 — 옛 이름으로 안 걸린다"
+
+
+@pytest.mark.usefixtures("department_scope")
+def test_주제를_못_보게_된_작성자는_후보도_저장도_막히고_아무것도_남지_않는다(
+    client: TestClient, admin: Signed, member: Signed, db: Session, world: dict[str, Any]
+) -> None:
+    """선택 영역의 후보는 주제를 안 봤고, 저장은 커밋한 뒤에 403 을 냈다 — 거절된 요청의 글이
+    남았다(2026-11-27 점검)."""
+    from sqlalchemy import update
+
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.slides.models import Slide
+    from app.modules.workspaces.models import Workspace
+    from app.shared.errors import code
+
+    body = _template(world)
+    body["areas"][2] = {
+        "key": "risks",
+        "title": "잠재리스크",
+        "row": 1,
+        "col": 0,
+        "type_slug": world["risk"],
+        "fields": ["severity"],
+        "fill": "pick",
+    }
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    subject = _make_object(client, admin, world["model"], label=_uniq("모델"))["id"]
+    slide = _slide(client, member, made.json(), subject)
+    seen = client.get(
+        f"/api/slides/{slide['id']}/areas/risks/candidates", headers=member.headers
+    )
+    assert seen.status_code == 200, seen.text
+
+    # 주제가 member 가 아닌 부서로 옮겨졌다.
+    team = Workspace(slug=f"team-{uuid.uuid4().hex[:8]}", name="다른 팀")
+    db.add(team)
+    db.commit()
+    db.execute(
+        update(ObjectInstance)
+        .where(ObjectInstance.id == uuid.UUID(subject))
+        .values(owner_workspace_id=team.id)
+    )
+    db.commit()
+
+    candidates = client.get(
+        f"/api/slides/{slide['id']}/areas/risks/candidates", headers=member.headers
+    )
+    assert candidates.status_code == 403, candidates.text
+    assert candidates.json()["error"]["code"] == code("SLIDES", 40)
+    patched = client.patch(
+        f"/api/slides/{slide['id']}",
+        json={"title": "바뀐 제목", "texts": {"opinion": "거절된 의견"}},
+        headers=member.headers,
+    )
+    assert patched.status_code == 403, patched.text
+    db.expire_all()
+    row = db.get(Slide, uuid.UUID(slide["id"]))
+    assert row is not None
+    assert row.title == slide["title"] and "opinion" not in (row.content or {}), (
+        row.title,
+        row.content,
+    )

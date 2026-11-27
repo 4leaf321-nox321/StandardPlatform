@@ -437,6 +437,62 @@ def test_값을_잃을_수_있는_변경은_정의_검토_대기로_남기고_�
     assert maintenance_counts(client, admin).get("core_subscription_held", 0) == held_before
 
 
+def test_플랫폼_칸과_같은_키의_새_속성은_그_속성만_남기고_나머지는_들어간다(
+    client: TestClient, admin: Signed, world: tuple[str, Hub]
+) -> None:
+    """허브가 예전부터 쓰던 `status` 칸 하나의 경고로 묶음 전체가 정의 검토 대기에 걸려, 같은
+    때 허브에 생긴 다른 칸까지 자동으로 들어오지 않았다(2026-11-27 점검)."""
+    tag, _ = world
+    n, twin = _names(tag, "hub"), _names(tag, "twin")
+    made = _subscribed(client, admin, twin["group"])
+
+    # 허브: 플랫폼 칸과 같은 키의 칸(지금은 새로 만들 수 없다 — 그 전에 만든 정의)과 보통 칸.
+    clock_settled()
+    with SessionLocal() as db:
+        part_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == n["part"]))
+        assert part_id is not None
+        db.add(
+            PropertyDef(
+                owner_kind="type",
+                owner_id=part_id,
+                key="status",
+                label="상태",
+                data_type="text",
+            )
+        )
+        db.commit()
+    assert (
+        client.post(
+            f"/api/ontology/types/{n['part']}/properties",
+            json={"key": "memo", "label": "비고", "data_type": "text"},
+            headers=admin.headers,
+        ).status_code
+        == 201
+    )
+
+    got = _check(client, admin, made["id"])
+    assert got["definitions_applied"] > 0, got
+    assert _property(twin["part"], "memo") is not None, "나머지는 들어갔다"
+    assert _property(twin["part"], "status") is None
+    assert any("이 속성만 정의 검토 대기로" in one for one in got["notes"]), got["notes"]
+    shown = _one(client, admin, made["id"])
+    assert shown["last_status"] == "held"
+    lines = shown["held"]["lines"] if shown["held"] else []
+    assert any(f"{twin['part']}.status" in one and "플랫폼 칸" in one for one in lines), lines
+
+    # 검토하고 적용하면 그 칸도 들어간다.
+    started = client.post(
+        f"/api/datasources/core-subscriptions/{made['id']}/held/apply",
+        json={"mark": shown["held"]["mark"]},
+        headers=admin.headers,
+    )
+    assert started.status_code == 202, started.text
+    done = finish_job(client, admin, started.json())
+    assert done["status"] == "done", done
+    assert _property(twin["part"], "status") is not None
+    assert _one(client, admin, made["id"])["held"] is None
+
+
 def test_공개를_해제한_타입은_수신만_멈추고_받은_자료는_남는다(
     client: TestClient, admin: Signed, world: tuple[str, Hub]
 ) -> None:

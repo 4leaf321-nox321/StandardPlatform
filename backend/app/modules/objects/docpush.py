@@ -20,12 +20,28 @@
     update      판이 하나 오른다
     unchanged   본문 · 그림이 지금 것과 같다 — 쓰지 않는다
     error       못 쓴다(객체 · 문서 칸 · 권한 · 원천 잠금 · 판이 다름 · 없는 그림 · 이미지
-    아님)
+    아님 · 너무 큼 · NUL 문자)
 
 **한 줄이라도 오류면 적용하지 않는다**(일괄 입력과 같다) — 문서 569건 중 몇 건의 판이 그 사이
 올랐으면, 그 줄을 빼거나 판을 맞춰 다시 올린다. 적용은 **계획과 같을 때만**(지문 — 판 · 본문 ·
 그림). 그림은 같은 문서 칸에 **같은 내용(sha256)이 이미 붙어 있으면 그것을 쓴다** — 다시 올려도
-첨부가 늘지 않는다. 새 그림은 적용할 때 붙는다(계획은 아무것도 바꾸지 않는다).
+첨부가 늘지 않는다. 한 문서 안에서 같은 그림을 여러 자리가 가리켜도(`./img/a.png` 와
+`img/a.png`, 이름만 다른 같은 파일) 한 번만 붙는다. 새 그림은 적용할 때 붙는다(계획은 아무것도
+바꾸지 않는다).
+
+줄의 `warnings` 는 막지 않지만 사람이 읽고 적용해야 하는 것이다 — 지금 본문을 빈 본문으로
+바꿈, 그림 꼴로 읽지 못해 글자 그대로 남는 그림 자리(따옴표 제목 · 경로의 빈칸 · 네 자리 폭 ·
+캡션의 대괄호 · `/` 로 시작하는 경로). 작업 결과의 줄을 자를 때 오류 다음으로 앞세운다
+(`jobs.services.trim_rows`).
+
+## zip 을 믿지 않는다 — 항목마다 상한
+
+사진 일괄 업로드의 검사(`photos._open` — 항목 수 · 풀린 크기의 합)에 더해 **항목마다** 머리에
+적힌 크기를 풀기 전에 보고, 머리가 거짓이어도 상한까지만 푼다(`_read`) — 목록
+`MANIFEST_MAX_BYTES`, 마크다운 `BODY_MAX_BYTES`, 그림 `files.services.max_bytes()`. 전에는
+목록 · 마크다운을 상한 없이 통째로 읽었다 — 1MB zip 에 든 1GB 목록이 워커의 메모리를 다 썼고,
+작업은 다시 돌아 같은 일을 되풀이했다(2026-11-27 점검). 본문은 계획 동안 한 편씩만 메모리에
+두고 적용할 때 zip 에서 다시 읽는다.
 
 ## 적용의 답 — 대조할 수 있게
 
@@ -72,12 +88,38 @@ MANIFEST = "manifest.json"
 FORMAT = "sp-documents/1"
 #: 한 번에 올리는 문서 수 — 이보다 많으면 나눈다(키트가 나눠 올린다).
 MAX_DOCUMENTS = 2000
+#: 목록(`manifest.json`)의 상한(바이트) — 문서 2천 건이면 1MB 남짓이다(경로 · 메모가
+#: 한글이어도).
+MANIFEST_MAX_BYTES = 4 * 1024 * 1024
+#: 마크다운 한 편의 상한(바이트) — 본문 상한(글자)의 UTF-8 최대(한 글자 4바이트)와 BOM. 이것을
+#: 넘는 파일은 글자로 세도 본문 상한을 넘는다(줄바꿈 `\r\n` 두 바이트도 한 글자가 될 뿐이다).
+BODY_MAX_BYTES = object_documents.MAX_CHARS * 4 + 3
 #: 판의 「어디서」 — 화면 · MCP 의 쓰기와 가른다.
 VIA = "문서 올리기"
-#: 본문 안의 그림 — `![캡션](경로?w=폭)`. 경로에 빈칸 · 괄호는 없다(키트가 그렇게 쓴다).
-IMAGE = re.compile(r"(?P<head>!\[[^\]\n]*\]\()(?P<target>[^)\s?]+)(?P<query>\?w=\d{1,3})?\)")
+#: 본문 안의 그림 — `![캡션](경로?w=폭)`. 캡션에 대괄호, 경로에 빈칸 · 괄호 · 대괄호가
+#: 없다(키트가 그렇게 쓴다). 키트(`sp_docpush.IMAGE`)와 **같은 꼴**이어야 대조(sha256)가
+#: 맞는다.
+#: **빼는 글자에 `(` · `[` 가 있어야 한다** — 전에는 경로가 `)` · 빈칸만 빼서, `![](` 가
+#: 이어진 본문에서 경로가 뒤의 `![](` 를 줄 끝까지 삼켰다가 되물렀다. 본문 길이의 제곱으로
+#: 느려졌다(2만 자 2초 · 4만 자 8초 · 8만 자 31초 — 본문 상한 100만 자면 워커가 한 시간 넘게
+#: 멈춘다, 2026-11-27 점검).
+IMAGE = re.compile(
+    r"(?P<head>!\[[^\[\]\n]*\]\()(?P<target>[^()\[\]\s?]+)(?P<query>\?w=\d{1,3})?\)"
+)
 #: 이미 플랫폼의 것 · 바깥 주소 — 올리지 않는다.
 REMOTE = ("photo:", "http://", "https://", "data:", "/", "#", "mailto:")
+#: 그림 자리처럼 보이는 것의 여는 쪽 — `](` 뒤의 대상(빈칸 · 닫는 괄호까지). `IMAGE` 가
+#: 그림으로 읽지 못한 자리를 찾을 때만 쓴다(`_leftover`). 대상은 길이를 묶는다 — 묶지 않으면
+#: 한 줄에 이어진 `](` 가 줄 끝까지 다시 읽힌다.
+_OPENING = re.compile(r"\]\(\s*<?(?P<target>[^\s)>]{0,300})")
+#: 주소의 앞머리(`https:` · `photo:` · `data:` · `mailto:`) — 한 글자(`C:`)는 Windows 의
+#: 드라이브다.
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]+:")
+#: `](` 앞에서 `![` 를 찾는 거리 — 캡션이 이보다 길면 그림 자리로 안 본다(경고일 뿐이다).
+_CAPTION_REACH = 300
+#: 경고에 싣는 자리의 보기 수 · 길이.
+_SHOWN = 3
+_SNIPPET = 60
 #: 진행률을 이만큼마다.
 PROGRESS_EVERY = 20
 
@@ -89,10 +131,11 @@ def digest(body: str) -> str:
 
 @dataclass
 class Image:
-    """본문이 가리키는 그림 하나."""
+    """본문이 가리키는 그림 하나 — **내용(sha256)마다 하나**다. 같은 그림을 여러 자리가
+    가리켜도(경로의 `./` · 이름만 다른 같은 파일) 한 번만 싣고 한 번만 붙인다."""
 
     path: str
-    """zip 안의 경로(마크다운 파일의 폴더에서 풀었다)."""
+    """zip 안의 경로(마크다운 파일의 폴더에서 풀었다) — 그 내용을 처음 가리킨 자리의 것."""
     sha256: str
     size: int
     attachment_id: str | None = None
@@ -123,21 +166,46 @@ class Row:
     body_digest: str = ""
     """그림 자리를 경로 그대로 둔 본문의 sha256 — 지문에 쓴다."""
     images: list[Image] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    """막지 않지만 읽고 적용할 것 — 빈 본문으로 바꿈 · 그림 꼴로 읽지 못한 그림 자리. 지문에는
+    넣지 않는다(본문 · 판이 같으면 같은 경고다)."""
 
 
 @dataclass
 class _Planned:
     row: Row
-    body: str
     note: str
+    entry: photos._Entry | None = None
+    """마크다운 — 본문은 계획 동안 한 편씩만 들고, 적용할 때 여기서 다시 읽는다."""
     target: ObjectInstance | None = None
-    entries: dict[str, photos._Entry] = field(default_factory=dict)
+    shas: dict[str, str] = field(default_factory=dict)
+    """본문의 그림 자리(쓴 그대로) → 그림의 sha256."""
+    sources: dict[str, photos._Entry] = field(default_factory=dict)
+    """그림의 sha256 → zip 항목(처음 가리킨 것)."""
+    names: dict[str, str] = field(default_factory=dict)
+    """그림의 sha256 → 붙일 때의 파일 이름."""
 
 
 def _error(row: Row, message: str) -> Row:
     row.action = "error"
     row.message = message
     return row
+
+
+def _mb(size: int) -> str:
+    return f"{size / (1024 * 1024):,.1f}MB"
+
+
+def _read(archive: zipfile.ZipFile, entry: photos._Entry, cap: int) -> bytes | None:
+    """항목의 바이트 — **`cap` 바이트까지만** 푼다. 깨졌으면(또는 머리에 적힌 것보다 길게
+    풀리면) None. 머리에 적힌 크기(`file_size`)가 `cap` 을 넘는지는 부르는 쪽이 먼저 보고 그
+    까닭을 말한다 — 여기서는 머리가 거짓이어도 그 이상을 메모리에 올리지 않는다."""
+    try:
+        with archive.open(entry.info) as stream:
+            data = stream.read(cap + 1)
+    except photos._BROKEN:
+        return None
+    return data if len(data) <= cap else None
 
 
 def _manifest(archive: zipfile.ZipFile, entries: dict[str, photos._Entry]) -> list[Any]:
@@ -148,9 +216,22 @@ def _manifest(archive: zipfile.ZipFile, entries: dict[str, photos._Entry]) -> li
             f"zip 맨 위에 {MANIFEST} 가 없습니다 — 정제 키트의 document_push 가 만든 zip 을 "
             "올리세요.",
         )
-    raw = photos._read(archive, entry)
+    if entry.info.file_size > MANIFEST_MAX_BYTES:
+        raise Conflict(
+            code("OBJECTS", 161),
+            f"{MANIFEST} 가 {_mb(entry.info.file_size)} 입니다 — 목록은 "
+            f"{_mb(MANIFEST_MAX_BYTES)} 까지(문서 {MAX_DOCUMENTS:,}건이어도 1MB 남짓)입니다. "
+            "정제 키트의 document_push 가 만든 zip 을 올리세요.",
+            details={"bytes": entry.info.file_size, "max_bytes": MANIFEST_MAX_BYTES},
+        )
+    raw = _read(archive, entry, MANIFEST_MAX_BYTES)
+    if raw is None:
+        raise Conflict(
+            code("OBJECTS", 161),
+            f"zip 의 {MANIFEST} 를 읽을 수 없습니다 — 압축이 깨졌거나 적힌 크기와 다릅니다.",
+        )
     try:
-        body = json.loads((raw or b"").decode("utf-8-sig"))
+        body = json.loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, ValueError):
         raise Conflict(
             code("OBJECTS", 161), f"{MANIFEST} 를 JSON 으로 읽을 수 없습니다."
@@ -171,6 +252,32 @@ def _manifest(archive: zipfile.ZipFile, entries: dict[str, photos._Entry]) -> li
     return documents
 
 
+def _body(archive: zipfile.ZipFile, entry: photos._Entry, path: str) -> tuple[str | None, str]:
+    """마크다운 한 편 — (본문, 못 읽은 까닭). 상한을 넘으면 풀지 않는다."""
+    size = entry.info.file_size
+    if size > BODY_MAX_BYTES:
+        return None, (
+            f"마크다운이 {_mb(size)} 입니다 — 한 편에 "
+            f"{object_documents.MAX_CHARS:,}자까지입니다: {path}"
+        )
+    raw = _read(archive, entry, BODY_MAX_BYTES)
+    if raw is None:
+        return None, f"zip 의 그 항목이 깨졌습니다: {path}"
+    try:
+        return raw.decode("utf-8-sig").replace("\r\n", "\n"), ""
+    except UnicodeDecodeError:
+        return None, f"UTF-8 로 읽을 수 없는 마크다운입니다: {path}"
+
+
+def _nul(text: str) -> str:
+    """NUL 문자(`\\0`)가 있으면 그 자리(몇째 줄) — PostgreSQL 의 글자 칸은 그 글자를 저장하지
+    못한다. 계획을 지나 적용에서 DB 오류로 작업 전체가 실패했다(2026-11-27 점검)."""
+    at = text.find("\x00")
+    if at < 0:
+        return ""
+    return f"{text.count(chr(10), 0, at) + 1}째 줄"
+
+
 def _plan(
     db: Session,
     user: User,
@@ -189,6 +296,7 @@ def _plan(
     types: dict[str, ObjectType | None] = {}
     defs: dict[str, dict[str, PropertyDef]] = {}
     seen: dict[tuple[str, str], int] = {}
+    pictures: dict[str, tuple[str, int] | str] = {}
     out: list[_Planned] = []
     for index, raw in enumerate(documents, start=1):
         if index % PROGRESS_EVERY == 0:
@@ -199,10 +307,14 @@ def _plan(
         path = str(item.get("path") or "")
         row = Row(index, "error", path or f"{index}번째", f"{slug}:{prop_key}", None)
         row.type_slug, row.property, row.path = slug, prop_key, path
-        planned = _Planned(row, "", str(item.get("note") or "")[:200])
+        planned = _Planned(row, str(item.get("note") or "")[:200])
         out.append(planned)
         if not isinstance(raw, dict):
             _error(row, "목록의 줄이 객체({...})가 아닙니다")
+            continue
+        if _nul(slug + prop_key + path + planned.note):
+            # 찾는 말(slug · 키 · 경로)에 들면 DB 가 질의를 거절해 작업 전체가 실패한다.
+            _error(row, "목록의 줄에 NUL 문자(\\0)가 있습니다 — 그 글자를 빼고 다시 올립니다")
             continue
         base = item.get("base_revision")
         if base is not None and (
@@ -266,14 +378,10 @@ def _plan(
         if entry is None:
             _error(row, f"zip 에 그 마크다운이 없습니다: {path}")
             continue
-        raw_body = photos._read(archive, entry)
-        try:
-            body = (raw_body or b"").decode("utf-8-sig").replace("\r\n", "\n")
-        except UnicodeDecodeError:
-            _error(row, f"UTF-8 로 읽을 수 없는 마크다운입니다: {path}")
-            continue
-        if raw_body is None:
-            _error(row, f"zip 의 그 항목이 깨졌습니다: {path}")
+        planned.entry = entry
+        body, problem = _body(archive, entry, path)
+        if body is None:
+            _error(row, problem)
             continue
         if len(body) > object_documents.MAX_CHARS:
             _error(
@@ -281,7 +389,14 @@ def _plan(
                 f"본문이 {len(body):,}자입니다 — 한 편에 {object_documents.MAX_CHARS:,}자까지",
             )
             continue
-        planned.body = body
+        where = _nul(body)
+        if where:
+            _error(
+                row,
+                f"본문에 NUL 문자(\\0)가 있습니다({where}) — 저장할 수 없는 글자라 빼고 다시 "
+                "올립니다",
+            )
+            continue
         current = db.scalar(
             select(ObjectDocument).where(
                 ObjectDocument.object_id == object_id, ObjectDocument.key == prop_key
@@ -298,11 +413,18 @@ def _plan(
             continue
         if base is None:
             row.base_revision = now_revision
-        problem = _images(db, archive, entries, planned, object_id, prop_key)
+        problem = _images(db, archive, entries, planned, body, object_id, prop_key, pictures)
         if problem:
             _error(row, problem)
             continue
-        final = _final(planned)
+        final = _final(planned, body)
+        if len(final) > object_documents.MAX_CHARS:
+            _error(
+                row,
+                f"그림 자리를 첨부로 바꾸면 {len(final):,}자입니다 — 한 편에 "
+                f"{object_documents.MAX_CHARS:,}자까지",
+            )
+            continue
         row.chars = len(final)
         row.body_digest = digest(body)
         news = sum(1 for one in row.images if one.new)
@@ -322,6 +444,20 @@ def _plan(
             )
         if row.action == "update":
             row.changes.append(f"판 {now_revision} → {now_revision + 1}")
+            if current is not None and current.body.strip() and not final.strip():
+                row.warnings.append(
+                    f"지금 본문 {current.chars:,}자가 빈 본문이 됩니다 — 비우려던 것이 아니면 "
+                    "적용하지 마세요(적용해도 지금 본문은 판 이력에 남아 되돌릴 수 있습니다)"
+                )
+        left = _leftover(final)
+        if left:
+            count, shown = left
+            row.warnings.append(
+                f"그림 꼴로 읽지 않은 자리 {count:,}곳 — 첨부하지 않고 글자 그대로 둡니다: "
+                + " · ".join(f"「{one}」" for one in shown)
+                + ". 그림은 ![캡션](상대 경로) 또는 ![캡션](상대 경로?w=폭) 꼴입니다(경로에 "
+                "빈칸 · 괄호 · 따옴표 제목 없이, 폭은 세 자리까지)"
+            )
     progress(stage, len(documents), len(documents))
     return out
 
@@ -331,10 +467,13 @@ def _images(
     archive: zipfile.ZipFile,
     entries: dict[str, photos._Entry],
     planned: _Planned,
+    body: str,
     object_id: uuid.UUID,
     prop_key: str,
+    pictures: dict[str, tuple[str, int] | str],
 ) -> str:
-    """본문이 가리키는 그림 — 없는 파일 · 이미지 아님 · 너무 큼이면 그 까닭."""
+    """본문이 가리키는 그림 — 없는 파일 · 이미지 아님 · 너무 큼이면 그 까닭. `pictures` 는 zip
+    항목 → (sha256, 크기) 또는 까닭 — 여러 문서가 같은 그림을 가리켜도 한 번만 푼다."""
     folder = posixpath.dirname(unicodedata.normalize("NFC", planned.row.path))
     existing = {
         one.sha256: one
@@ -348,10 +487,11 @@ def _images(
         )
     }
     found: dict[str, Image] = {}
-    for hit in IMAGE.finditer(planned.body):
+    for hit in IMAGE.finditer(body):
         target = hit.group("target")
-        if target.lower().startswith(REMOTE) or target in found:
+        if target.lower().startswith(REMOTE) or target in planned.shas:
             continue
+        # `./img/a.png` 와 `img/a.png` 는 같은 항목이다 — 경로를 풀어 zip 의 이름으로 본다.
         path = unicodedata.normalize(
             "NFC", posixpath.normpath(posixpath.join(folder, unquote(target)))
         )
@@ -360,43 +500,88 @@ def _images(
         entry = entries.get(path)
         if entry is None:
             return f"zip 에 그 그림이 없습니다: {target}"
-        if entry.info.file_size > files_services.max_bytes():
-            return f"그림이 너무 큽니다: {target}"
-        data = photos._read(archive, entry)
-        if data is None:
-            return f"zip 의 그 그림이 깨졌습니다: {target}"
-        if images.inspect(data) is None:
-            return f"이미지(PNG · JPEG · GIF · WebP)가 아닙니다: {target}"
-        sha = hashlib.sha256(data).hexdigest()
+        known = pictures.get(entry.name)
+        if known is None:
+            known = pictures[entry.name] = _picture(archive, entry)
+        if isinstance(known, str):
+            return f"{known}: {target}"
+        sha, size = known
+        planned.shas[target] = sha
+        if sha in found:
+            continue  # 같은 그림을 다른 자리가 먼저 가리켰다 — 한 번만 붙인다.
         attached = existing.get(sha)
-        found[target] = Image(
+        found[sha] = Image(
             entry.name,
             sha,
-            len(data),
+            size,
             attachment_id=str(attached.id) if attached is not None else None,
             new=attached is None,
         )
-        planned.entries[target] = entry
+        planned.sources[sha] = entry
+        planned.names[sha] = posixpath.basename(target) or "그림"
     planned.row.images = list(found.values())
     return ""
 
 
-def _final(planned: _Planned) -> str:
+def _picture(archive: zipfile.ZipFile, entry: photos._Entry) -> tuple[str, int] | str:
+    """그림 항목 하나 — (sha256, 크기) 또는 못 쓰는 까닭."""
+    limit = files_services.max_bytes()
+    if entry.info.file_size > limit:
+        return f"그림이 너무 큽니다(한 파일은 {_mb(limit)} 까지)"
+    data = _read(archive, entry, limit)
+    if data is None:
+        return "zip 의 그 그림이 깨졌습니다"
+    if images.inspect(data) is None:
+        return "이미지(PNG · JPEG · GIF · WebP)가 아닙니다"
+    return hashlib.sha256(data).hexdigest(), len(data)
+
+
+def _final(planned: _Planned, body: str) -> str:
     """그림 자리를 `photo:<첨부 id>` 로 — 새 그림은 아직 id 가 없어 sha256 을 자리에 둔다
     (계획의 글자 수 · 지문용, 적용은 붙인 뒤 다시 만든다)."""
-    by_target = {}
-    for target, entry in planned.entries.items():
-        image = next(one for one in planned.row.images if one.path == entry.name)
-        by_target[target] = image
+    by_sha = {one.sha256: one for one in planned.row.images}
 
     def swap(hit: re.Match[str]) -> str:
-        image = by_target.get(hit.group("target"))
+        sha = planned.shas.get(hit.group("target"))
+        image = by_sha.get(sha) if sha is not None else None
         if image is None:
             return hit.group(0)
         where = image.attachment_id or f"new-{image.sha256[:24]}"
         return f"{hit.group('head')}photo:{where}{hit.group('query') or ''})"
 
-    return IMAGE.sub(swap, planned.body)
+    return IMAGE.sub(swap, body)
+
+
+def _leftover(body: str) -> tuple[int, list[str]] | None:
+    """그림 꼴(`IMAGE`)로 읽지 못한 **로컬 그림 자리** — (수, 보기 몇). 없으면 None.
+
+    `![…](대상` 인데 대상이 주소(`https:` · `photo:` · `data:` …)도 쪽 안 자리(`#…`)도 아닌
+    것 — 따옴표 제목(`![a](img/a.png "t")`) · 경로의 빈칸 · 네 자리 폭(`?w=1000`) · 캡션의
+    대괄호 · `/` 로 시작하는 경로. 전에는 그런 자리가 말없이 글자로 남아, 적용한 뒤에야 그림이
+    빠진 것을 알았다. **본문 길이에 비례해서만** 본다 — `](` 마다 앞의 `_CAPTION_REACH` 글자
+    안에서 `![` 를 찾는다(그 사이에 다른 `](` 가 있으면 그 `![` 의 것이 아니다)."""
+    count = 0
+    shown: list[str] = []
+    for hit in _OPENING.finditer(body):
+        start = hit.start()
+        reach = max(0, start - _CAPTION_REACH)
+        line = max(reach, body.rfind("\n", reach, start) + 1)
+        bang = body.rfind("![", line, start)
+        caption = body[bang + 2 : start] if bang >= 0 else ""
+        # 그 사이에 다른 `](` 가 있거나 참조식 그림(`![logo][1]`) 뒤의 링크면 그림 자리가
+        # 아니다.
+        if bang < 0 or "](" in caption or "][" in caption:
+            continue
+        target = hit.group("target")
+        if not target or target.startswith("#") or _SCHEME.match(target):
+            continue
+        count += 1
+        if len(shown) < _SHOWN:
+            close = body.find(")", hit.end(), hit.end() + _SNIPPET)
+            end = close + 1 if close >= 0 else min(len(body), bang + _SNIPPET)
+            snippet = body[bang:end].split("\n", 1)[0]
+            shown.append(snippet if len(snippet) <= _SNIPPET else snippet[:_SNIPPET] + "…")
+    return (count, shown) if count else None
 
 
 def fingerprint(rows: list[Row]) -> str:
@@ -452,24 +637,27 @@ def run(
     for one in rows:
         counts[one.action] = counts.get(one.action, 0) + 1
     writes = counts["create"] + counts["update"]
+    warned = sum(1 for one in rows if one.warnings)
     return {
         "documents_push": True,
         "applied": applied,
         "ok": writes > 0 and counts["error"] == 0,
         "rows": [_row_out(one) for one in rows],
         "counts": counts,
-        "summary": _summary(counts, applied=applied),
+        # 줄과 상관없는 오류 — 없다(그런 것은 작업을 실패로 끝낸다). 「작업」 화면의 계획 표가
+        # 일괄 입력과 같은 모양으로 읽는다 — 없으면 화면이 그 자리에서 멈췄다(2026-11-27).
+        "errors": [],
+        "warned": warned,
+        "summary": _summary(counts, warned, applied=applied),
         "fingerprint": mark,
     }
 
 
 def _row_out(row: Row) -> dict[str, Any]:
-    out = asdict(row)
-    out["images"] = [asdict(one) for one in row.images]
-    return out
+    return asdict(row)
 
 
-def _summary(counts: dict[str, int], *, applied: bool) -> str:
+def _summary(counts: dict[str, int], warned: int, *, applied: bool) -> str:
     head = "썼습니다" if applied else "쓸 것"
     parts = [
         f"새로 {counts['create']:,}",
@@ -478,6 +666,8 @@ def _summary(counts: dict[str, int], *, applied: bool) -> str:
     ]
     if counts["error"]:
         parts.append(f"오류 {counts['error']:,}")
+    if warned:
+        parts.append(f"확인할 것 {warned:,}")
     return f"문서 {head} — " + " · ".join(parts)
 
 
@@ -493,8 +683,11 @@ def _apply(
     for index, one in enumerate(todo):
         if index % PROGRESS_EVERY == 0:
             progress("적용", index, len(todo))
-        row, target = one.row, one.target
-        assert target is not None and row.object_id is not None  # 쓰는 줄에는 객체가 있다
+        row, target, entry = one.row, one.target, one.entry
+        # 쓰는 줄에는 객체 · 마크다운이 있다.
+        assert target is not None and row.object_id is not None and entry is not None
+        body, _problem = _body(archive, entry, row.path)
+        assert body is not None  # 계획에서 읽혔다 — 같은 zip 이다
         found = db.scalar(
             select(ObjectDocument)
             .where(ObjectDocument.object_id == target.id, ObjectDocument.key == row.property)
@@ -507,11 +700,10 @@ def _apply(
                 f"{row.label}: 다른 곳에서 먼저 수정했습니다(지금 판 {now_revision}) — 다시 "
                 "올려 미리 보세요. 아무것도 쓰지 않았습니다.",
             )
-        for target_ref, entry in one.entries.items():
-            image = next(each for each in row.images if each.path == entry.name)
+        for image in row.images:
             if not image.new:
                 continue
-            data = photos._read(archive, entry)
+            data = _read(archive, one.sources[image.sha256], files_services.max_bytes())
             assert data is not None  # 계획에서 읽혔다 — 같은 zip 이다
             made = files_services.attach(
                 db,
@@ -520,12 +712,12 @@ def _apply(
                 owner_id=target.id,
                 owner_field=row.property,
                 workspace_slug=None,
-                filename=posixpath.basename(target_ref) or "그림",
+                filename=one.names.get(image.sha256) or "그림",
                 content_type=None,
                 stream=io.BytesIO(data),
             )
             image.attachment_id = str(made.id)
-        final = _final(one)
+        final = _final(one, body)
         document, _changed = object_documents.write_body(
             db,
             user,

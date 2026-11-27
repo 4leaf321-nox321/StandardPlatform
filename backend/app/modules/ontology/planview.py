@@ -12,7 +12,7 @@ import json
 import re
 import uuid
 
-from app.modules.ontology import importer, similar
+from app.modules.ontology import importer, retype, similar
 from app.modules.ontology.schemas import ChangeOut, ImportPlanOut, SimilarNearOut, SimilarOut
 
 
@@ -48,14 +48,41 @@ def plan_out(
 
 #: 경고 속의 **지금 수**(「값이 있는 객체는 1,204개」) — 지문에서는 뺀다.
 _COUNTS = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_N = r"(\d[\d,]*)"
+#: 그러나 **잃는 값의 수**는 남긴다 — 1개를 비우는 계획을 읽고 고른 「적용」 이 1만 2천 개를
+#: 비우는 계획에도 그대로 통했다(2026-11-27 점검). 잃는 값의 경고는 넷이다 — 종류 변경의
+#: 「N개 비움」(`importer._plan_retypes`), 허브 타입의 「변환할 수 없는 값 N건을 비웁니다」,
+#: 「…하는 값 N개」(`retype._LOSSY`), 「필수 속성인데 값을 비우는 객체가 N개」(`retype.plan`).
+#: 이 문구를 바꾸면 여기도 바꾼다(시험이 본다).
+_LOSSES = (
+    re.compile(_N + r"개 비움"),
+    re.compile(r"변환할 수 없는 값 " + _N + r"건을 비웁니다"),
+    re.compile(r"값을 비우는 객체가 " + _N + r"개"),
+    re.compile(
+        "(?:" + "|".join(re.escape(one) for one in retype._LOSSY.values()) + ") " + _N + "개"
+    ),
+)
+
+
+def losses(warning: str) -> list[int]:
+    """경고 한 줄에서 **잃는 값의 수** — 0 은 뺀다(잃는 것이 없는 종류 변경의 지문은 예전과
+    같다). 없으면 빈 목록."""
+    counts = (
+        int(found.replace(",", ""))
+        for pattern in _LOSSES
+        for found in pattern.findall(warning)
+    )
+    return [one for one in counts if one]
 
 
 def fingerprint(prepared: importer.Plan) -> str:
     """계획의 지문 — 바뀌는 것(종류 · 이름 · 어떻게 · 칸 · 까닭) · 경고 · 오류. 비슷한 정의는
     넣지 않는다(뜻 비교는 임베딩 서버가 있을 때만이라 같은 계획이 달리 보인다). 경고의 숫자는
-    지운다 — 경고에 지금 객체 수가 섞여, 쓰기가 잦은 타입의 정의 제안은 정의가 그대로여도
-    매번 「제안 뒤 정의가 바뀌었다」 로 막혔다. 어떤 경고인지는 그대로 견준다."""
-    body = {
+    지운다 — 경고에 지금 객체 수가 섞여, 쓰기가 잦은 타입의 정의 제안은 정의가 그대로여도 매번
+    「제안 뒤 정의가 바뀌었다」 로 막혔다. 어떤 경고인지는 그대로 견준다. **잃는 값의 수만은
+    견준다**(`losses`) — 그 수가 바뀌면 사람이 읽은 계획이 아니다. 그런 경고가 없는 계획의
+    지문은 예전과 같다."""
+    body: dict[str, object] = {
         "changes": [
             [c.kind, c.owner_kind, c.slug, c.action, sorted(c.fields), c.via]
             for c in prepared.changes
@@ -63,6 +90,11 @@ def fingerprint(prepared: importer.Plan) -> str:
         "warnings": [_COUNTS.sub("#", one) for one in prepared.warnings],
         "errors": prepared.errors,
     }
+    lost = [
+        [index, found] for index, one in enumerate(prepared.warnings) if (found := losses(one))
+    ]
+    if lost:
+        body["losses"] = lost
     raw = json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 

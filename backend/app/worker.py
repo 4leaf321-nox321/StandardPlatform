@@ -60,7 +60,8 @@ def _clean_orphans() -> None:
             foreign = gc.looks_foreign(found)
             if foreign:
                 # 지우지 않고 알린다 — 다른 DB 에 붙은 워커가 남의 저장소를 비우는 것을 막는다.
-                log.warning("고아 첨부 정리를 멈춤: %s", foreign)
+                # 임시 파일 정리도 미룬다(저장소가 이 설치의 것이 아닐 수 있다).
+                gc.halt(db, found, foreign)
                 return
             done = gc.clean(db, found)
     except Exception:

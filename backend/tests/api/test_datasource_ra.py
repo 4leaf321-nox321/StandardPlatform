@@ -496,6 +496,48 @@ def test_한꺼번에_사라지면_내려감을_적지_않고_멈춘다(
     assert states == {"게시 중"}
 
 
+def test_이미_내려간_것이_있어도_전부_안_오면_멈춘다(
+    client: TestClient, admin: Signed, ra: FakeRA
+) -> None:
+    """멈춤 규칙이 「가진 것」 에 이미 내려간 기록까지 셌다 — 8건 중 1건이 내려간 뒤 RA 가 한
+    번 빈 목록을 주면 「7 / 8」 이라 「전부 안 옴」 이 아니게 되어 남은 7건이 다 「내려감」 이
+    됐다(2026-11-27 점검)."""
+    w = _setup(client, admin)
+    for rid in range(1, 9):
+        ra.add(rid, f"보고 {rid}", board="cae-2", changed=rid)
+    _sync(client, admin, w["source"])
+
+    def gone_keys() -> list[str]:
+        return sorted(
+            key
+            for key, one in _records(client, admin, w["report"]).items()
+            if one["properties"].get("origin_state") == "원본에서 내려감"
+        )
+
+    # 하나가 내려갔다 — 보통대로 적는다.
+    kept = dict(ra.reports)
+    del ra.reports[8]
+    _age_reconcile(w["source"])
+    done = _sync(client, admin, w["source"])
+    assert done["run"]["status"] == "ok" and done["counts"]["gone"] == 1, done
+    assert gone_keys() == ["RA-8"]
+
+    # RA 가 한 번 빈 목록을 준다 — 아직 게시 중인 7건이 전부 안 왔다. 적지 않고 멈춘다.
+    ra.reports.clear()
+    _age_reconcile(w["source"])
+    done = _sync(client, admin, w["source"])
+    assert done["run"]["status"] == "failed", done["run"]
+    assert done["counts"]["gone_held_back"] == 7 and done["counts"]["gone"] == 0
+    assert gone_keys() == ["RA-8"]
+
+    # 다시 제대로 온다 — 그중 하나만 빠졌으면(이미 내려간 것이 있어도) 그 하나를 적는다.
+    ra.reports.update({rid: one for rid, one in kept.items() if rid not in (7, 8)})
+    _age_reconcile(w["source"])
+    done = _sync(client, admin, w["source"])
+    assert done["run"]["status"] == "ok" and done["counts"]["gone"] == 1, done
+    assert gone_keys() == ["RA-7", "RA-8"]
+
+
 def test_조직_트리와_설정을_거르고_사용_중지는_켤_수_없다(
     client: TestClient, admin: Signed, ra: FakeRA
 ) -> None:

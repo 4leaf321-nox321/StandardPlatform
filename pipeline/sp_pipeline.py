@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -62,6 +63,10 @@ APPLIED = "applied.json"
 CLOSED = "closed.json"
 #: 적용이 거절된 마지막 결과 — 잠그지 않고 까닭만 남긴다(다시 미리 보고 적용).
 APPLY_FAILED = "apply_failed.json"
+#: **넣었는데 끝을 못 본 적용** — 플랫폼이 받았고(202) 아직 대기열 · 도는 중이거나, 기다리는
+#: 사이 상태를 묻지 못했다. 거절이 아니다: 적용 작업의 번호를 두고 `work_status` · 다음
+#: `run_apply` 가 다시 물어 `applied.json`(끝남) · `apply_failed.json`(실패)으로 옮긴다.
+APPLYING = "applying.json"
 
 #: 감사 기록에 남는 통로 이름 — 사람이 화면에서 넣은 것과 가른다.
 CLIENT = "sp-pipeline"
@@ -285,14 +290,37 @@ def _urllib_send(
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read() or b"null")
+            status, raw = response.status, response.read()
+            kind = str(response.headers.get("Content-Type") or "")
     except urllib.error.HTTPError as failure:
         raw = failure.read()
         try:
             return failure.code, json.loads(raw or b"null")
         except ValueError:
             text = raw.decode("utf-8", errors="replace")
-            return failure.code, {"error": {"message": text}}
+            return failure.code, {"error": {"message": text[:500]}}
+    try:
+        return status, json.loads(raw or b"null")
+    except ValueError:
+        # **2xx 인데 JSON 이 아니다** — 대개 포털(HWAX)의 로그인 화면(HTML)이다: 포털 세션이
+        # 끝나면 포털이 플랫폼 대신 로그인 쪽을 200 으로 준다. 그대로 두면 사람은
+        # 「Expecting value: line 1 column 1」 만 보고 무엇을 고칠지 모른다(0.4.107 점검).
+        raise Stop(_not_json(url, status, kind, raw)) from None
+
+
+def _not_json(url: str, status: int, kind: str, raw: bytes) -> str:
+    head = raw[:400].decode("utf-8", errors="replace").lower()
+    page = "html" in kind.lower() or "<html" in head or "<!doctype" in head
+    where = url.split("?", 1)[0]
+    said = f"{status}" + (f" · {kind.split(';')[0]}" if kind else "")
+    return f"플랫폼이 JSON 이 아닌 답을 보냈습니다({said}): {where} — " + (
+        "로그인 화면(HTML)으로 보입니다. 포털(HWAX) 뒤의 플랫폼이면 포털의 로그인이 끝났을 "
+        "수 있습니다 — 브라우저로 그 플랫폼에 다시 로그인한 뒤 다시 하세요. 등록한 주소가 "
+        "플랫폼의 주소가 맞는지도 확인하세요."
+        if page
+        else "등록한 주소가 플랫폼의 주소가 맞는지, 사이의 중계(포털 · 프록시)가 답을 바꾸지 "
+        "않는지 확인하세요."
+    )
 
 
 SEND: Sender = _urllib_send
@@ -480,6 +508,14 @@ def personal_info(body: str) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+def nul_line(body: str) -> int:
+    """본문에 NUL(`\\x00`)이 있으면 그 줄 번호(1부터), 없으면 0. PostgreSQL 의 글자 칸은 NUL
+    을 못 담는다 — 키트를 지나 플랫폼의 적용 묶음에서야 DataError 로 통째로 멈췄다(0.4.107
+    점검)."""
+    at = body.find("\x00")
+    return body.count("\n", 0, at) + 1 if at >= 0 else 0
+
+
 @dataclass
 class Document:
     """보낼 문서 본문 하나 — 행에 붙인 파일에서 읽었다."""
@@ -553,6 +589,13 @@ def documents_of(run: Run) -> list[Document]:
                     doc.problem = (
                         f"본문이 {len(body):,}자입니다 — {DOCUMENT_MAX_CHARS:,}자까지"
                         f"({relative})"
+                    )
+                    continue
+                nul = nul_line(body)
+                if nul:
+                    doc.problem = (
+                        f"본문 {nul}번째 줄에 NUL 문자(\\x00)가 있습니다 — 플랫폼이 저장하지 "
+                        f"못해 적용 전체가 멈춥니다. 지우고 보낸다({relative})"
                     )
                     continue
                 doc.body = body
@@ -919,6 +962,27 @@ class Stop(Exception):
     """사람에게 말하고 멈출 일."""
 
 
+class Pending(Stop):
+    """플랫폼이 작업을 **받았는데 끝을 못 봤다** — 대기열에 오래 있거나(워커가 밤 계산 등으로
+    바쁨 · 꺼짐), 기다리는 사이 상태를 묻지 못했다. **거절이 아니다**: 작업은 플랫폼에 남아
+    워커가 집으면 그대로 돈다. 미리 보기 · 받기에서는 여느 멈춤과 같고, 적용에서는 「거절됨」
+    으로 적지 않고 그 작업의 번호를 둔다(`APPLYING`)."""
+
+    def __init__(self, message: str, job_id: str = "") -> None:
+        super().__init__(message)
+        self.job_id = job_id
+
+
+def job_uuid(value: Any, what: str = "작업 번호") -> str:
+    """작업 · 판의 번호 — **uuid 꼴만**, 표준 꼴(소문자 · 줄표)로. 주소에 넣는 번호는 모두
+    여기를 거친다: `run_undo(run_id="<uuid>/undo?apply=true#")` 처럼 번호 자리에 주소를 이어
+    붙이면 계획만 볼 자리에서 되돌리기가 곧장 적용됐다(0.4.107 점검)."""
+    try:
+        return str(uuid.UUID(str(value or "").strip()))
+    except ValueError:
+        raise Stop(f"{what}가 아닙니다: {value!r} — uuid 꼴이어야 합니다") from None
+
+
 def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any]:
     """묶음을 보내고 **작업이 끝날 때까지 기다린다.**
 
@@ -977,16 +1041,25 @@ def _wait_job(server: str, token: str, job: Any, *, who: str = "플랫폼") -> d
     않는다."""
     if not isinstance(job, dict) or not job.get("id"):
         raise Stop(f"{who}이 작업을 돌려주지 않았습니다: {job!r}")
+    job_id = job_uuid(job["id"])
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
-    url = f"{server.rstrip('/')}/api/jobs/{job['id']}"
+    url = f"{server.rstrip('/')}/api/jobs/{job_id}"
     shown = ""
     queued_for = 0.0
     while True:
-        status, current = _send(server, "GET", url, headers, None, who=who)
-        if status != 200:
-            _refused(who, status, current)
-        if not isinstance(current, dict):
-            raise Stop(f"{who} 응답을 읽을 수 없습니다: {current!r}")
+        try:
+            status, current = _send(server, "GET", url, headers, None, who=who)
+            if status != 200:
+                _refused(who, status, current)
+            if not isinstance(current, dict):
+                raise Stop(f"{who} 응답을 읽을 수 없습니다: {current!r}")
+        except Stop as failure:
+            # **받은 작업의 상태를 못 물은 것은 거절이 아니다** — 작업은 플랫폼에 남아 돈다.
+            raise Pending(
+                f"{who}의 작업(<{job_id}>)이 끝났는지 묻지 못했습니다 — {failure}. 작업은 "
+                f"{who}에 남아 있습니다(받아들여졌습니다).",
+                job_id,
+            ) from failure
         state = str(current.get("status"))
         progress = current.get("progress") or {}
         line = (
@@ -1004,11 +1077,12 @@ def _wait_job(server: str, token: str, job: Any, *, who: str = "플랫폼") -> d
             )
         queued_for = queued_for + POLL_SECONDS if state == "queued" else 0.0
         if queued_for >= QUEUED_LIMIT_SECONDS:
-            raise Stop(
-                f"{who}의 작업(<{job['id']}>)을 {int(queued_for)}초 동안 아무도 집어 가지 "
-                "않았습니다 — 작업 워커가 꺼져 있는 것 같습니다. 운영자에게 "
-                "'systemctl status <slug>-worker' 를 확인해 달라고 하세요. "
-                "묶음은 서버에 남아 있으니 워커가 살아나면 그대로 이어집니다."
+            raise Pending(
+                f"{who}의 작업(<{job_id}>)을 {int(queued_for)}초 동안 아무도 집어 가지 "
+                "않았습니다 — 작업 워커가 다른 일(밤 계산 등)로 바쁘거나 꺼져 있습니다. "
+                "오래 그대로면 운영자에게 'systemctl status <slug>-worker' 를 확인해 달라고 "
+                "하세요. 작업은 서버에 남아 있으니 워커가 집으면 그대로 이어집니다.",
+                job_id,
             )
         WAIT(POLL_SECONDS)
 
@@ -1028,36 +1102,150 @@ def _get_json(server: str, token: str, path: str, *, who: str = "허브") -> Any
 PROBE_SECONDS = 5.0
 
 
-def plan_applied(server: str, token: str, job_id: str) -> bool | None:
-    """그 계획을 **화면(또는 어디서든) 적용했나** — 플랫폼의 `applied_by` 로. 못 닿으면 None.
+def _probe_job(server: str, token: str, job_id: str) -> tuple[int, Any] | None:
+    """작업 하나를 **묻기만** — 짧게 기다리고, 못 닿으면(포털의 로그인 화면 포함) None."""
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    try:
+        url = f"{server.rstrip('/')}/api/jobs/{job_uuid(job_id)}"
+        if SEND is _urllib_send:
+            return _urllib_send("GET", url, headers, None, timeout=PROBE_SECONDS)
+        return SEND("GET", url, headers, None)
+    except (urllib.error.URLError, OSError, ValueError, Stop):
+        return None
+
+
+def plan_apply_job(server: str, token: str, job_id: str) -> str | None:
+    """그 계획을 **적용한(또는 적용 중인) 작업**의 번호 — 플랫폼의 `applied_by`. 없으면 빈 값,
+    못 닿으면 None.
 
     키트가 미리 본 계획을 사람은 그 플랫폼 화면 「작업」 에서 적용한다. 키트는 그것을
     모르므로, 안 물으면 작업 상태가 계속 「적용 전 — 적용하라」 고 조르고, 사람은 같은 것을
-    또 넣으려 한다.
+    또 넣으려 한다. **번호만으로 「적용함」 이 아니다** — 플랫폼은 대기 · 도는 중인 적용도
+    `applied_by` 로 센다(`counts_as_apply`). 끝났는지는 `apply_job_state` 로 그 작업에 묻는다.
     """
-    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
-    url = f"{server.rstrip('/')}/api/jobs/{job_id}"
-    try:
-        if SEND is _urllib_send:
-            status, answer = _urllib_send("GET", url, headers, None, timeout=PROBE_SECONDS)
-        else:
-            status, answer = SEND("GET", url, headers, None)
-    except (urllib.error.URLError, OSError, ValueError):
+    seen = _probe_job(server, token, job_id)
+    if seen is None or seen[0] != 200 or not isinstance(seen[1], dict):
         return None
-    if status != 200 or not isinstance(answer, dict):
-        return None
-    return bool(answer.get("applied_by"))
+    found = seen[1].get("applied_by")
+    return job_uuid(found) if found else ""
+
+
+def _hidden_apply(
+    server: str, token: str, plan_job_id: str, apply_job_id: str
+) -> dict[str, Any]:
+    """이 토큰에 **안 보이는 적용**(시스템 관리자가 남의 전역 계획을 화면에서 적용함 — 그
+    적용은 관리자의 것이다) — 계획 작업이 싣는 `applied_by` · `applied_status` 로 가른다.
+
+    전에는 안 보이면 곧장 「적용함」 으로 쳐, 대기 중이던 그 적용이 뒤에 실패해도 실행이
+    영영 잠겼다(0.4.107 재점검). `applied_status` 가 없는 옛 플랫폼만 예전처럼 「적용함」
+    으로 둔다."""
+    seen = _probe_job(server, token, plan_job_id)
+    if seen is not None and seen[0] == 404:
+        return {
+            "state": "failed",
+            "result": {},
+            "message": f"적용 작업({apply_job_id})도 그 계획도 이 플랫폼에 없습니다 — 다른 "
+            "플랫폼이거나 지워졌습니다",
+        }
+    if seen is None or seen[0] != 200 or not isinstance(seen[1], dict):
+        return {"state": "unknown", "result": {}, "message": "플랫폼에 닿지 않습니다"}
+    plan = seen[1]
+    found = str(plan.get("applied_by") or "").lower()
+    if found != apply_job_id.lower():
+        # 플랫폼은 실패 · 취소된 적용을 `applied_by` 에서 거둔다.
+        return {
+            "state": "failed",
+            "result": {},
+            "message": "다른 사람이 넣은 적용이 들어가지 않았습니다(실패 · 취소) — 다시 미리 "
+            "본 뒤 적용할 수 있습니다",
+        }
+    status = plan.get("applied_status")
+    if status in ("queued", "running"):
+        return {"state": "waiting", "status": status, "result": {}, "message": ""}
+    return {
+        "state": "applied",
+        "status": status or "",
+        "result": {"applied": True},
+        "message": "다른 사람이 넣은 적용이라 이 토큰으로는 그 작업이 안 보입니다 — 계획 "
+        "작업이 끝났다고 알린다",
+    }
+
+
+def apply_job_state(
+    server: str, token: str, apply_job_id: str, *, plan_job_id: str | None = None
+) -> dict[str, Any]:
+    """적용 작업 하나가 **어떻게 됐나** — `state`: `applied`(끝나 들어감) · `failed`(실패 ·
+    취소 · 끝났는데 안 들어감 · 플랫폼에 그 작업이 없음) · `waiting`(대기 · 도는 중) ·
+    `unknown`(못 닿음). `result` 는 끝난 작업의 결과.
+
+    `plan_job_id`(그 적용의 계획 작업)를 주면, 적용 작업이 이 토큰에 안 보일 때(화면에서 남이
+    넣은 적용) 계획 작업이 싣는 상태로 가른다(`_hidden_apply`)."""
+    seen = _probe_job(server, token, apply_job_id)
+    if seen is None:
+        return {"state": "unknown", "result": {}, "message": "플랫폼에 닿지 않습니다"}
+    status, job = seen
+    if status == 404 and plan_job_id:
+        return _hidden_apply(server, token, plan_job_id, apply_job_id)
+    if status == 404:
+        return {
+            "state": "failed",
+            "result": {},
+            "message": f"적용 작업({apply_job_id})이 플랫폼에 없습니다 — 지워졌거나 다른 "
+            "플랫폼입니다",
+        }
+    if status != 200 or not isinstance(job, dict):
+        return {
+            "state": "unknown",
+            "result": {},
+            "message": f"플랫폼이 답하지 않습니다({status})",
+        }
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    state = str(job.get("status") or "")
+    if state in ("queued", "running"):
+        return {"state": "waiting", "status": state, "result": {}, "message": ""}
+    if state == "done" and result.get("applied") is not False:
+        return {"state": "applied", "status": state, "result": result, "message": ""}
+    if state == "done":
+        return {
+            "state": "failed",
+            "status": state,
+            "result": result,
+            "message": "적용 작업이 끝났는데 들어가지 않았습니다(적용 때 다시 판정한 계획에 "
+            "오류)",
+        }
+    return {
+        "state": "failed",
+        "status": state,
+        "result": result,
+        "message": f"적용 작업이 {'실패했습니다' if state == 'failed' else '취소됐습니다'}: "
+        f"{job.get('error') or ''}",
+    }
+
+
+def waiting_message(server: str, apply_job_id: str, why: str = "") -> str:
+    """대기 중인 적용을 사람에게 — **받아들여졌고 거절된 것이 아니다**, 또 넣지 않는다."""
+    return (
+        f"적용을 넣었고 플랫폼이 받았는데 아직 끝나지 않았습니다(적용 작업 {apply_job_id}). "
+        "거절된 것이 아닙니다 — 워커가 집으면 그대로 적용됩니다. **다시 적용하지 않는다**"
+        "(플랫폼이 같은 계획을 두 번 넣지 않는다). 끝났는지는 work_status(문서 올리기면 "
+        f"document_apply 를 다시)로, 또는 그 플랫폼 화면 「작업」 에서 본다: "
+        f"{jobs_link(server, apply_job_id)}" + (f" — {why}" if why else "")
+    )
 
 
 def apply_plan(server: str, token: str, job_id: str) -> dict[str, Any]:
     """플랫폼의 **그 계획 작업**을 적용한다 — 화면의 「적용」 과 같은 길(같은 파일 · 같은 지문,
     계획을 세운 토큰의 주인으로). 사람이 대화에서 계획을 보고 「좋다」 한 뒤에만 부른다.
 
-    돌려주는 `state`: `applied`(이번에 적용함) · `already`(화면 등에서 먼저 적용함 — 그 적용
-    작업의 결과를 싣는다, JOBS-22) · `refused`(플랫폼이 받지 않음 — 오류가 있는 계획 · 권한 ·
-    남의 계획) · `failed`(적용하다 멈춤 — 그 사이 누가 바꿔 지문이 다름 등). 멈추지 않고
-    돌려준다 — 여러 작업을 한 번에 적용하는 쪽이 줄마다 가른다.
+    돌려주는 `state`: `applied`(이번에 적용함) · `already`(화면 등에서 먼저 적용해 끝남 — 그
+    적용 작업의 결과를 싣는다, JOBS-22) · `waiting`(**받아들여졌는데 아직 안 끝남** — 대기열 ·
+    도는 중, 또는 기다리는 사이 상태를 못 물음. 먼저 넣은 적용이 아직 대기 중인 `already` 도
+    이것) · `refused`(플랫폼이 받지 않음 — 오류가 있는 계획 · 권한 · 남의 계획) ·
+    `failed`(적용하다 멈춤 — 그 사이 누가 바꿔 지문이 다름 · 끝났는데 다시 판정한 계획에 오류가
+    있어 안 들어감 등). 멈추지 않고 돌려준다 — 여러 작업을 한 번에 적용하는 쪽이 줄마다
+    가른다.
     """
+    job_id = job_uuid(job_id, "계획 작업의 번호")
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
     url = f"{server.rstrip('/')}/api/jobs/{job_id}/apply"
     status, answer = _send(server, "POST", url, headers, None, who="플랫폼")
@@ -1065,34 +1253,69 @@ def apply_plan(server: str, token: str, job_id: str) -> dict[str, Any]:
         error = answer.get("error", {}) if isinstance(answer, dict) else {}
         applied_by = str((error.get("details") or {}).get("applied_by") or "")
         if applied_by:
-            earlier = _get_json(server, token, f"/api/jobs/{applied_by}", who="플랫폼")
-            result = earlier.get("result") if isinstance(earlier, dict) else None
+            earlier_id = job_uuid(applied_by)
+            # **대기 · 도는 중인 적용도 `already` 로 온다**(`counts_as_apply`) — 그것을
+            # 「적용함」 으로 적으면, 그 적용이 나중에 실패해도 실행이 영영 잠긴다
+            # (0.4.107 점검).
+            earlier = apply_job_state(server, token, earlier_id, plan_job_id=job_id)
+            if earlier["state"] == "applied":
+                return {
+                    "state": "already",
+                    "apply_job_id": earlier_id,
+                    "status": earlier.get("status", ""),
+                    "result": earlier["result"],
+                }
+            if earlier["state"] == "failed":
+                return {
+                    "state": "failed",
+                    "apply_job_id": earlier_id,
+                    "message": earlier["message"],
+                    "result": earlier["result"],
+                }
             return {
-                "state": "already",
-                "apply_job_id": applied_by,
-                "status": str((earlier or {}).get("status") or ""),
-                "result": result if isinstance(result, dict) else {},
+                "state": "waiting",
+                "apply_job_id": earlier_id,
+                "message": waiting_message(server, earlier_id, earlier["message"]),
+                "result": {},
             }
         return {
             "state": "refused",
             "message": f"[{error.get('code', status)}] {error.get('message', answer)}",
             "result": {},
         }
+    accepted = job_uuid((answer or {}).get("id") if isinstance(answer, dict) else "")
     try:
         finished = _wait_job(server, token, answer)
+    except Pending as pending:
+        # **받아들여졌는데 끝을 못 봤다** — 대기열(워커가 밤 계산으로 바쁨)이거나 기다리는
+        # 사이 못 닿았다. 거절로 적으면 사람은 다시 미리 보고 또 넣으려 하는데, 그사이 앞의
+        # 적용이 돌아 들어간다(0.4.107 점검).
+        return {
+            "state": "waiting",
+            "apply_job_id": accepted,
+            "message": waiting_message(server, accepted, str(pending)),
+            "result": {},
+        }
     except Stop as failure:
         return {
             "state": "failed",
-            "apply_job_id": str((answer or {}).get("id") or ""),
+            "apply_job_id": accepted,
             "message": str(failure),
             "result": {},
         }
     result = finished.get("result")
-    return {
-        "state": "applied",
-        "apply_job_id": str(finished.get("id") or ""),
-        "result": result if isinstance(result, dict) else {},
-    }
+    result = result if isinstance(result, dict) else {}
+    if result.get("applied") is False:
+        # 끝났는데 들어가지 않았다 — 적용 때 다시 판정한 계획에 오류(전부 아니면 무).
+        # 「적용함」 이라 말하지 않는다.
+        return {
+            "state": "failed",
+            "apply_job_id": accepted,
+            "message": "적용 때 다시 판정한 계획에 오류가 있어 들어가지 않았습니다 — 아무것도 "
+            "바뀌지 않았습니다",
+            "result": result,
+        }
+    return {"state": "applied", "apply_job_id": accepted, "result": result}
 
 
 def jobs_link(server: str, job_id: str) -> str:
@@ -1162,7 +1385,7 @@ def _export_bundle(hub: str, hub_token: str, groups: list[str]) -> Any:
     if status != 202:
         _refused("허브", status, answer)
     job = _wait_job(hub, hub_token, answer, who="허브")
-    return _get_json(hub, hub_token, f"/api/jobs/{job['id']}/download")
+    return _get_json(hub, hub_token, f"/api/jobs/{job_uuid(job['id'])}/download")
 
 
 def resolve_names(
@@ -1243,6 +1466,15 @@ def summarize(result: dict[str, Any], *, limit: int = 20) -> str:
         "적용함" if result.get("applied") else ("괜찮음" if result.get("ok") else "오류 있음")
     )
     lines.append(f"결과: {state}")
+    if result.get("preview") == "plan" and not result.get("applied"):
+        # **가벼운 미리 보기(백필)에는 지문이 없다** — 적용이 그 시점에 다시 판정하므로, 그
+        # 사이 바뀐 것(지워진 참조 대상 등)을 플랫폼이 「미리 본 것과 다름」 으로 거절하지
+        # 않는다.
+        lines.append(
+            "가벼운 미리 보기(백필) — 지문이 없어 적용할 때 다시 판정합니다: 그 사이 바뀐 "
+            "것을 거절하지 않고 그때의 판정대로 넣습니다(전부 아니면 무는 그대로, 못 찾은 "
+            "참조는 missing_refs 대로). 사람에게 이것도 함께 말한다"
+        )
     ontology = result.get("ontology")
     if ontology:
         changed = [c for c in ontology.get("changes", []) if c.get("action") != "unchanged"]
@@ -1639,6 +1871,71 @@ def cmd_validate(
     return not report.errors, "\n".join([head, *lines])
 
 
+def settle_pending(
+    path: Path, server: str, token: str, *, moved: bool = False
+) -> dict[str, Any] | None:
+    """넣었는데 끝을 못 본 적용(`applying.json`)을 **다시 묻는다** — 끝났으면 `applied.json`,
+    실패했으면 `apply_failed.json` 으로 옮긴다. 기록이 없으면 None, 있으면 `state`(`applied` ·
+    `failed` · `waiting`)와 `apply_job_id` · `message` · `result`.
+
+    `server` 는 그 적용을 넣은 곳이어야 한다 — 다르면 묻지 않고 대기로 둔다(다른 플랫폼의
+    토큰으로 남의 작업을 묻지 않는다). `moved` 는 **같은 이름의 플랫폼이 주소만 바뀐 것**
+    (`sp_work._settle`)이라 지금 주소로 묻는다."""
+    pending = _read_json(path / APPLYING, [])
+    if not isinstance(pending, dict):
+        return None
+    apply_id = str(pending.get("apply_job_id") or "")
+    base = {key: pending.get(key) for key in ("at", "server", "digest", "job_id", "via")}
+    if not moved and str(pending.get("server") or "").rstrip("/") != server.rstrip("/"):
+        return {
+            "state": "waiting",
+            "apply_job_id": apply_id,
+            "message": f"{pending.get('server')} 에 넣은 적용이 끝났는지 아직 모릅니다 — 그 "
+            "플랫폼으로 work_status 를 봅니다",
+            "result": {},
+        }
+    try:
+        outcome = apply_job_state(
+            server,
+            token,
+            job_uuid(apply_id),
+            plan_job_id=str(pending.get("job_id") or "") or None,
+        )
+    except Stop:
+        outcome = {
+            "state": "failed",
+            "result": {},
+            "message": f"적용 작업의 번호가 틀립니다: {apply_id!r}",
+        }
+    if outcome["state"] == "applied":
+        _write(
+            path / APPLIED,
+            base | {"at": _stamp(), "apply_job_id": apply_id, "result": outcome["result"]},
+        )
+        (path / APPLY_FAILED).unlink(missing_ok=True)
+        (path / APPLYING).unlink(missing_ok=True)
+    elif outcome["state"] == "failed":
+        # **실패한 적용은 잠그지 않는다** — 플랫폼도 그 계획을 다시 적용할 수 있게 둔다.
+        _write(
+            path / APPLY_FAILED,
+            base
+            | {
+                "at": _stamp(),
+                "apply_job_id": apply_id,
+                "result": outcome["result"],
+                "message": outcome["message"],
+            },
+        )
+        (path / APPLYING).unlink(missing_ok=True)
+    else:
+        outcome = {
+            **outcome,
+            "state": "waiting",
+            "message": waiting_message(server, apply_id, outcome.get("message", "")),
+        }
+    return {**outcome, "apply_job_id": apply_id}
+
+
 def preview_platform(run: Path) -> str:
     """미리 본 플랫폼의 이름 — **적용은 미리 본 곳으로만** 간다."""
     seen = _read_json(run / PREVIEW, [])
@@ -1662,6 +1959,18 @@ def cmd_preview(
         )
     if (path / CLOSED).exists():
         raise Stop("닫은 실행입니다(run_close) — 새 실행으로")
+    if (path / APPLYING).exists():
+        pending = settle_pending(path, server, token)
+        if pending and pending["state"] == "applied":
+            raise Stop(
+                "이미 적용한 실행입니다 — 넣은 적용이 그 사이 끝났습니다. 바꿔 넣으려면 "
+                "새 실행으로"
+            )
+        if pending and pending["state"] == "waiting":
+            raise Stop(
+                "이 실행의 적용이 아직 플랫폼의 대기열에 있습니다 — 다시 미리 보지 않습니다. "
+                + pending["message"]
+            )
     result = _post_bundle(server, token, {**body, "apply": False})
     earlier = _read_json(path / PREVIEW, [])
     if isinstance(earlier, dict) and (earlier.get("result") or {}).get("job_id"):
@@ -1707,7 +2016,32 @@ def cmd_apply(path: Path, *, server: str, token: str) -> tuple[bool, str]:
         )
     if not (seen.get("result") or {}).get("ok"):
         raise Stop("미리 보기에서 오류가 있었습니다 — 고치고 preview 를 다시 하세요")
-    result = _post_bundle(server, token, {**body, "apply": True})
+    if (path / APPLYING).exists():
+        pending = settle_pending(path, server, token)
+        if pending and pending["state"] == "applied":
+            raise Stop("이미 적용한 실행입니다 — 앞서 넣은 적용이 그 사이 끝났습니다")
+        if pending and pending["state"] == "waiting":
+            raise Stop(
+                "앞서 넣은 적용이 아직 끝나지 않아 또 보내지 않습니다 — " + pending["message"]
+            )
+    try:
+        result = _post_bundle(server, token, {**body, "apply": True})
+    except Pending as pending:
+        # 받아들여진 적용 — 또 보내면 같은 묶음이 두 번 든다. 번호를 두고 다음에 묻는다.
+        if pending.job_id:
+            _write(
+                path / APPLYING,
+                {
+                    "at": _stamp(),
+                    "server": server,
+                    "digest": digest(body),
+                    "job_id": "",
+                    "apply_job_id": pending.job_id,
+                    "via": "command",
+                },
+            )
+            (path / APPLY_FAILED).unlink(missing_ok=True)
+        raise Stop(waiting_message(server, pending.job_id, str(pending))) from pending
     record = {"at": _stamp(), "server": server, "digest": digest(body), "result": result}
     if result.get("applied"):
         _write(path / APPLIED, record)
@@ -1735,6 +2069,13 @@ def cmd_apply_plan(path: Path, *, server: str, token: str) -> dict[str, Any]:
         raise Stop("이미 적용한 실행입니다 — 바꿔 넣으려면 새 실행으로")
     if (path / CLOSED).exists():
         raise Stop("닫은 실행입니다(run_close) — 새 실행으로")
+    if (path / APPLYING).exists():
+        # **앞서 넣은 적용이 끝을 못 봤다** — 또 넣지 않고 그 적용에 묻는다. 끝났으면
+        # 「적용함」, 실패했으면 「거절됨」 으로 옮겨 그대로 전한다(다시 넣는 것은 그다음
+        # 일이다).
+        pending = settle_pending(path, server, token)
+        if pending is not None:
+            return _apply_answer(pending)
     read = _read_json(path / PREVIEW, [])
     seen: dict[str, Any] = read if isinstance(read, dict) else {}
     job = str((seen.get("result") or {}).get("job_id") or "")
@@ -1754,26 +2095,38 @@ def cmd_apply_plan(path: Path, *, server: str, token: str) -> dict[str, Any]:
         raise Stop("미리 보기에 오류가 있었습니다 — 고쳐 새 실행으로 다시 미리 보세요")
     outcome = apply_plan(server, token, job)
     result = outcome["result"]
+    state = outcome["state"]
     record = {
         "at": _stamp(),
         "server": server,
         "digest": digest(body),
         "job_id": job,
         "apply_job_id": outcome.get("apply_job_id", ""),
-        "via": "kit" if outcome["state"] == "applied" else "screen",
+        "via": "kit" if state in ("applied", "waiting") else "screen",
         "result": result,
     }
-    if outcome["state"] in ("applied", "already") and (
-        result.get("applied") or outcome.get("status") in ("queued", "running")
-    ):
+    if state in ("applied", "already") and result.get("applied"):
+        # **끝나 들어간 것만 「적용함」 으로 잠근다** — 대기 · 도는 중인 화면의 적용(`already`
+        # 의 대기)을 적용함으로 적으면 그 적용이 실패해도 실행이 영영 잠겼다(0.4.107 점검).
         _write(path / APPLIED, record)
         (path / APPLY_FAILED).unlink(missing_ok=True)
-    elif outcome["state"] in ("applied", "already", "failed"):
+    elif state == "waiting":
+        record.pop("result")
+        _write(path / APPLYING, record | {"message": outcome.get("message", "")})
+        (path / APPLY_FAILED).unlink(missing_ok=True)
+    elif state in ("applied", "already", "failed"):
         # **적용이 안 됐으면 잠그지 않는다**(`cmd_apply` 와 같다) — 까닭을 고쳐 다시 미리 본다.
         _write(path / APPLY_FAILED, record | {"message": outcome.get("message", "")})
+    return _apply_answer(outcome)
+
+
+def _apply_answer(outcome: dict[str, Any]) -> dict[str, Any]:
+    result = outcome.get("result") or {}
+    done = outcome["state"] in ("applied", "already") and bool(result.get("applied"))
     return {
         **outcome,
-        "applied": bool(result.get("applied")),
+        "result": result,
+        "applied": done,
         "summary": summarize(result) if result else outcome.get("message", ""),
         "run_id": str(result.get("run_id") or ""),
     }
@@ -1814,6 +2167,9 @@ def undo_job(
 ) -> tuple[bool, str, str]:
     """`cmd_undo` 와 같고 **계획 작업의 번호**도 — 키트 MCP 의 `run_undo_apply` 가 사람이 본
     그 계획을 적용한다."""
+    # **번호 자리에 주소를 이어 붙이지 못하게** — `<uuid>/undo?apply=true#` 를 주면 계획만 볼
+    # 자리에서 되돌리기가 곧장 적용됐다(0.4.107 점검).
+    run_id = job_uuid(run_id, "되돌릴 판의 번호")
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -1837,17 +2193,24 @@ def cmd_undo_apply(run_id: str, plan_job: str, *, server: str, token: str) -> di
     """**사람이 본 되돌리기 계획**(`run_undo` 의 `plan_job`)을 적용한다 — 사람이 대화에서
     「되돌려」 한 뒤에만. 그 계획이 이 판의 되돌리기 계획인지 먼저 본다(다른 작업을 이 길로
     적용하지 않는다). 그 사이 누가 고쳐 계획과 달라졌으면 플랫폼이 거절한다(지문)."""
-    if not re.fullmatch(r"[0-9a-fA-F-]{36}", plan_job.strip()):
+    try:
+        plan_job = job_uuid(plan_job)
+    except Stop:
         raise Stop(
             f"계획 작업의 번호가 아닙니다: {plan_job!r} — run_undo 가 준 plan_job 을 주세요"
-        )
-    plan_job = plan_job.strip()
+        ) from None
+    # 판 번호는 **표준 꼴로 견준다** — 대문자로 적은 같은 번호를 「다른 판」 으로 거절했다.
+    run_id = job_uuid(run_id, "되돌릴 판의 번호")
     plan = _get_json(server, token, f"/api/jobs/{plan_job}", who="플랫폼")
     params = (plan.get("params") or {}) if isinstance(plan, dict) else {}
+    try:
+        planned_run = job_uuid(params.get("run_id"))
+    except Stop:
+        planned_run = ""
     if (
         not isinstance(plan, dict)
         or plan.get("kind") != "bundle_undo"
-        or str(params.get("run_id") or "") != run_id
+        or planned_run != run_id
         or params.get("apply")
     ):
         raise Stop(
@@ -1858,7 +2221,7 @@ def cmd_undo_apply(run_id: str, plan_job: str, *, server: str, token: str) -> di
     result = outcome["result"]
     return {
         **outcome,
-        "undone": bool(result.get("applied")),
+        "undone": outcome["state"] in ("applied", "already") and bool(result.get("applied")),
         "summary": undo_summary(result) if result else outcome.get("message", ""),
     }
 

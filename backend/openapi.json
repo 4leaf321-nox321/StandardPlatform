@@ -3276,7 +3276,7 @@
           "slides"
         ],
         "summary": "Used In",
-        "description": "이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는\n살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`). 볼 수 없는 객체면 없는 것과 같다.",
+        "description": "이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는\n살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`). 볼 수 없는 객체 · 없는 객체면 빈\n목록이다 — 둘을 가르지 않는다(가르면 있는지가 드러난다). 원 표를 비추는 객체(부서 · 계정 —\n객체 표에 행이 없다)도 쓰인 장표가 없다: 404 이던 때는 부서 화면이 열 때마다 오류를\n남겼다(0.4.107).",
         "operationId": "used_in_api_slides_used_in__object_id__get",
         "parameters": [
           {
@@ -40627,6 +40627,17 @@
               }
             ],
             "title": "Applied By"
+          },
+          "applied_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Status"
           },
           "input_file_name": {
             "anyOf": [

@@ -51,7 +51,7 @@ from typing import Any, Iterator
 import requests
 
 #: 이 키트의 판 — 바뀐 것은 CHANGES.md 에 같은 이름으로 적는다.
-KIT_VERSION = "2026-11-06"
+KIT_VERSION = "2026-11-27"
 
 ENVELOPE = (
     "key",
@@ -65,8 +65,9 @@ ENVELOPE = (
     "previous_keys",
 )
 
-#: 처음부터 다시 받았는데 가진 것의 이 비율보다 많이(그리고 GONE_FLOOR 건보다 많이) 안 왔으면
-#: 정리하지 않고 멈춘다 — 토큰의 부서 · 공개 범위가 바뀐 날 전부를 비활성으로 만들지 않게.
+#: 처음부터 다시 받았는데 가진 것의 이 비율보다 많이(그리고 GONE_FLOOR 건보다 많이) 안 왔거나
+#: **가진 것이 전부** 안 왔으면 정리하지 않고 멈춘다 — 토큰의 부서 · 공개 범위가 바뀐 날 전부를
+#: 비활성으로 만들지 않게. 작은 표(10건 이하)도 전부 안 오면 멈춘다(공개 측과 같은 규칙).
 GONE_LIMIT = 0.5
 GONE_FLOOR = 10
 
@@ -522,6 +523,13 @@ def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any
 
 
 def too_many(gone: int, held: int) -> bool:
+    """한 번에 너무 많이 안 왔나 — 비율은 GONE_FLOOR 위에서만 보지만, 가진 것이 **전부** 안
+    왔으면 작은 표여도 멈춘다. 예전에는 10건 이하인 표가 빈 응답 한 번에 전부 비활성이 됐다.
+    정말 다 지워진 것이면 사람이 보고 --allow-shrink 로 한 번 더 받는다."""
+    if gone <= 0:
+        return False
+    if gone >= held:
+        return True
     return gone > GONE_FLOOR and gone > GONE_LIMIT * held
 
 
@@ -753,7 +761,7 @@ def main(argv: list[str] | None = None) -> int:
     def held(label: str, counts: dict[str, int]) -> None:
         if counts["held_back"]:
             problems.append(
-                f"{label}: 처음부터 받았는데 가진 것 중 {counts['held_back']}건이 안 와서(절반 넘음) "
+                f"{label}: 처음부터 받았는데 가진 것 중 {counts['held_back']}건이 안 와서(절반이 넘거나 전부) "
                 "정리하지 않았습니다. 토큰의 부서 · 공개 범위를 공개 측에 확인하고, 정말 줄어든 "
                 "것이면 --full --allow-shrink 로 한 번 더 받으세요"
             )

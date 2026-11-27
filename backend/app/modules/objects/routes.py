@@ -22,7 +22,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import Response
-from sqlalchemy import false, or_, select, true
+from sqlalchemy import and_, false, or_, select, true
 from sqlalchemy.orm import Session
 from starlette.datastructures import QueryParams
 
@@ -328,7 +328,7 @@ def _not_system(object_type: ObjectType, what: str) -> None:
     if system.is_system(object_type):
         raise Forbidden(
             code("OBJECTS", 14),
-            f"{object_type.label}은 다른 표를 비추는 타입이라 여기서 {what} 않습니다.",
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 {what} 않습니다.",
         )
 
 
@@ -2420,7 +2420,7 @@ def bulk_delete(
     한 건씩 지우는 길과 같은 규칙·같은 함수다.
     """
     object_type = _type(db, type_slug)
-    _not_system(object_type, "지우지")
+    _not_system(object_type, "삭제하지")
     managed.require_objects_editable(object_type, what="삭제하지")
     ids = bulkedit.ids_of(payload.ids)
     rows = _editable_rows(db, user, object_type, ids)
@@ -2465,7 +2465,7 @@ def object_template(
 ) -> Response:
     """빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다."""
     object_type = _type(db, type_slug)
-    _not_system(object_type, "파일로 넣지")
+    _not_system(object_type, "일괄 입력하지")
     defs = properties_of(db, object_type.id)
     body = bulk.to_csv(bulk.export_columns(defs), [])
     return Response(
@@ -3107,35 +3107,80 @@ def _profile_type(db: Session, slug: str, object_id: uuid.UUID) -> ObjectType:
     return kind
 
 
-def _moved_along(db: Session, origin: str, current: str, hops: int = 6) -> bool:
+def _slug_spans(
+    db: Session, object_type: ObjectType
+) -> list[tuple[str, int | None, int | None]]:
+    """이 타입이 지녀 온 slug 와 그 동안 — (slug, 이 감사 차례 뒤부터, 이 차례 앞까지). slug
+    변경(ADR 0093)의 감사 기록(`ontology.type.rename`)을 그 타입의 id 로 읽어 나눈다. 동안을
+    함께 보는 것은 slug 를 바꾼 뒤 다른 타입이 그 slug 를 다시 쓸 수 있어서다 — 옮기기 기록의
+    원 타입은 그때의 slug 로만 적혀 있어, 바꾼 뒤에 옛 slug 로 적힌 옮기기는 이 타입의 것이
+    아니다.
+
+    때(`created_at`)가 아니라 **감사의 차례(`seq`)** 로 가른다 — 개발 PC(WSL)의 시계가 1초쯤
+    뒤로 뛰어, 나중에 만든 타입의 때가 먼저 한 옮기기보다 앞섰다(2026-11-27 시험에서 실측).
+    맨 앞은 열어 둔다 — 같은 slug 를 쓰던 지운 타입의 옮기기라도, 그 주소는 옮기기 전의
+    주소다."""
+    spans: list[tuple[str, int | None, int | None]] = []
+    after: int | None = None
+    for seq, old in db.execute(
+        select(AuditEntry.seq, AuditEntry.changes["from"].astext)
+        .where(
+            AuditEntry.action == "ontology.type.rename",
+            AuditEntry.target_id == object_type.id,
+        )
+        .order_by(AuditEntry.seq)
+    ):
+        if old:
+            spans.append((old, after, seq))
+        after = seq
+    spans.append((object_type.slug, after, None))
+    return spans
+
+
+def _moved_along(db: Session, origin: ObjectType, current: ObjectType, hops: int = 6) -> bool:
     """`origin` 타입에서 옮기기(`ontology.type.move`)를 따라가면 `current` 에 닿나 — A → B → C
-    로
-    두 번 옮긴 객체의 A 주소도 C 로 안내한다(전에는 마지막 한 단계만 봤다)."""
-    reached = {origin}
-    frontier = {origin}
+    로 두 번 옮긴 객체의 A 주소도 C 로 안내한다(전에는 마지막 한 단계만 봤다).
+
+    **타입의 id 로 따라간다** — 옮기기 기록의 대상은 `target_id`(타입 id)로, 원 타입은 그때의
+    slug(`target_label` 의 「<원> → 」)를 그 타입의 slug 이력(`_slug_spans`)에 맞춰 찾는다.
+    전에는 slug 글자로만 이어서, 옮긴 뒤 대상 · 원 타입의 slug 를 바꾸면(ADR 0093) 옛 주소가
+    안내 없이 404 로 끝났다(2026-11-27 점검). 지운 타입(중간 단계)은 기록의 slug 로만
+    잇는다."""
+    reached = {origin.id}
+    frontier: list[tuple[uuid.UUID, str]] = [(origin.id, origin.slug)]
     for _hop in range(hops):
         if not frontier:
             break
-        labels = db.scalars(
-            select(AuditEntry.target_label).where(
-                AuditEntry.action == "ontology.type.move",
-                or_(
-                    *(
-                        AuditEntry.target_label.startswith(f"{one} → ", autoescape=True)
-                        for one in sorted(frontier)
-                    )
-                ),
+        kinds = {
+            row.id: row
+            for row in db.scalars(
+                select(ObjectType).where(ObjectType.id.in_([one for one, _ in frontier]))
             )
-        )
-        following: set[str] = set()
-        for label in labels:
-            _from, _arrow, to = (label or "").partition(" → ")
-            if to and to not in reached:
-                following.add(to)
-        if current in following:
+        }
+        clauses = []
+        for type_id, slug in frontier:
+            spans = (
+                _slug_spans(db, kinds[type_id]) if type_id in kinds else [(slug, None, None)]
+            )
+            for name, after, before in spans:
+                parts = [AuditEntry.target_label.startswith(f"{name} → ", autoescape=True)]
+                if after is not None:
+                    parts.append(AuditEntry.seq > after)
+                if before is not None:
+                    parts.append(AuditEntry.seq < before)
+                clauses.append(and_(*parts))
+        following: dict[uuid.UUID, str] = {}
+        for target_id, label in db.execute(
+            select(AuditEntry.target_id, AuditEntry.target_label).where(
+                AuditEntry.action == "ontology.type.move", or_(*clauses)
+            )
+        ):
+            if target_id is not None and target_id not in reached:
+                following[target_id] = (label or "").partition(" → ")[2]
+        if current.id in following:
             return True
-        reached |= following
-        frontier = following
+        reached |= set(following)
+        frontier = list(following.items())
     return False
 
 
@@ -3146,7 +3191,7 @@ def _raise_if_moved(
     알림 · 붙여 둔 링크가 404 로 끝나지 않게. 옮긴 일이 있는 타입만(감사 기록) — 타입을 잘못
     적은 주소까지 넘기지 않는다. 옮긴 뒤 병합됐으면 이긴 쪽으로. 보이는 것만 말한다."""
     here = db.execute(
-        select(ObjectInstance, ObjectType.slug)
+        select(ObjectInstance, ObjectType)
         .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
         .where(
             ObjectInstance.id == object_id,
@@ -3156,8 +3201,9 @@ def _raise_if_moved(
     ).first()
     if here is None:
         return
-    row, slug = here
-    if not _moved_along(db, object_type.slug, slug):
+    row, here_type = here
+    slug = here_type.slug
+    if not _moved_along(db, object_type, here_type):
         return
     target_id = row.id
     if row.deleted_at is not None:
@@ -3238,7 +3284,7 @@ def object_profile(
             if target is not None:
                 raise NotFound(
                     code("OBJECTS", 54),
-                    f"{merged.label}은 {target.label}에 합쳐졌습니다.",
+                    f"{merged.label}은(는) {target.label}에 합쳐졌습니다.",
                     details={"merged_into": str(target.id), "type_slug": object_type.slug},
                 ) from None
         _raise_if_moved(db, user, object_type, object_id)

@@ -353,7 +353,8 @@ def test_아무도_집어_가지_않으면_멈추고_말한다(
     before_send, before_wait = pipeline.SEND, pipeline.WAIT
     pipeline.SEND, pipeline.WAIT = send, lambda _seconds: None
     try:
-        with pytest.raises(pipeline.Stop, match="작업 워커가 꺼져 있는 것 같습니다"):
+        # 거절이 아니라 **받았는데 아직** — 워커가 바쁘거나(밤 계산) 꺼져 있다.
+        with pytest.raises(pipeline.Pending, match="아무도 집어 가지 않았습니다"):
             pipeline.cmd_preview(run, server=SERVER, token=token)
     finally:
         pipeline.SEND, pipeline.WAIT = before_send, before_wait

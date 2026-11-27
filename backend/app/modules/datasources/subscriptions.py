@@ -11,7 +11,8 @@
    같은 계획을 세운다. 저장값을 잃지 않는 변경(새 타입 · 새 칸 · 이름 · 설명 · 고를 값 추가)은
    곧장 적용하고, 잃을 수 있는 것(속성 종류 · 고를 값 제외 · 필수 · 유일 · 여러 값 · 개수 제약
    · 이 설치가 만든 정의를 허브 관리로 넘기기 — 가져오기 계획의 경고 · 종류 변경 · 오류)은
-   **정의 검토 대기**(`held`)로 남긴다. 시스템 관리자가 줄을 읽고 적용한다.
+   **정의 검토 대기**(`held`)로 남긴다. 시스템 관리자가 줄을 읽고 적용한다. 플랫폼 칸과 같은
+   키(`status` …)의 새 속성은 **그 속성만** 남기고 나머지는 적용한다(`hold_reserved`).
 2. **소스를 맞춘다** — 공개 타입마다 형제 코어 소스를 두고(없으면 만든다), 칸 대응에 허브에
    생긴 칸을 더하고 빠진 칸을 뺀다. 토큰 · 간격은 구독의 값으로. 이미 받은 행에도 값이 있을
    수 있는 칸을 새로 이으면 그 소스는 처음부터 다시 받는다.
@@ -56,6 +57,7 @@ from app.modules.datasources.schemas import (
 )
 from app.modules.ontology import importer, managed
 from app.modules.ontology.models import ObjectInterface, ObjectType, RelationType
+from app.modules.ontology.services import RESERVED_PROPERTY_KEYS
 from app.shared import audit, singleton
 from app.shared.errors import AppError, Conflict, NotFound, code
 
@@ -355,6 +357,62 @@ def soften(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+#: 플랫폼 칸과 같은 키의 속성을 뺀 타입 · 인터페이스에서 이번에는 바꾸지 않는 칸 — 그 키를
+#: 가리킬 수 있다(목록의 열 · 폼 · 제목 틀). 정의 검토 대기를 적용하면 허브의 것이 들어간다.
+_VIEWS_HELD_WITH_PROPERTY = ("list_view", "form_view", "detail_view", "title_template")
+
+
+def hold_reserved(db: Session, payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """플랫폼 칸과 같은 키(`status` …)의 **새** 속성을 뺀 정의와, 뺀 속성(`<slug>.<키>`).
+
+    그 키는 받는 쪽에서 경고(일괄 입력 · 묶음의 행으로 못 채운다)라 계획이 「깨끗」 하지 않다 —
+    전에는 그 경고 하나로 묶음 전체가 정의 검토 대기에 걸려, 같은 때 허브에 생긴 다른 타입 ·
+    칸까지 자동으로 들어오지 않았다(2026-11-27 점검). 그 속성만 남기고(그 타입의 화면 설정도
+    이번에는 그대로) 나머지를 적용한다. 이미 있는 그 키의 속성은 경고가 없으니 그대로 둔다.
+    다른 길(묶음 가져오기 · `?source=` 정의 가져오기)은 그대로 막는다."""
+    local = importer.capture(db)
+    have = {
+        (section, str(one["slug"])): {str(prop.get("key")) for prop in one["properties"]}
+        for section in ("types", "interfaces")
+        for one in local[section]
+    }
+    out = copy.deepcopy(payload)
+    held: list[str] = []
+    for section in ("types", "interfaces"):
+        for one in out.get(section) or []:
+            slug = str(one.get("slug"))
+            known = have.get((section, slug), set())
+            dropped = [
+                str(prop.get("key"))
+                for prop in one.get("properties") or []
+                if str(prop.get("key")) in RESERVED_PROPERTY_KEYS
+                and str(prop.get("key")) not in known
+            ]
+            if not dropped:
+                continue
+            one["properties"] = [
+                prop
+                for prop in one.get("properties") or []
+                if str(prop.get("key")) not in dropped
+            ]
+            for name in _VIEWS_HELD_WITH_PROPERTY:
+                one.pop(name, None)
+            if one.get("revision_key") in dropped:
+                one.pop("revision_key", None)
+            if one.get("label_prefix") in {f"properties.{key}" for key in dropped}:
+                one.pop("label_prefix", None)
+            held.extend(f"{slug}.{key}" for key in dropped)
+    return out, held
+
+
+def held_reserved_note(names: list[str]) -> str:
+    return (
+        f"속성 {', '.join(names)}: 플랫폼 칸과 같은 키라 이 속성만 정의 검토 대기로 남기고 "
+        "나머지 정의는 적용했습니다(그 타입의 화면 설정도 이번에는 그대로). 정의 검토 대기를 "
+        "적용하면 들어갑니다."
+    )
+
+
 @dataclass
 class Settled:
     """정의를 맞춘 결과."""
@@ -365,6 +423,8 @@ class Settled:
     """정의 검토 대기로 남긴 줄."""
     payload: dict[str, Any] = field(default_factory=dict)
     """허브의 정의를 다듬은 것 — 검토 대기를 적용할 때 이것을 그대로 넣는다."""
+    notes: list[str] = field(default_factory=list)
+    """구독의 알림 줄 — 나머지를 적용하고 무엇만 남겼나(`hold_reserved`)."""
 
 
 def _apply(
@@ -409,7 +469,8 @@ def settle(
     apply: bool,
     commit_check: Callable[[Session], None] | None = None,
 ) -> Settled:
-    """정의를 맞춘다 — 깨끗한 계획이면 통째로, 아니면 위험한 변경을 되돌린 것만(`soften`).
+    """정의를 맞춘다 — 깨끗한 계획이면 통째로, 아니면 위험한 변경을 되돌리고(`soften`) 플랫폼
+    칸과 같은 키의 새 속성을 뺀 것만(`hold_reserved`).
 
     `apply` 가 거짓이면 계획만 세운다(구독의 미리 보기)."""
     payload = prepared.payload
@@ -422,7 +483,7 @@ def settle(
             db.expire_all()
         out.applied = _changes(full)
         return out
-    safe = soften(db, payload)
+    safe, reserved = hold_reserved(db, soften(db, payload))
     partial = importer.plan(db, safe, source=source_name, keep_reserved=True)
     if not clean(partial) or not _changes(partial):
         # 되돌려도 위험이 남거나, 되돌리면 바뀌는 것이 없다 — 통째로 남긴다.
@@ -435,6 +496,8 @@ def settle(
     db.commit()
     _apply(actor, safe, source_name, commit_check)
     db.expire_all()
+    if reserved:
+        out.notes.append(held_reserved_note(reserved))
     # 남은 것만 — 되돌린 변경이 그대로 다시 나온다.
     out.held = lines_of(importer.plan(db, payload, source=source_name, keep_reserved=True))
     return out
@@ -823,6 +886,7 @@ def _reconcile(
                 )
                 out.applied = settled.applied
                 out.held = settled.held
+                out.notes.extend(settled.notes)
             row.definitions_mark = str(definitions.get("mark") or "")
             row.held = {"mark": row.definitions_mark, "lines": out.held} if out.held else {}
         else:

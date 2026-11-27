@@ -47,6 +47,10 @@ METRIC_ALERT_FAILED = "metric.alert.failed"
 조용히 돌아온다."""
 BOARD_COMMENT = "board.comment"
 """내 게시글에 남이 댓글을 작성했다(ADR 0033). 내가 단 댓글은 안 알린다."""
+FILES_CLEANUP_HALTED = "files.cleanup_halted"
+"""첨부 저장소의 자동 정리가 저장소 대부분을 지우려 해 멈췄다(`files/gc.halt`) — 다른 DB 의
+저장소를 보고 있을 수 있다. 사람이 정리할 때까지 차례마다 멈추므로 **하루에 한 번만** 알린다.
+로그에만 남기면 고아가 쌓이는 것도, 저장소가 남의 것인 것도 아무도 모른다."""
 
 
 def notify(

@@ -393,6 +393,27 @@ def _moves(db: Session, type_id: uuid.UUID) -> list[tuple[datetime, str, dict[st
             found.append((at, str(changes["from"]), keys))
         return found
 
+    def named(slug: str) -> set[uuid.UUID]:
+        """그 slug 를 지금 쓰거나 한때 썼던 타입의 id — slug 변경 기록
+        (`ontology.type.rename`)의 앞 · 뒤 이름으로. 옮기기 기록의 원 타입은 그때의 slug 로만
+        적혀 있어, 가운데 타입의 slug 를 바꾼 뒤에는 앞 단계의 「… → <옛 slug>」 와 글자로
+        이어지지 않았다(2026-11-27 점검)."""
+        ids = set(db.scalars(select(ObjectType.id).where(ObjectType.slug == slug)))
+        ids |= {
+            found
+            for found in db.scalars(
+                select(AuditEntry.target_id).where(
+                    AuditEntry.action == "ontology.type.rename",
+                    or_(
+                        AuditEntry.changes["from"].astext == slug,
+                        AuditEntry.changes["to"].astext == slug,
+                    ),
+                )
+            )
+            if found is not None
+        }
+        return ids
+
     out: list[tuple[datetime, str, dict[str, str]]] = []
     # (그 단계의 때, 원 타입, 원 키 → 지금 키) — 여기서 앞 단계를 찾는다.
     frontier = [
@@ -408,8 +429,10 @@ def _moves(db: Session, type_id: uuid.UUID) -> list[tuple[datetime, str, dict[st
             if origin in seen:
                 continue
             seen.add(origin)
+            ids = named(origin)
+            by_label = AuditEntry.target_label.endswith(f" → {origin}", autoescape=True)
             for earlier_at, earlier, keys in into(
-                AuditEntry.target_label.endswith(f" → {origin}", autoescape=True)
+                or_(by_label, AuditEntry.target_id.in_(ids)) if ids else by_label
             ):
                 if earlier_at >= at:
                     continue
@@ -591,7 +614,9 @@ def _retyped_from_ref(db: Session, object_type: ObjectType, entry_id: uuid.UUID)
         select(AuditEntry.target_label).where(
             AuditEntry.action == "ontology.property.retype",
             AuditEntry.seq > since,
-            AuditEntry.target_label.startswith(f"{object_type.slug}."),
+            # slug 의 `_` 는 LIKE 의 아무 한 글자다 — `a_1` 의 이력이 `a11` 의 종류 변경을
+            # 읽었다.
+            AuditEntry.target_label.startswith(f"{object_type.slug}.", autoescape=True),
             AuditEntry.changes["data_type"]["before"].astext == "object_ref",
         )
     )

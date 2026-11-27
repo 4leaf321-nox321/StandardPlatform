@@ -340,13 +340,24 @@ def _duplicates(db: Session, source: ObjectType, target: ObjectType, out: Plan) 
     out.duplicates = len(out.pairs)
     if source.key_scope == "workspace" and target.key_scope != "workspace":
         # 범위가 **부서 → 전사**로 넓어진다 — 옮길 것끼리(부서가 다른) 같은 식별자가 있으면
-        # 대상에서 같은 식별자가 둘 산다(유일은 서비스가 지킨다 — DB 제약이 아니다).
+        # 대상에서 같은 식별자가 둘 산다(유일은 서비스가 지킨다 — DB 제약이 아니다). 대상에
+        # 이미 그 식별자의 객체가 있으면 둘 다 그 객체로 병합되어 겹치지 않는다(병합하지 않으면
+        # 위의 「같은 식별자의 객체」 가 막는다). 범위가 부서인 대상은 부서마다 따로라 겹치지
+        # 않는다.
+        there = aliased(ObjectInstance)
         clashing = db.execute(
             select(ObjectInstance.key, func.count())
             .where(
                 ObjectInstance.type_id == source.id,
                 ObjectInstance.deleted_at.is_(None),
                 ObjectInstance.key.is_not(None),
+                ~select(there.id)
+                .where(
+                    there.type_id == target.id,
+                    there.deleted_at.is_(None),
+                    there.key == ObjectInstance.key,
+                )
+                .exists(),
             )
             .group_by(ObjectInstance.key)
             .having(func.count() > 1)
@@ -387,24 +398,54 @@ def _aliases(db: Session, source: ObjectType, target: ObjectType, out: Plan) -> 
         )
 
 
+#: 빈 값 — 유일 검사가 보지 않는다(`require_unique_properties`).
+_EMPTY = "('null'::jsonb, '\"\"'::jsonb, '[]'::jsonb)"
+#: 옮긴 뒤 대상의 그 칸에 **살아서 남는 값**마다 한 줄 — (그 값을 들 객체, 부서, 값).
+#: 병합되는 객체(`pairs`)는 짝의 칸이 비었을 때만 값이 짝으로 간다(`merge_into` 는 빈 칸만
+#: 채운다) — 그때 그 값을 드는 것은 짝이다. 짝에 값이 있으면 옮길 쪽의 값은 사라진다.
+_UNIQUE_MOVED = (
+    "WITH pairs AS (SELECT * FROM unnest(CAST(:moved AS uuid[]), CAST(:into AS uuid[])) "
+    "AS p(moved, into_id)), mine AS (SELECT coalesce(p.into_id, m.id) AS who, "
+    "m.owner_workspace_id AS ws, m.properties -> CAST(:src AS text) AS v FROM objects m "
+    "LEFT JOIN pairs p ON p.moved = m.id LEFT JOIN objects t ON t.id = p.into_id "
+    "WHERE m.type_id = :source AND m.deleted_at IS NULL AND m.properties ? CAST(:src AS text) "
+    f"AND m.properties -> CAST(:src AS text) NOT IN {_EMPTY} AND (p.into_id IS NULL OR "
+    f"coalesce(t.properties -> CAST(:dst AS text), 'null'::jsonb) IN {_EMPTY})) "
+)
+
+
 def _unique(db: Session, source: ObjectType, target: ObjectType, out: Plan) -> None:
-    """대상의 유일 칸에 이미 있는 값 — 병합할 짝은 빼고 센다."""
+    """대상의 유일 칸에 같은 값이 둘 서는가 — 대상에 이미 있는 값과, 옮길 것끼리.
+
+    유일의 범위는 대상의 식별자 범위를 따른다(`require_unique_properties`) — 부서인 대상이면
+    부서가 다른 같은 값은 겹치지 않는다. 같은 대상 객체로 병합되는 것끼리도 겹치지
+    않는다(하나가 된다). 전에는 값만 묶어, 부서 A 와 B 의 「S1」 을 범위가 부서인 대상으로 옮길
+    때 「옮길 객체끼리 같은 값」 으로 막았다(2026-11-27 점검)."""
     unique = {one.key for one in _defs(db, target).values() if one.unique}
-    merging = {moved for moved, _ in out.pairs}
+    scoped = target.key_scope == "workspace"
+    same_ws = " AND x.owner_workspace_id IS NOT DISTINCT FROM e.ws" if scoped else ""
     for one in out.fields:
         if not one.target or one.target not in unique or one.action == "drop":
             continue
-        clash = db.execute(
-            text(
-                "SELECT m.id FROM objects m JOIN objects t ON t.type_id = :target AND "
-                "t.deleted_at IS NULL AND t.properties -> CAST(:dst AS text) = m.properties "
-                "-> "
-                "CAST(:src AS text) WHERE m.type_id = :source AND m.deleted_at IS NULL AND "
-                "m.properties ? CAST(:src AS text)"
-            ),
-            {"target": target.id, "source": source.id, "src": one.source, "dst": one.target},
-        ).all()
-        count = sum(1 for (moved,) in clash if moved not in merging)
+        params = {
+            "target": target.id,
+            "source": source.id,
+            "src": one.source,
+            "dst": one.target,
+            "moved": [moved for moved, _ in out.pairs],
+            "into": [into for _, into in out.pairs],
+        }
+        count = int(
+            db.scalar(
+                text(
+                    _UNIQUE_MOVED + "SELECT count(DISTINCT e.who) FROM mine e JOIN objects x "
+                    "ON x.type_id = :target AND x.deleted_at IS NULL AND x.id <> e.who AND "
+                    "x.properties -> CAST(:dst AS text) = e.v" + same_ws
+                ),
+                params,
+            )
+            or 0
+        )
         if count:
             out.errors.append(
                 f"대상의 유일 칸 「{one.target}」 에 같은 값이 이미 있는 객체가 {count:,}건 "
@@ -414,18 +455,20 @@ def _unique(db: Session, source: ObjectType, target: ObjectType, out: Plan) -> N
         among = int(
             db.scalar(
                 text(
-                    "SELECT count(*) FROM (SELECT m.properties -> CAST(:src AS text) FROM "
-                    "objects m WHERE m.type_id = :source AND m.deleted_at IS NULL AND "
-                    "m.properties ? CAST(:src AS text) GROUP BY 1 HAVING count(*) > 1) d"
+                    _UNIQUE_MOVED
+                    + "SELECT count(*) FROM (SELECT 1 FROM mine GROUP BY v"
+                    + (", ws" if scoped else "")
+                    + " HAVING count(DISTINCT who) > 1) d"
                 ),
-                {"source": source.id, "src": one.source},
+                params,
             )
             or 0
         )
         if among:
+            where = " 같은 부서 안에서" if scoped else ""
             out.errors.append(
-                f"옮길 객체끼리 대상의 유일 칸 「{one.target}」 에 같은 값을 가진 묶음이 "
-                f"{among:,}개 있습니다 — 값을 먼저 정리하십시오."
+                f"옮길 객체끼리{where} 대상의 유일 칸 「{one.target}」 에 같은 값을 가진 "
+                f"묶음이 {among:,}개 있습니다 — 값을 먼저 정리하십시오."
             )
 
 

@@ -41,9 +41,15 @@ export function omittedRows(plan: ImportPlan): number {
   return (plan as ImportPlan & { rows_omitted?: number }).rows_omitted ?? 0
 }
 
+/** 행과 무관한 오류 — **없을 수 있다**(문서 올리기의 0.4.107 결과). 없는 칸을 읽으면 「작업」
+ *  화면 전체가 그 자리에서 멈췄다(2026-11-27 점검). */
+function planErrors(plan: ImportPlan): string[] {
+  return plan.errors ?? []
+}
+
 /** 이 계획을 적용할 수 있나 — 오류가 하나라도 있으면 아무것도 안 들어간다. */
 export function planIsClean(plan: ImportPlan): boolean {
-  return plan.errors.length === 0 && plan.counts.error === 0
+  return planErrors(plan).length === 0 && plan.counts.error === 0
 }
 
 /** 바뀌는 것이 있나 — 없으면 적용해도 아무 일이 없다. */
@@ -62,9 +68,14 @@ export function ImportPlanTable({
   /** 모든 줄을 CSV 로 받기 — 표에 다 못 그릴 때 그 아래에 선다. */
   onDownloadRows?: () => void
 }) {
+  // 「그대로」 여도 경고가 있으면 뺄 수 없다 — 읽고 적용할 것이다.
   const listed = plan.rows.filter(
-    (one) => one.action !== 'unchanged' || plan.rows.length <= SHOW_UNCHANGED_BELOW,
+    (one) =>
+      one.action !== 'unchanged' ||
+      plan.rows.length <= SHOW_UNCHANGED_BELOW ||
+      (one.warnings?.length ?? 0) > 0,
   )
+  const errors = planErrors(plan)
   const rows = listed.slice(0, RENDER_MAX)
   const rest = listed.length - rows.length + omittedRows(plan)
   return (
@@ -80,13 +91,18 @@ export function ImportPlanTable({
           <Badge variant="destructive">지움 {plan.counts.delete}</Badge>
         )}
         {plan.counts.error > 0 && <Badge variant="destructive">오류 {plan.counts.error}</Badge>}
+        {(plan.warned ?? 0) > 0 && (
+          <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">
+            확인할 것 {plan.warned}
+          </Badge>
+        )}
         {plan.applied && (
           <span className="text-emerald-600 dark:text-emerald-400">적용했습니다.</span>
         )}
       </div>
-      {plan.errors.length > 0 && (
+      {errors.length > 0 && (
         <ul className="text-destructive space-y-0.5 text-sm">
-          {plan.errors.map((one) => (
+          {errors.map((one) => (
             <li key={one}>{one}</li>
           ))}
         </ul>
@@ -127,6 +143,11 @@ export function ImportPlanTable({
                         {one.changes.join(', ') || one.message}
                       </span>
                     )}
+                    {one.warnings?.map((warning) => (
+                      <span key={warning} className="block text-amber-700 dark:text-amber-400">
+                        {warning}
+                      </span>
+                    ))}
                   </td>
                 </tr>
               ))}

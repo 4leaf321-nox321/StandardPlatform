@@ -275,3 +275,186 @@ def test_화면에서_먼저_적용했으면_키트는_건너뛰고_대조만_�
     _apply(client, admin, planned["jobs"][0]["job_id"])
     kit = sp_docpush.apply(tmp_path, sp_docpush.latest(tmp_path), server=SERVER, token=token)
     assert kit["applied"][0]["state"] == "already" and kit["check"]["all_same"] is True, kit
+
+
+# --- 2026-11-27 점검 — 상한 · 그림 꼴 · 같은 그림 · 빈 본문 · NUL · 줄 자르기 ------------
+
+
+def _push(
+    client: TestClient, admin: Signed, documents: list[Any], files: dict[str, bytes | str]
+) -> dict[str, Any]:
+    """키트를 안 거친 zip — 목록 · 마크다운 · 그림을 그대로 싣는다."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "manifest.json", json.dumps({"format": "sp-documents/1", "documents": documents})
+        )
+        for name, data in files.items():
+            archive.writestr(name, data)
+    made = client.post(
+        "/api/jobs",
+        data={"kind": "documents_push", "params": "{}"},
+        files={"file": ("docs.zip", buffer.getvalue(), "application/zip")},
+        headers=admin.headers,
+    )
+    assert made.status_code == 202, made.text
+    return finish_job(client, admin, made.json())
+
+
+def _doc(slug: str, oid: str, path: str) -> dict[str, Any]:
+    return {"type_slug": slug, "object_id": oid, "key": "paper", "path": path}
+
+
+def _another(client: TestClient, admin: Signed, slug: str, label: str) -> str:
+    made = client.post(
+        f"/api/objects/{slug}",
+        json={"label": label, "workspace_slug": admin.workspace},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    return str(made.json()["id"])
+
+
+def test_목록과_마크다운은_항목마다_상한이_있어_풀기_전에_거절한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """작은 zip 에 든 큰 목록 · 마크다운 — 전에는 통째로 풀어 읽었다(1MB zip 의 1GB 목록이
+    워커의 메모리를 다 썼다). 이제 머리에 적힌 크기로 먼저 거절한다."""
+    from app.modules.objects import docpush
+
+    slug, oid = _world(client, admin)
+    padded = io.BytesIO()
+    with zipfile.ZipFile(padded, "w", zipfile.ZIP_DEFLATED) as archive:
+        listed = json.dumps(
+            {"format": "sp-documents/1", "documents": [_doc(slug, oid, "a.md")]}
+        )
+        archive.writestr("manifest.json", listed + " " * (docpush.MANIFEST_MAX_BYTES + 1))
+        archive.writestr("a.md", "# 가\n")
+    assert len(padded.getvalue()) < 100_000, "눌러 담으면 작다"
+    made = client.post(
+        "/api/jobs",
+        data={"kind": "documents_push", "params": "{}"},
+        files={"file": ("docs.zip", padded.getvalue(), "application/zip")},
+        headers=admin.headers,
+    )
+    failed = finish_job(client, admin, made.json())
+    assert failed["status"] == "failed", failed
+    assert (
+        code("OBJECTS", 161) in failed["error"] and "목록은 4.0MB 까지" in failed["error"]
+    ), failed["error"]
+
+    huge = "a" * (docpush.BODY_MAX_BYTES + 1)
+    done = _push(client, admin, [_doc(slug, oid, "a.md")], {"a.md": huge})
+    assert done["status"] == "done", done
+    row = done["result"]["rows"][0]
+    assert row["action"] == "error" and row["message"].startswith("마크다운이 "), row
+
+
+def test_그림_꼴로_못_읽은_자리와_빈_본문은_경고이고_줄을_자를_때_앞세운다(
+    client: TestClient, admin: Signed
+) -> None:
+    from app.modules.jobs import services as job_services
+
+    slug, oid = _world(client, admin)
+    written = client.put(
+        f"/api/objects/{slug}/{oid}/documents/paper",
+        json={"body": "# 사람이 쓴 것\n", "base_revision": 0},
+        headers=admin.headers,
+    )
+    assert written.status_code == 200, written.text
+    plain = _another(client, admin, slug, "평범")
+    odd = _another(client, admin, slug, "그림 꼴")
+    body = "\n".join(
+        [
+            "# 그림 꼴",
+            '![제목](img/a.png "제목")',
+            "![빈칸](my pic.png)",
+            "![폭](img/a.png?w=1000)",
+            "![대괄]호](img/a.png)",
+            "![절대](/img/a.png)",
+            "![맞음](img/a.png?w=60)",
+            "![바깥](https://example.com/a.png)",
+            "[문서](notes.pdf)",
+            "",
+        ]
+    )
+    done = _push(
+        client,
+        admin,
+        [
+            _doc(slug, plain, "plain.md"),
+            _doc(slug, odd, "odd.md"),
+            _doc(slug, oid, "empty.md"),
+        ],
+        {"plain.md": "# 평범\n", "odd.md": body, "empty.md": "  \n", "img/a.png": _png()},
+    )
+    assert done["status"] == "done", done
+    result = done["result"]
+    rows = result["rows"]
+    assert [one["action"] for one in rows] == ["create", "create", "update"], rows
+    assert rows[0]["warnings"] == []
+    (pictures,) = rows[1]["warnings"]
+    assert pictures.startswith("그림 꼴로 읽지 않은 자리 5곳"), pictures
+    assert (
+        '「![제목](img/a.png "제목")」' in pictures and "「![빈칸](my pic.png)」" in pictures
+    )
+    assert len(rows[1]["images"]) == 1, "맞는 꼴 하나만 첨부한다"
+    (emptied,) = rows[2]["warnings"]
+    assert emptied.startswith(f"지금 본문 {written.json()['chars']}자가 빈 본문이 됩니다"), (
+        emptied
+    )
+    assert result["warned"] == 2 and "확인할 것 2" in result["summary"], result
+    # 「작업」 화면의 계획 표가 일괄 입력과 같은 모양으로 읽는다.
+    assert result["errors"] == []
+    # 경고는 막지 않는다.
+    assert result["ok"] is True
+
+    trimmed = job_services.trim_rows(result, 2)
+    assert [one["row"] for one in trimmed["rows"]] == [2, 3], "경고 줄을 앞세운다"
+    assert trimmed["rows_omitted"] == 1
+
+
+def test_같은_그림을_여러_자리가_가리켜도_한_번만_붙인다(
+    client: TestClient, admin: Signed
+) -> None:
+    """`./img/a.png` · `img/a.png` · 이름만 다른 같은 파일 — 전에는 자리마다 첨부가 늘었다."""
+    slug, oid = _world(client, admin)
+    picture = _png("blue")
+    body = "![가](./img/a.png)\n\n![나](img/a.png?w=50)\n\n![다](img/copy.png)\n"
+    planned = _push(
+        client,
+        admin,
+        [_doc(slug, oid, "docs/a.md")],
+        {"docs/a.md": body, "docs/img/a.png": picture, "docs/img/copy.png": picture},
+    )
+    row = planned["result"]["rows"][0]
+    assert row["action"] == "create" and len(row["images"]) == 1, row
+    applied = _apply(client, admin, planned["id"])
+    attachment = applied["rows"][0]["images"][0]["attachment_id"]
+    pictures = client.get(
+        "/api/attachments",
+        params={"owner_table": "objects", "owner_id": oid, "owner_field": "paper"},
+        headers=admin.headers,
+    ).json()
+    assert [one["id"] for one in pictures] == [attachment], pictures
+    full = client.get(f"/api/objects/{slug}/{oid}/documents/paper", headers=admin.headers)
+    assert full.json()["body"].count(f"photo:{attachment}") == 3, full.json()["body"]
+
+
+def test_본문의_NUL_문자는_계획에서_오류다(client: TestClient, admin: Signed) -> None:
+    """PostgreSQL 의 글자 칸은 NUL 을 못 담는다 — 전에는 계획을 지나 적용이 DB 오류로
+    죽었다."""
+    slug, oid = _world(client, admin)
+    other = _another(client, admin, slug, "메모")
+    noted = {**_doc(slug, other, "b.md"), "note": "메모\x00"}
+    done = _push(
+        client,
+        admin,
+        [_doc(slug, oid, "a.md"), noted],
+        {"a.md": "# 가\n\n나\x00다\n", "b.md": "# 나\n"},
+    )
+    assert done["status"] == "done", done
+    row, note = done["result"]["rows"]
+    assert row["action"] == "error" and "NUL 문자" in row["message"], row
+    assert "3째 줄" in row["message"], row
+    assert note["action"] == "error" and "목록의 줄에 NUL 문자" in note["message"], note

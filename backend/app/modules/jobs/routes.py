@@ -52,6 +52,7 @@ def _out(db: Session, row: Job, result: Any = _FULL) -> JobOut:
     목록을 비운 요약(`result`)을 따로 넘긴다."""
     spec = kinds.get(row.kind)
     who = db.get(User, row.requested_by_id) if row.requested_by_id else None
+    child = services.apply_child(db, row.id) if row.status == "done" else None
     workspace = db.get(Workspace, row.workspace_id) if row.workspace_id else None
     input_name = (
         db.scalar(select(JobFile.name).where(JobFile.id == row.input_file_id))
@@ -68,11 +69,8 @@ def _out(db: Session, row: Job, result: Any = _FULL) -> JobOut:
         result=services.trim_rows(row.result) if result is _FULL else result,
         error=row.error,
         parent_id=row.parent_id,
-        applied_by=(
-            child.id
-            if row.status == "done" and (child := services.apply_child(db, row.id)) is not None
-            else None
-        ),
+        applied_by=child.id if child is not None else None,
+        applied_status=child.status if child is not None else None,
         input_file_name=input_name,
         has_output=row.output_file_id is not None,
         requested_by_name=who.display_name if who else None,
@@ -266,6 +264,14 @@ def _from_token(request: Request) -> bool:
     return getattr(request.state, "token_scopes", None) is not None
 
 
+#: **그 일 자체가 사람만 적용하는** 작업 종류 — 인자의 `human_only` 와 함께 본다. 인자만 보면
+#: 그 표지가 생기기 전(v0.4.107 전)에 세운 계획은 토큰으로 적용됐다(2026-11-27 점검). 부서 자료
+#: 이동(`workspaces.services.REASSIGN_KIND` — jobs 가 workspaces 를 import 하지 않게 이름만
+#: 적는다). 정의 제안의 적용은 검토함 작업(`review_*`)으로 가는데, 그 작업은 사람만 정하는
+#: 종류가 아닌 줄도 싣는다 — 그쪽은 `by_token` 으로 줄마다 막는다(`review.services`).
+HUMAN_ONLY_KINDS = frozenset({"workspace_reassign"})
+
+
 def _require_apply_scope(request: Request, plan_job: Job) -> None:
     """이 계획을 적용할 범위가 토큰에 있나 — **사람 세션에는 범위가 없다**(None 이면 통과).
 
@@ -274,10 +280,13 @@ def _require_apply_scope(request: Request, plan_job: Job) -> None:
     """
     needed = (plan_job.params or {}).get("needs_scope")
     granted: list[str] | None = getattr(request.state, "token_scopes", None)
-    if (plan_job.params or {}).get("human_only") and granted is not None:
+    human_only = (
+        bool((plan_job.params or {}).get("human_only")) or plan_job.kind in HUMAN_ONLY_KINDS
+    )
+    if human_only and granted is not None:
         # **사람만 적용하는 계획** — 토큰으로는 계획을 세울 길도 없는 일(부서 자료 통째
-        # 옮기기).
-        # 전에는 `needs_scope` 가 없어 `objects:write` 토큰이 남이 세운 계획을 적용했다.
+        # 옮기기). 전에는 `needs_scope` 가 없어 `objects:write` 토큰이 남이 세운 계획을
+        # 적용했다.
         raise AppError(
             code("JOBS", 31),
             "이 작업의 적용은 사람이 화면에서 합니다 — 토큰(AI · 스크립트)으로는 하지 "

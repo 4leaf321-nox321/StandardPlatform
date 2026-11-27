@@ -157,15 +157,12 @@ class Engine:
             return out
         if not keep:
             # **맨 위가 없다** — 선이 모두 고리 안에 있다(A→B · B→A). 이어지는 관계를 나중에
-            # 켜면
-            # 예전 선의 고리가 남는다(넣을 때만 고리를 본다). 전에는 `keep[0]` 에서 IndexError
-            # 로
-            # 밤 계산 전체가 실패했다.
+            # 켜면 예전 선의 고리가 남는다(넣을 때만 고리를 본다). 전에는 `keep[0]` 에서
+            # IndexError 로 밤 계산 전체가 실패했다.
             if len(src):
                 out.similar_skipped = (
                     "맨 위(부모 없는 것)가 없습니다 — 선이 모두 고리 안에 있습니다. 고리를 "
-                    "끊으면 "
-                    "다음 계산에 나옵니다"
+                    "끊으면 다음 계산에 나옵니다"
                 )
             return out
         whole = sp.vstack(keep).tocsr() if len(keep) > 1 else keep[0].tocsr()
@@ -270,10 +267,8 @@ class Engine:
         degree = _degree(n, a, b)
         if n == 0 or not len(a):
             # **선이 하나도 없다**(객체만 있고 관계 · 참조가 아직 없는 설치) — NetworKit 의
-            # 모듈성은
-            # 선 없는 그래프에서 예외를 낸다(밤 계산 전체가 실패하고 자동 계산이 멈췄다). GPU
-            # 판과
-            # 같은 답: 무리는 모두 「없음」, 다리 역할은 0.
+            # 모듈성은 선 없는 그래프에서 예외를 낸다(밤 계산 전체가 실패하고 자동 계산이
+            # 멈췄다). GPU 판과 같은 답: 무리는 모두 「없음」, 다리 역할은 0.
             return Whole(
                 np.full(n, -1, np.int64) if want_cluster else None,
                 None,

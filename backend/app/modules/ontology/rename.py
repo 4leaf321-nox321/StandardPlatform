@@ -332,14 +332,23 @@ def _active_jobs(db: Session, slug: str, skip: uuid.UUID | None) -> list[str]:
     return found
 
 
-def _env_mentions(prefix: str) -> list[str]:
+def _env_mentions(name: str) -> list[str]:
+    """`.env` 의 목록 설정에서 `name` 을 적은 줄 — `<slug>.<키>` 면 그 칸 하나, `<slug>` 면 그
+    타입의 칸 전부. **이름 그대로** 견준다 — 앞머리로 견주면 키 `foo` 를 바꾸거나 지울 때
+    `foo_bar` 를 적은 줄까지 「옛 키가 있다」 로 알렸다(2026-11-27 점검). 속성 삭제
+    계획(`routes`)도 이것을 쓴다."""
     settings = get_settings()
+    whole = "." not in name
     out: list[str] = []
-    for name in ("date_index_fields", "graph_calc_whole_relations"):
-        raw = str(getattr(settings, name, "") or "")
-        hits = [one.strip() for one in raw.split(",") if one.strip().startswith(prefix)]
+    for setting in ("date_index_fields", "graph_calc_whole_relations"):
+        raw = str(getattr(settings, setting, "") or "")
+        hits: list[str] = []
+        for one in (part.strip() for part in raw.split(",")):
+            owner, _, field = one.partition(".")
+            if (one == name) if not whole else (owner == name and bool(field)):
+                hits.append(one)
         if hits:
-            out.append(f"{name.upper()}({', '.join(hits)})")
+            out.append(f"{setting.upper()}({', '.join(hits)})")
     return out
 
 
@@ -700,7 +709,7 @@ def plan_type(db: Session, owner: ObjectType, to: str, *, consumers: list[str]) 
         db.scalar(
             select(func.count())
             .select_from(ObjectDocument)
-            .where(ObjectDocument.body.contains(f"/o/{old}/"))
+            .where(ObjectDocument.body.contains(f"/o/{old}/", autoescape=True))
         )
         or 0
     )
@@ -723,7 +732,7 @@ def plan_type(db: Session, owner: ObjectType, to: str, *, consumers: list[str]) 
             "따릅니다 — "
             f"다음 받기부터 「{ra_reports.REF_PREFIX}{to}」 를 찾으니 그 칸의 키도 바꾸십시오."
         )
-    env = _env_mentions(f"{old}.")
+    env = _env_mentions(old)
     if env:
         out.warnings.append(
             f".env 의 {' · '.join(env)} 에 옛 slug 가 있습니다 — 서버 설정에서 고치십시오."

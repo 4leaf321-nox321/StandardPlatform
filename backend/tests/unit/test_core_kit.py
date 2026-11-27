@@ -418,6 +418,37 @@ def test_절반_넘게_안_오면_정리하지_않고_멈춘다(tmp_path: Path) 
     assert _all(path, 'SELECT count(*) FROM "part" WHERE deleted=1') == [(29,)]
 
 
+def test_작은_표도_전부_안_오면_정리하지_않고_멈춘다(tmp_path: Path) -> None:
+    """바닥(10건) 아래의 표는 비율을 안 봐, 공개 측이 한 번 빈 응답을 주면 전부가 비활성 ·
+    끊김이 됐다 — 공개 측(ADR 0098)과 같게 **전부** 안 오면 멈춘다. 몇 건 빠진 것은 그대로
+    정리한다."""
+    kit = _kit()
+    assert kit.too_many(3, 3) is True
+    assert kit.too_many(1, 3) is False
+    assert kit.too_many(0, 0) is False
+    assert kit.too_many(11, 20) is True and kit.too_many(10, 15) is False
+    cfg = {"out_dir": tmp_path, "page_size": 500}
+    path = tmp_path / "sp_core.sqlite"
+    kit.save_rows(cfg, "part", [_obj("P-1"), _obj("P-2"), _obj("P-3")])
+    kit.save_relations(
+        cfg, "part", [{"src": "P-3", "relation": "uses", "dst": "P-1", "dst_type": "part"}]
+    )
+
+    kit.request_json = _paged({"as_of": "T1", "next": None, "items": []})
+    counts = kit.pull_type(cfg, "part", {})
+    assert counts["held_back"] == 3 and counts["gone"] == 0, counts
+    assert _all(path, 'SELECT count(*) FROM "part" WHERE deleted=1') == [(0,)]
+    kit.request_json = _paged({"as_of": "T1", "next": None, "items": []})
+    counts = kit.pull_relations(cfg, "part", {})
+    assert counts["held_back"] == 1 and counts["gone"] == 0, counts
+    assert _all(path, 'SELECT src FROM "part__relations"') == [("P-3",)]
+
+    kit.request_json = _paged({"as_of": "T2", "next": None, "items": []})
+    counts = kit.pull_type(cfg, "part", {}, allow_shrink=True)
+    assert counts["gone"] == 3
+    assert _all(path, 'SELECT count(*) FROM "part" WHERE deleted=1') == [(3,)]
+
+
 def test_커서를_못_읽으면_커서_없이_같은_시각부터_다시_받는다(tmp_path: Path) -> None:
     """404 는 두 가지다 — 커서 문제(CORE 2번) 하나로 타입 수신을 멈추지 않는다."""
     kit = _kit()

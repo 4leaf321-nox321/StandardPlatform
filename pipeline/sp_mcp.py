@@ -16,9 +16,9 @@ Claude Desktop 은 PC 의 명령을 직접 못 돌리고, Gemini CLI 는 돌리�
 
 **적용은 사람이 대화에서 확인한 뒤에만**(ADR 0100). 적용하는 도구(`run_apply` ·
 `run_undo_apply` · `document_apply`)는 **미리 본 그 계획 작업**만 넣는다 — 계획 없이는 부를
-길이 없고, 사람이 본 뒤 그 사이 누가 바꿨으면 플랫폼이 거절한다(지문). AI 는 요약을 보이고
-묻고, 사람이 「좋다 · 적용해」 라고 한 뒤에 부른다. 화면 「작업」 의 「적용」 · 명령 창도
-그대로다.
+길이 없고, 사람이 본 뒤 그 사이 누가 바꿨으면 플랫폼이 거절한다(지문 — 백필의 가벼운 미리
+보기는 지문이 없어 적용 때 다시 판정한다). AI 는 요약을 보이고 묻고, 사람이 「좋다 ·
+적용해」 라고 한 뒤에 부른다. 화면 「작업」 의 「적용」 · 명령 창도 그대로다.
 
 절차의 정본은 같은 폴더의 `AGENTS.md` 이고 `pipeline_guide` 가 그것을 그대로 내려준다. 여기에
 절차를 옮겨 적지 않는다.
@@ -451,6 +451,7 @@ def document_push(
     path: str = "",
     base_revision: int | None = None,
     note: str = "",
+    allow_empty: bool = False,
 ) -> dict[str, Any]:
     """**로컬 마크다운을 파일 그대로** 플랫폼 객체의 문서 칸에 넣는 미리 보기 — 본문이 도구
     인자를 거치지 않는다(Word 수백 건을 옮겨 적지 않는다).
@@ -463,12 +464,16 @@ def document_push(
     - 한 건이면 `type_slug` · `object_id` · `key`(문서 칸) · `path`(작업 폴더에서 본 마크다운 —
       `docx_extract` 의 `draft` 등) · `base_revision`(읽고 고친 판, 비우면 지금 판).
     - 여러 건이면 **`manifest`** — 작업 폴더의 JSON 파일(`work_write` 로 쓴다) `[{"type_slug",
-      "object_id", "key", "path", "base_revision"?, "note"?}, …]`. 수백 건도 한 번에 (크면
-      키트가 나눠 작업 여럿으로 올린다 — 링크도 여럿).
-    - 올리기 전에 키트가 막는 것: 없는 파일 · 폴더 밖 · 100만 자 넘음 · 개인 정보 꼴 · 없는
-      그림 · 같은 칸 둘. 플랫폼이 막는 것: 없는 객체 · 문서 칸 아님 · 권한 · 원천 잠금 · 판이
-      다름 · 이미지 아님. **한 줄이라도 오류면 적용되지 않는다** — 그 줄을 목록에서 빼거나 고쳐
-      다시 올린다.
+      "object_id", "key", "path", "base_revision"?, "note"?, "allow_empty"?}, …]`. 수백 건도 한
+      번에 (크면 키트가 나눠 작업 여럿으로 올린다 — 링크도 여럿, 적용은 함께 본 뒤 차례로).
+    - **빈 본문(공백뿐)은 막는다** — 올리면 그 문서가 빈 판으로 덮인다. `allow_empty`(목록이면
+      그 줄의 `"allow_empty": true`)는 **사람이 그 문서의 본문을 비우라고 말했을 때만** 켠다 —
+      짐작으로 켜지 않는다.
+    - 올리기 전에 키트가 막는 것: 없는 파일 · 폴더 밖 · 100만 자 넘음 · 빈 본문 · NUL 문자 ·
+      개인 정보 꼴 · 없는 그림 · 그림으로 못 읽는 그림 자리(제목 · 경로의 빈칸 · `/` 로
+      시작하는 경로 · `data:` — 그대로면 로컬 경로가 본문에 남는다) · 같은 칸 둘. 플랫폼이 막는
+      것: 없는 객체 · 문서 칸 아님 · 권한 · 원천 잠금 · 판이 다름 · 이미지 아님. **한 줄이라도
+      오류면 적용되지 않는다** — 그 줄을 목록에서 빼거나 고쳐 다시 올린다.
     - 돌려주는 것: `counts` · `jobs`(작업 · 화면 링크) · `rows`(문제 줄 먼저 30줄) ·
       `record`(올린 기록 — `document_check` 가 쓴다). 적용 뒤의 새 판 · sha256 은
       `document_apply` 가 대조까지 해서 돌려준다(화면에서 적용했으면 `document_check`)."""
@@ -482,7 +487,9 @@ def document_push(
                 "한 건이면 type_slug · object_id · key · path 를, 여러 건이면 manifest 를 "
                 "줍니다"
             )
-        items = [sp_docpush.Item(type_slug, object_id, key, path, base_revision, note)]
+        items = [
+            sp_docpush.Item(type_slug, object_id, key, path, base_revision, note, allow_empty)
+        ]
     chosen = _target(folder)
     out = sp_docpush.push(
         folder, items, server=chosen.server, token=chosen.token, platform=chosen.name
@@ -503,15 +510,26 @@ def document_apply(work: str, record: str = "") -> dict[str, Any]:
     짐작으로, 또는 오류가 있는 계획에 부르지 않는다(묶음의 `run_apply` 와 같은 규칙, ADR 0100).
     문서는 판이 남아 사람이 옛 판으로 되돌릴 수 있다.
 
-    `record` 를 비우면 마지막으로 올린 기록. 작업마다 적용하고 끝나기를 기다린 뒤 **곧바로
-    대조한다** (`check` — `document_check` 와 같다, 본문을 다시 받지 않는다). 사람이 화면에서
-    먼저 적용한 작업은 건너뛴다(`already`). 그 사이 누가 그 문서를 고쳤으면 그 작업은
-    거절된다(`failed` — 다시 올려 미리 본다). 돌려주는 것: `applied`(작업마다 `applied` ·
-    `already` · `refused` · `failed`) · `all_applied` · `check`(`counts` · `all_same` ·
-    다른 줄)."""
+    `record` 를 비우면 마지막으로 올린 기록(`docs/.push/<때>/push.json` 만 받는다). 작업이
+    여럿이면(크면 나눠 올렸다) **먼저 전부를 함께 본다** — 문서 올리기의 계획인가 · 오류 줄이
+    없나. 하나라도 틀리면 아무것도 넣지 않고, 다 깨끗하면 **차례로** 넣는다. 그 사이 플랫폼이
+    뒤의 작업을 거절하면(누가 그 문서를 고침 — `failed`) 거기서 멈추고 어느 작업은 들어갔고
+    어느 것은 안 들어갔는지 `message` 로 말한다 — 그대로 사람에게 전한다. 적용이 대기열에
+    있으면(`waiting` — 받아들여졌고 거절이 아니다) 다시 부르면 그 적용에 묻고 이어서 넣는다.
+    끝나면 **곧바로 대조한다**(`check` — `document_check` 와 같다, 본문을 다시 받지 않는다).
+    사람이 화면에서 먼저 적용한 작업은 건너뛴다(`already`). 돌려주는 것: `applied`(작업마다
+    `applied` · `already` · `unchanged` · `waiting` · `refused` · `failed` · `not_applied`) ·
+    `all_applied` · `waiting` · `message` · `check`(`counts` · `all_same` · 다른 줄)."""
     folder = _work(work)
-    path = _inside_file(folder, record) if record else sp_docpush.latest(folder)
+    path = sp_docpush.record_path(folder, record)
     chosen = _target(folder)
+    pushed = pipeline._read_json(path, [])
+    went = str((pushed or {}).get("platform") or "") if isinstance(pushed, dict) else ""
+    if went and chosen.name and went != chosen.name:
+        raise Stop(
+            f"올린 플랫폼({went})과 이 작업의 지금 플랫폼({chosen.name})이 다릅니다 — "
+            f"{chosen.name} 에 넣으려면 document_push 로 다시 올려 계획을 사람에게 다시 보인다"
+        )
     return {
         "platform": chosen.shown,
         **sp_docpush.apply(folder, path, server=chosen.server, token=chosen.token),
@@ -528,7 +546,7 @@ def document_check(work: str, record: str = "") -> dict[str, Any]:
     누가 고침 · 그림이 안 붙음) · `not_written`(판 0) · `local_changed`(올린 뒤 로컬 파일이
     바뀜) · `error`. `all_same` 이 참이면 전부 같다."""
     folder = _work(work)
-    path = _inside_file(folder, record) if record else sp_docpush.latest(folder)
+    path = sp_docpush.record_path(folder, record)
     chosen = _target(folder)
     return {
         "platform": chosen.shown,
@@ -557,7 +575,9 @@ def table_convert(work: str, mapping: str, source: str, name: str = "") -> dict[
     source_path = _source(folder, source)
     run = sp_work.new_run(folder, name or source_path.stem)
     server, token = _maybe(folder)
-    ok, report = sp_table.convert(mapping_path, source_path, run, server=server, token=token)
+    ok, report = sp_table.convert(
+        mapping_path, source_path, run, server=server, token=token, root=folder
+    )
     return {
         "run": run.relative_to(folder).as_posix(),
         "unresolved_empty": ok,
@@ -664,12 +684,17 @@ def run_apply(work: str, run: str) -> dict[str, Any]:
 
     **미리 본 그 계획 작업**을 넣는다 — 화면의 「적용」 과 같은 길(같은 파일 · 같은 지문).
     넣는 곳은 미리 본 플랫폼이다. 보내지 않는 것: 미리 본 뒤 파일이 바뀜 · 미리 보기 오류 ·
-    정의 확정 전 · 이미 적용한 실행 · 같은 묶음을 다른 실행에서 이미 적용함 · 닫은 실행. 그
-    사이 누가 바꿔 계획과 달라졌으면 플랫폼이 거절한다(`failed` — 다시 미리 보고 다시
-    묻는다). 화면에서 먼저 적용했으면 또 넣지 않는다(`already`).
+    정의 확정 전(확정 뒤 바뀜) · **실행이 싣는 정의가 지금 확정한 정의가 아님**(확정 뒤 다시
+    변환) · **미리 본 뒤 이 작업의 넣을 곳을 바꿈**(`work_platform` — 그곳에서 다시 미리
+    본다) · 이미 적용한 실행 · 같은 묶음을 다른 실행에서 이미 적용함 · 닫은 실행. 그 사이 누가
+    바꿔 계획과 달라졌으면 플랫폼이 거절한다(`failed` — 다시 미리 보고 다시 묻는다). 단
+    **백필(가벼운 미리 보기)은 지문이 없어** 적용할 때 다시 판정한다 — 그 사이 바뀐 것을
+    거절하지 않는다. 화면에서 먼저 적용했으면 또 넣지 않는다(`already`).
 
-    돌려주는 것: `state`(`applied` · `already` · `refused` · `failed`) · `applied` ·
-    `summary` · `run_id`(넣은 판 — 되돌릴 때 `run_undo` 에)."""
+    돌려주는 것: `state`(`applied` · `already` · `waiting` · `refused` · `failed`) ·
+    `applied` · `summary` · `run_id`(넣은 판 — 되돌릴 때 `run_undo` 에). **`waiting` 은
+    거절이 아니다** — 플랫폼이 받았고 대기열에 있다(워커가 바쁨). 다시 적용하지 말고 그 말을
+    그대로 전한다 — `work_status` 가 끝나면 「적용함」(실패면 「적용 거절됨」)으로 바꾼다."""
     folder = _work(work)
     path = _run(folder, run)
     sp_work.before_apply(folder, path)
@@ -708,6 +733,8 @@ def run_undo(run_id: str, platform: str = "") -> dict[str, Any]:
     명령 창이 편하면 `undo_command`, 화면이면 `on_screen`.
     """
     chosen = _target(platform=platform)
+    # 판 번호는 uuid 꼴만 — 번호 자리에 주소를 이어 붙여 계획 대신 적용을 부르지 못하게.
+    run_id = pipeline.job_uuid(run_id, "되돌릴 판의 번호")
     ok, summary, job = pipeline.undo_job(run_id, server=chosen.server, token=chosen.token)
     where = f" --platform {chosen.name}" if chosen.name else ""
     return {
@@ -731,12 +758,11 @@ def run_undo_apply(run_id: str, plan_job: str, platform: str = "") -> dict[str, 
 
     `plan_job` 은 `run_undo` 가 준 그 계획 — 그 판의 되돌리기 계획이 아니면 보내지 않는다.
     그 사이 누가 고쳐 계획과 달라졌으면 플랫폼이 거절한다(`failed` — `run_undo` 로 다시 보고
-    다시 묻는다). 이미 되돌렸으면 `already`. 그 사이 남이 고친 줄은 되돌리지 않고 이유가 줄에
-    온다. 돌려주는 것: `state` · `undone` · `summary`."""
+    다시 묻는다). 이미 되돌렸으면 `already`. 대기열에 있으면 `waiting`(거절이 아니다 — 다시
+    부르지 말고 그 플랫폼 화면 「작업」 에서 끝났는지 본다). 그 사이 남이 고친 줄은 되돌리지
+    않고 이유가 줄에 온다. 돌려주는 것: `state` · `undone` · `summary`."""
     chosen = _target(platform=platform)
-    out = pipeline.cmd_undo_apply(
-        run_id.strip(), plan_job, server=chosen.server, token=chosen.token
-    )
+    out = pipeline.cmd_undo_apply(run_id, plan_job, server=chosen.server, token=chosen.token)
     out.pop("result", None)
     return {"platform": chosen.shown, **out}
 
