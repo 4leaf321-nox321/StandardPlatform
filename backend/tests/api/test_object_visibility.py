@@ -311,6 +311,29 @@ def test_못_보게_된_사람에게는_알림이_안_간다(
     assert not any("비밀 볼트" in one["title"] for one in after)
 
 
+def test_관계_알림은_못_보는_다른_끝의_이름을_가린다(
+    client: TestClient, admin: Signed, manager: Signed, db: Session
+) -> None:
+    """선의 알림은 다른 끝을 이름으로 싣는다 — 받는 사람이 그 끝을 못 보면 「(볼 수 없는
+    객체)」. 감사 기록에 박힌 끝의 이름(한 사람이 볼 때 지은 것)을 그대로 싣지 않는다."""
+    other = _other(db)
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "uses", label="씀")
+    bolt = _make_object(client, admin, part, label="볼트")
+    secret = _hidden(client, admin, part, other, label="비밀 부품")
+    assert _watch(client, manager, part, bolt["id"], True).status_code == 200
+    before = len(notifications_of(client, manager, "object.changed"))
+
+    for src, dst in ((bolt, secret), (secret, bolt)):
+        made = _link(client, admin, part, src["id"], kind, dst["id"])
+        assert made.status_code == 201, made.text
+    got = notifications_of(client, manager, "object.changed")[:2]
+    assert len(notifications_of(client, manager, "object.changed")) == before + 2
+    for one in got:
+        assert one["title"] == "볼트 — 관계가 추가됐습니다"
+        assert HIDDEN in one["body"] and "비밀" not in one["body"], one
+
+
 # --- 변경 이력(감사) ---------------------------------------------------------------
 
 

@@ -1420,9 +1420,9 @@ def _sync_body(
         # 찾기 · 무덤)은 타지 않는다: 이 소스는 객체를 만들지 않는다.
         run.rows_seen = len(fetched.rows)
         edges = [edge_row(mapping.relations, raw) for raw in fetched.rows]
-        # **「더하기」 면 끝점을 못 찾은 줄이 나머지를 막지 않는다** — 이 소스는 매번 전량을
-        # 읽으니 다음 동기화가 저절로 다시 넣는다. 「파일대로 맞춤」 은 그대로 엄격하다 —
-        # 건너뛴 줄이 「파일에 없는 선」 으로 읽혀 있는 선을 끊을 수 있다.
+        # **끊겨 온 표는 계획만 세운다** — 객체 쪽 · RA 쪽과 같다. 「파일대로 맞춤」 은 온
+        # 목록에 없는 선을 끊으므로, 앞 5만 행만 받은 채 적용하면 뒤에 있던 진짜 선이 끊기고
+        # 실행은 「실패」 로만 남았다(끊김을 적용한 뒤에 봤다, 2026-11-28).
         only_counts, only_errors, waiting, edges_ok = _apply_edges(
             db,
             user,
@@ -1431,13 +1431,17 @@ def _sync_body(
             edges,
             [],
             mode=mapping.relations.mode,
-            apply=apply,
+            apply=apply and not fetched.truncated,
+            # **「더하기」 면 끝점을 못 찾은 줄이 나머지를 막지 않는다** — 이 소스는 매번
+            # 전량을 읽으니 다음 동기화가 저절로 다시 넣는다. 「파일대로 맞춤」 은 그대로
+            # 엄격하다 — 건너뛴 줄이 「파일에 없는 선」 으로 읽혀 있는 선을 끊을 수 있다.
             skip_missing=mapping.relations.mode == "add",
             max_rows=max(len(edges), bulk.MAX_ROWS),
         )
         if fetched.truncated:
             only_errors.append(
-                f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — `$filter` 로 나눠 동기화하세요."
+                f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — `$filter` 로 나눠 동기화하세요. "
+                "아무것도 적용하지 않았습니다."
             )
         ok = (
             edges_ok
@@ -2187,6 +2191,9 @@ def _sync_ra(
     counts = {**counts, **marks}
     held_back = marks.get("gone_held_back", 0)
     now = datetime.now(UTC)
+    # 대조의 `as_of` 는 전량의 끝이 아니라 **본문까지 받은 읽기**의 끝이다
+    # (`ra_reports.fetch`) — 전량의 끝으로 옮기면 그사이 본문이 바뀐 보고서를 다음 증분이
+    # 건너뛴다.
     if fetched.as_of and not fetched.truncated:
         source.since_mark = fetched.as_of
     warnings: list[str] = []

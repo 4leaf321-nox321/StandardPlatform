@@ -27,8 +27,24 @@ AI 가 문서마다 정의를 만들면 같은 개념이 두 타입에 갈린다
 대상의 필수 칸이 빈 객체, 개정 칸이 다른 계보, 공개 타입. 원 타입은 빈 채로 남는다 —
 삭제는 삭제 미리 보기로.
 
-객체의 `updated_at` 은 그대로다. 이력은 이 변경의 감사 기록(`ontology.type.move`)을 보고,
-옮기기 전 기록(감사 기록의 이름표가 `<원 타입>:…`)의 키를 대상의 키로 읽는다.
+이력은 이 변경의 감사 기록(`ontology.type.move`)을 보고, 옮기기 전 기록(감사 기록의 이름표가
+`<원 타입>:…`)의 키를 대상의 키로 읽는다.
+
+## 바뀐 때(`updated_at`)는 옮긴 때로 올린다
+
+「지난번 이후 바뀐 것」 을 읽는 쪽은 모두 `type_id + updated_at` 으로 묻는다 — 코어 API 의
+`since` · 형제 SP 의 코어 구독 · 지표 증분 · 지도의 점. 처음에는 바뀐 때를 그대로 뒀는데(값이
+안 바뀌었다고 봤다), 그러면 옮긴 객체가 그 누구에게도 안 보였다: 대상의 수신 시스템은 옮겨 온
+객체를 영영 못 받고, 대상의 지표는 그것을 안 더했다(2026-11-28 점검). 객체의 타입 · 칸의 키가
+바뀐 것은 받는 쪽에는 바뀐 것이다 — 그래서 같은 문장(`_MOVE`)에서 올린다.
+
+원 타입 쪽은 객체가 떠나 「바뀐 것」 으로 물을 행이 없다. 그래서 **떠난 일을 따로 말한다** —
+`Trail` 이 감사 기록으로 「이 타입의 객체는 지금 어디 있나」 를 답하고, 코어 API 는 원 타입에
+`moved_to` · `moved_at` 을 싣고, 지표 증분은 그 타입을 읽는 지표를 전량으로 다시 센다.
+
+계보 선(ADR 0041)의 낡음은 대상 타입에 개정 칸이 없으면 「원천의 바뀐 때 > 고정한 때」 다. 바뀐
+때만 올리면 옮긴 객체를 원천으로 둔 계보 선이 전부 낡음이 된다 — 그래서 옮기기 전에 낡지 않던
+선은 고정한 때도 옮긴 때로 함께 올린다(`_KEEP_PINS`, 판정을 옮기기 전 그대로 지킨다).
 """
 
 from __future__ import annotations
@@ -37,12 +53,14 @@ import copy
 import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import and_, delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.audit.models import AuditEntry
 from app.modules.datasources.models import DataSource
 from app.modules.metrics.models import MetricDef
 from app.modules.objects import lifecycle
@@ -554,16 +572,34 @@ def plan(
     _definitions(db, source, target, out)
     _leftovers(db, source, target, out)
     if source.core and consumers:
+        # **수신 시스템에 실제로 일어나는 일**을 적는다 — 전에는 「사라집니다」 · 「새 객체를
+        # 받습니다」 라고 했지만 옮긴 객체의 바뀐 때가 그대로라 어느 쪽도 일어나지 않았다
+        # (2026-11-28 점검). 이제 원 타입에 `moved_to` 가 실리고 옮긴 객체는 대상의 「바뀐 것」
+        # 으로 간다.
         out.core_consumers = consumers
+        if target.core:
+            told = (
+                f"수신 시스템에는 이 객체들이 {target.label}({target.slug})(으)로 "
+                "옮겨졌다고 알립니다(카탈로그 · 쪽의 `moved_to`). 연동 키트 2026-11-28 판 "
+                f"이상과 코어 구독은 {source.label} 쪽을 비활성으로 두고 {target.label} "
+                "로 받습니다 — 그 전 판의 키트는 아무것도 지우지 않고 「확인 필요」 로 "
+                "멈춥니다(키트를 새로 받거나 --full --allow-shrink)"
+            )
+        else:
+            told = (
+                f"대상 {target.label}은(는) 공개하지 않은 타입이라 수신 시스템에서는 이 "
+                "객체들이 사라집니다(옮겼다고만 알리고 어디로 갔는지는 밝히지 않습니다 — "
+                "키트는 비활성으로 둡니다)"
+            )
         out.warnings.append(
-            f"{source.label}은(는) 외부에 공개 중입니다 — 수신 시스템에서 이 객체들이 "
-            "사라집니다. "
-            "통보를 확인하고 accept_core 로 적용하십시오."
+            f"{source.label}은(는) 외부에 공개 중입니다 — {told}. 통보를 확인하고 "
+            "accept_core 로 적용하십시오."
         )
     if target.core:
         out.warnings.append(
-            f"대상 {target.label}은(는) 외부에 공개 중입니다 — 수신 시스템이 새 객체를 "
-            "받습니다."
+            f"대상 {target.label}은(는) 외부에 공개 중입니다 — 옮긴 객체는 바뀐 때가 옮긴 "
+            "때로 올라 수신 시스템이 "
+            + ("「바뀐 것」 으로 다시 받습니다." if source.core else "새 객체로 받습니다.")
         )
     out.warnings.append(
         f"옮긴 뒤 「{source.label}」 타입은 빈 채로 남습니다 — 정리하려면 삭제 미리 보기로."
@@ -684,8 +720,11 @@ def _leftovers(db: Session, source: ObjectType, target: ObjectType, out: Plan) -
 
 # --- 적용 ------------------------------------------------------------------------
 
+#: 옮기는 문장 — 타입 · 값의 키 · 사람이 수정한 칸 표시, 그리고 **바뀐 때**(`now()`, ORM 의
+#: `onupdate` 와 같은 값). 바뀐 때를 그대로 두면 「지난번 이후」 로 묻는 쪽(코어 API · 코어
+#: 구독 · 지표 증분 · 지도의 점)이 옮긴 객체를 못 본다(머리말).
 _MOVE = text(
-    "UPDATE objects o SET type_id = :target, "
+    "UPDATE objects o SET type_id = :target, updated_at = now(), "
     "properties = (SELECT coalesce(jsonb_object_agg(coalesce(m.value #>> '{}', e.key), "
     "e.value), '{}'::jsonb) FROM jsonb_each(o.properties) e LEFT JOIN jsonb_each(CAST(:map AS "
     "jsonb)) m ON m.key = e.key WHERE m.value IS NULL OR m.value <> 'null'::jsonb), "
@@ -697,6 +736,21 @@ _MOVE = text(
     "WHERE o.id = ANY(:ids)"
 )
 
+#: 계보 선의 고정한 때를 옮긴 때로 — **`_MOVE` 앞에** 돈다(옛 바뀐 때를 읽는다). 대상
+#: 타입에 개정 칸이 없으면 낡음은 「원천의 바뀐 때 > 고정한 때」 라, 바뀐 때만 올리면 옮긴
+#: 객체를 원천으로 둔 계보 선이 전부 낡음이 된다. 옮기기 전에 그 식으로 낡지 않던 선만
+#: 올린다 — 낡았던 선은 바뀐 때가 더 올라 낡은 채다. 선의 바뀐 때(`updated_at`)는
+#: 그대로(`lineage._write_pin` 과 같다).
+_KEEP_PINS = {
+    end: text(
+        "UPDATE object_relations r SET pinned_at = now() FROM objects o "
+        f"WHERE o.id = ANY(:ids) AND r.{end}_object_id = o.id "
+        "AND r.relation = ANY(CAST(:kinds AS text[])) AND r.pinned_at IS NOT NULL "
+        "AND NOT coalesce(o.updated_at > r.pinned_at, false)"
+    )
+    for end in ("src", "dst")
+}
+
 
 def apply(
     db: Session,
@@ -706,16 +760,29 @@ def apply(
     out: Plan,
     *,
     progress: Progress,
-) -> dict[str, int]:
-    """계획대로 옮긴다 — 부르는 쪽이 커밋한다."""
+) -> dict[str, Any]:
+    """계획대로 옮긴다 — 부르는 쪽이 커밋한다. 돌려주는 것: 옮긴 수 · 병합한 수 · 원 타입의
+    id(`from_id` — 감사 기록에 실린다)."""
     for edit in out.edits:
         edit()
     db.flush()
     if out.dropped_aliases:
         db.execute(delete(ObjectAlias).where(ObjectAlias.id.in_(out.dropped_aliases)))
     keymap = json.dumps(out.keys, ensure_ascii=False)
+    # 대상이 개정 칸으로 낡음을 보면 고정한 때는 판정에 안 든다 — 바뀐 때로 보는 때만 지킨다.
+    lineage: dict[str, list[str]] = {"src": [], "dst": []}
+    if not target.revision_key:
+        for slug, end in db.execute(
+            select(RelationType.slug, RelationType.lineage_source).where(
+                RelationType.lineage_source.in_(("src", "dst"))
+            )
+        ):
+            lineage[end].append(slug)
     done = 0
     for ids in _chunks(db, source.id, ObjectInstance.id.is_not(None)):
+        for end, kinds in lineage.items():
+            if kinds:
+                db.execute(_KEEP_PINS[end], {"ids": ids, "kinds": kinds})
         db.execute(_MOVE, {"target": target.id, "map": keymap, "ids": ids})
         db.execute(
             update(ObjectAlias).where(ObjectAlias.object_id.in_(ids)).values(type_id=target.id)
@@ -755,7 +822,10 @@ def apply(
         merged += 1
         if progress is not None:
             progress("겹친 객체 병합", merged, len(out.pairs))
-    return {"moved": done, "merged": merged}
+    # 원 타입의 id 를 함께 돌려준다 — 부르는 쪽이 감사 기록(`ontology.type.move`)에 그대로
+    # 싣는다. 원 타입을 slug 로만 적으면, 지운 뒤 같은 slug 로 만든 새 타입이 그 옮기기를
+    # 물려받는다(`Trail`).
+    return {"moved": done, "merged": merged, "from_id": str(source.id)}
 
 
 def fingerprint(out: Plan) -> str:
@@ -764,3 +834,209 @@ def fingerprint(out: Plan) -> str:
     body: list[Any] = [out.source, out.target, out.objects, out.duplicates, out.errors]
     body.append([(f.source, f.target, f.action, f.values) for f in out.fields])
     return hashlib.sha256(json.dumps(body, ensure_ascii=False).encode()).hexdigest()
+
+
+# --- 옮긴 자취 — 읽는 쪽 ------------------------------------------------------------
+#
+# 옮기기는 감사 기록 하나(`ontology.type.move` — 대상은 `target_id`, 원 타입은 그때의 slug 로
+# `changes.from` · 이름표 「<원> → <대상>」, 이 판부터는 원 타입의 id 도 `changes.from_id`)만
+# 남긴다. 「이 타입의 객체는 지금 어디 있나」 · 「이 타입에서 지난번 이후 옮겨 간 · 옮겨 온
+# 일이 있나」 를 그 기록에서 읽는다 — 코어 API 의 `moved_to`, 지표 증분, 코어 구독이 같은 답을
+# 쓴다.
+
+#: 옮긴 길을 따라갈 단계 — A → B → C … (이력 `objects/history.MOVE_HOPS` 와 같은 값).
+MOVE_HOPS = 6
+
+#: (slug, 이 차례 뒤부터, 이 차례 앞까지) — 한 타입이 그 slug 를 쥐었던 동안.
+Span = tuple[str, int | None, int | None]
+
+
+@dataclass(frozen=True)
+class Moved:
+    """옮기기 한 번 — 감사 기록 하나."""
+
+    seq: int
+    """감사의 차례 — 때(`created_at`)는 트랜잭션 시작 시각이라 차례는 이것으로 가른다."""
+    at: datetime
+    source: str
+    """그때의 원 타입 slug."""
+    source_id: uuid.UUID | None
+    """원 타입의 id — 이 판 전의 기록에는 없다(그때는 slug 로만 맞춘다)."""
+    target_id: uuid.UUID | None
+    target: str
+    """그때의 대상 slug."""
+
+
+@dataclass(frozen=True)
+class Departure:
+    """한 타입의 객체가 **지금 있는 곳** — 마지막으로 떠난 일을 그 뒤의 옮기기까지 따라간
+    끝."""
+
+    at: datetime
+    """이 타입에서 마지막으로 옮겨 간 때(감사 기록의 때)."""
+    to_id: uuid.UUID | None
+    """끝 타입 — 지운 타입이면 None."""
+    to_slug: str
+    """끝 타입의 지금 slug(지운 타입이면 기록의 slug)."""
+
+
+def _uuid(raw: Any) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(raw)) if raw else None
+    except ValueError:
+        return None
+
+
+class Trail:
+    """옮기기 · 타입 slug 변경 · 타입 삭제의 감사 기록을 **한 번** 읽어 둔 것.
+
+    **원 타입은 id 로 맞춘다** — 이 판부터 옮기기 기록에 원 타입의 id(`from_id`)를 남긴다.
+    그 전의 기록은 그때의 slug 로만 적혀 있어, 타입마다 「언제부터 언제까지 어느 slug 였나」 를
+    세워 맞춘다(slug 변경 기록, `objects/routes._slug_spans` 와 같은 규칙 — 차례로 가른다).
+    그 동안의 **앞은 다른 타입이 그 slug 를 내놓은 때로 막는다**(지움 · slug 변경) — 열어 두면
+    옮긴 원 타입을 지우고 같은 slug 로 새 타입을 만들었을 때 새 타입이 옛 옮기기를
+    물려받았다(`moved_to` 가 실리고, 코어 구독이 새 타입의 객체를 사용 중지했다 — 2026-11-28
+    검토). 기록은 옮기기 · slug 변경 · 삭제마다 한 줄이라 몇 줄 안 된다."""
+
+    def __init__(self, db: Session) -> None:
+        self.moves: list[Moved] = []
+        for seq, at, target_id, label, origin, origin_id, landed in db.execute(
+            select(
+                AuditEntry.seq,
+                AuditEntry.created_at,
+                AuditEntry.target_id,
+                AuditEntry.target_label,
+                AuditEntry.changes["from"].astext,
+                AuditEntry.changes["from_id"].astext,
+                AuditEntry.changes["to"].astext,
+            )
+            .where(AuditEntry.action == "ontology.type.move")
+            .order_by(AuditEntry.seq)
+        ):
+            head, _, tail = (label or "").partition(" → ")
+            self.moves.append(
+                Moved(
+                    seq=int(seq),
+                    at=at,
+                    source=str(origin or head),
+                    source_id=_uuid(origin_id),
+                    target_id=target_id,
+                    target=str(landed or tail),
+                )
+            )
+        self.renames: dict[uuid.UUID, list[tuple[int, str]]] = {}
+        #: slug → (내놓은 차례, 내놓은 타입) — 지움 · slug 변경. 동안의 앞을 막는다.
+        self.released: dict[str, list[tuple[int, uuid.UUID]]] = {}
+        #: 지운 타입 → 지운 차례 — 지운 타입의 동안의 뒤를 막는다.
+        self.deleted: dict[uuid.UUID, int] = {}
+        self.slugs: dict[uuid.UUID, str] = {}
+        if not self.moves:
+            return
+        for action, seq, type_id, label, old in db.execute(
+            select(
+                AuditEntry.action,
+                AuditEntry.seq,
+                AuditEntry.target_id,
+                AuditEntry.target_label,
+                AuditEntry.changes["from"].astext,
+            )
+            .where(AuditEntry.action.in_(("ontology.type.rename", "ontology.type.delete")))
+            .order_by(AuditEntry.seq)
+        ):
+            if type_id is None:
+                continue
+            if action == "ontology.type.rename":
+                self.renames.setdefault(type_id, []).append((int(seq), str(old or "")))
+                gone = str(old or "")
+            else:
+                self.deleted[type_id] = int(seq)
+                gone = str(label or "")
+            if gone:
+                self.released.setdefault(gone, []).append((int(seq), type_id))
+        self.slugs = dict(db.execute(select(ObjectType.id, ObjectType.slug)).tuples().all())
+
+    def _spans(self, type_id: uuid.UUID | None, slug: str) -> list[Span]:
+        """이 타입이 slug 를 쥐었던 동안들 — 지운 타입이면 기록의 slug 하나(지운 차례까지).
+        동안의 앞은 다른 타입이 그 slug 를 마지막으로 내놓은 차례로 막는다."""
+        raw: list[Span] = []
+        if type_id is None or type_id not in self.slugs:
+            raw.append((slug, None, self.deleted.get(type_id) if type_id else None))
+        else:
+            after: int | None = None
+            for seq, old in self.renames.get(type_id, []):
+                if old:
+                    raw.append((old, after, seq))
+                after = seq
+            raw.append((self.slugs[type_id], after, None))
+        out: list[Span] = []
+        for name, after, before in raw:
+            others = [
+                seq
+                for seq, who in self.released.get(name, [])
+                if who != type_id and (before is None or seq < before)
+            ]
+            floor = max([one for one in (after, *others) if one is not None], default=None)
+            out.append((name, floor, before))
+        return out
+
+    def _from(self, one: Moved, type_id: uuid.UUID | None, spans: list[Span]) -> bool:
+        """그 옮기기의 원 타입이 이 타입인가 — id 가 적혀 있으면 id 로, 없으면 slug
+        동안으로."""
+        if one.source_id is not None:
+            return one.source_id == type_id
+        return _within(one, spans)
+
+    def out_of(self, type_id: uuid.UUID | None, slug: str) -> list[Moved]:
+        """이 타입에서 **옮겨 간** 일 — 차례대로."""
+        spans = self._spans(type_id, slug)
+        return [one for one in self.moves if self._from(one, type_id, spans)]
+
+    def touching(self, type_ids: set[uuid.UUID], after: datetime) -> list[Moved]:
+        """`after` 뒤에 이 타입들에서 옮겨 갔거나 이 타입들로 옮겨 온 일."""
+        found: dict[int, Moved] = {}
+        for type_id in type_ids:
+            if type_id not in self.slugs:
+                continue
+            for one in self.out_of(type_id, self.slugs[type_id]):
+                found[one.seq] = one
+        for one in self.moves:
+            if one.target_id in type_ids:
+                found[one.seq] = one
+        return [one for _seq, one in sorted(found.items()) if one.at > after]
+
+    def left(self, object_type: ObjectType) -> Departure | None:
+        """이 타입의 객체가 옮겨 간 곳 — 옮긴 적이 없거나 **다시 돌아왔으면** None.
+
+        마지막으로 떠난 일에서 시작해, 그 객체들이 닿은 타입에서 **그 뒤에** 처음 떠난 일을
+        따라간다(A → B 뒤에 B → C 면 A 의 객체는 C 에 있다 — 옮기기는 타입의 객체 전부를
+        옮긴다). 닿은 타입에서 그 앞에 떠난 일은 그 객체들과 상관없다."""
+        outs = self.out_of(object_type.id, object_type.slug)
+        if not outs:
+            return None
+        first = outs[-1]
+        at_id, at_slug, seq = first.target_id, first.target, first.seq
+        for _hop in range(MOVE_HOPS):
+            following = next(
+                (one for one in self.out_of(at_id, at_slug) if one.seq > seq), None
+            )
+            if following is None:
+                break
+            at_id, at_slug, seq = following.target_id, following.target, following.seq
+        if at_id == object_type.id:
+            return None
+        known = at_id is not None and at_id in self.slugs
+        return Departure(
+            at=first.at,
+            to_id=at_id if known else None,
+            to_slug=self.slugs[at_id] if known and at_id is not None else at_slug,
+        )
+
+
+def _within(one: Moved, spans: list[Span]) -> bool:
+    """그 옮기기의 원 타입이 이 slug 동안의 것인가(원 타입 id 가 없는 옛 기록)."""
+    return any(
+        one.source == name
+        and (after is None or one.seq > after)
+        and (before is None or one.seq < before)
+        for name, after, before in spans
+    )

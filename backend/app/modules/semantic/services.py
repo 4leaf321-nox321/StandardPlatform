@@ -776,16 +776,20 @@ def _busy(db: Session) -> bool:
     )
 
 
-def _last(db: Session, statuses: tuple[str, ...] = ("done", "failed", "cancelled")) -> Any:
-    """가장 최근에 끝난 계산 — `statuses` 로 좁힌다(「done」 이면 마지막으로 성공한 것)."""
+def _last(
+    db: Session,
+    statuses: tuple[str, ...] = ("done", "failed", "cancelled"),
+    *,
+    full: bool = False,
+) -> Any:
+    """가장 최근에 끝난 계산 — `statuses` 로 좁힌다(「done」 이면 마지막으로 성공한 것).
+    `full` 이면 「전부」 차례만(`params.full`)."""
     from app.modules.jobs.models import Job
 
-    return db.scalar(
-        select(Job)
-        .where(Job.kind == SYNC_KIND, Job.status.in_(statuses))
-        .order_by(Job.created_at.desc())
-        .limit(1)
-    )
+    stmt = select(Job).where(Job.kind == SYNC_KIND, Job.status.in_(statuses))
+    if full:
+        stmt = stmt.where(Job.params.contains({"full": True}))
+    return db.scalar(stmt.order_by(Job.created_at.desc()).limit(1))
 
 
 def _when(job: Any) -> datetime | None:
@@ -843,9 +847,12 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
     failed_at = _when(last) if last is not None and last.status != "done" else None
     if failed_at is not None and now - failed_at < RETRY_AFTER:
         return None
-    # 「전부」 의 차례는 **마지막으로 성공한 때**로 센다 — 처음 차례가 실패했으면 다시 넣을
-    # 때도 전부다(실패한 때로 세면 「바뀐 것만」 이 되어 하루를 기다린다).
-    succeeded = _when(_last(db, ("done",)))
+    # 「전부」 의 차례는 **「전부」 가 마지막으로 성공한 때**로 센다 — 처음 차례가
+    # 실패했으면 다시 넣을 때도 전부다(실패한 때로 세면 「바뀐 것만」 이 되어 하루를
+    # 기다린다). 「바뀐 것만」 의 성공은 세지 않는다: 그것으로 세던 때는 하루에 한 번만
+    # 고쳐도 시계가 다시 돌아, 바쁜 설치에서는 하루 한 번의 「전부」(놓친 줄 · 모델
+    # 바뀜을 해시로 다시 보기)가 영영 차례가 안 됐다(2026-11-28).
+    succeeded = _when(_last(db, ("done",), full=True))
     chosen = target_ids(db)
     kind: str | None = None
     if chosen and (succeeded is None or now - succeeded >= FULL_EVERY):

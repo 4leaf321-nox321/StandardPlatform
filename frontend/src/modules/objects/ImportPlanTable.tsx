@@ -47,16 +47,23 @@ function planErrors(plan: ImportPlan): string[] {
   return plan.errors ?? []
 }
 
+/** 셈 — **없을 수 있다.** 줄 목록(`rows`)만 보고 이 표를 그리던 「작업」 화면이 검토함 작업의
+ *  결과(줄은 있는데 셈 · 바뀌는 칸이 다른 모양)를 넘겨 화면 전체가 멈췄다(2026-11-28 점검). 모르는
+ *  모양이 와도 표가 그 자리에서 멈추지 않게 빈 셈으로 읽는다. */
+function planCounts(plan: ImportPlan): Partial<Record<string, number>> {
+  return plan.counts ?? {}
+}
+
 /** 이 계획을 적용할 수 있나 — 오류가 하나라도 있으면 아무것도 안 들어간다. */
 export function planIsClean(plan: ImportPlan): boolean {
-  return planErrors(plan).length === 0 && plan.counts.error === 0
+  return planErrors(plan).length === 0 && (planCounts(plan).error ?? 0) === 0
 }
 
 /** 바뀌는 것이 있나 — 없으면 적용해도 아무 일이 없다. */
 export function planChangesSomething(plan: ImportPlan): boolean {
+  const counts = planCounts(plan)
   return (
-    plan.counts.create + plan.counts.update + (plan.counts.unlink ?? 0) + (plan.counts.delete ?? 0) >
-    0
+    (counts.create ?? 0) + (counts.update ?? 0) + (counts.unlink ?? 0) + (counts.delete ?? 0) > 0
   )
 }
 
@@ -68,11 +75,13 @@ export function ImportPlanTable({
   /** 모든 줄을 CSV 로 받기 — 표에 다 못 그릴 때 그 아래에 선다. */
   onDownloadRows?: () => void
 }) {
+  const all = plan.rows ?? []
+  const counts = planCounts(plan)
   // 「그대로」 여도 경고가 있으면 뺄 수 없다 — 읽고 적용할 것이다.
-  const listed = plan.rows.filter(
+  const listed = all.filter(
     (one) =>
       one.action !== 'unchanged' ||
-      plan.rows.length <= SHOW_UNCHANGED_BELOW ||
+      all.length <= SHOW_UNCHANGED_BELOW ||
       (one.warnings?.length ?? 0) > 0,
   )
   const errors = planErrors(plan)
@@ -81,16 +90,12 @@ export function ImportPlanTable({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Badge>새로 {plan.counts.create}</Badge>
-        <Badge variant="secondary">고침 {plan.counts.update}</Badge>
-        <Badge variant="outline">그대로 {plan.counts.unchanged}</Badge>
-        {(plan.counts.unlink ?? 0) > 0 && (
-          <Badge variant="destructive">끊음 {plan.counts.unlink}</Badge>
-        )}
-        {(plan.counts.delete ?? 0) > 0 && (
-          <Badge variant="destructive">지움 {plan.counts.delete}</Badge>
-        )}
-        {plan.counts.error > 0 && <Badge variant="destructive">오류 {plan.counts.error}</Badge>}
+        <Badge>새로 {counts.create ?? 0}</Badge>
+        <Badge variant="secondary">고침 {counts.update ?? 0}</Badge>
+        <Badge variant="outline">그대로 {counts.unchanged ?? 0}</Badge>
+        {(counts.unlink ?? 0) > 0 && <Badge variant="destructive">끊음 {counts.unlink}</Badge>}
+        {(counts.delete ?? 0) > 0 && <Badge variant="destructive">지움 {counts.delete}</Badge>}
+        {(counts.error ?? 0) > 0 && <Badge variant="destructive">오류 {counts.error}</Badge>}
         {(plan.warned ?? 0) > 0 && (
           <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-400">
             확인할 것 {plan.warned}
@@ -127,7 +132,9 @@ export function ImportPlanTable({
                     {one.row || '—'}
                   </td>
                   <td className="px-2 py-1">
-                    <Badge variant={ACTION_VARIANT[one.action]}>{ACTION_LABEL[one.action]}</Badge>
+                    <Badge variant={ACTION_VARIANT[one.action] ?? 'outline'}>
+                      {ACTION_LABEL[one.action] ?? one.action}
+                    </Badge>
                   </td>
                   <td className="max-w-48 truncate px-2 py-1">
                     {one.label}
@@ -140,7 +147,7 @@ export function ImportPlanTable({
                       <span className="text-destructive">{one.message}</span>
                     ) : (
                       <span className="text-muted-foreground">
-                        {one.changes.join(', ') || one.message}
+                        {(one.changes ?? []).join(', ') || one.message}
                       </span>
                     )}
                     {one.warnings?.map((warning) => (
@@ -155,9 +162,9 @@ export function ImportPlanTable({
           </table>
         </div>
       )}
-      {plan.rows.length > SHOW_UNCHANGED_BELOW && plan.counts.unchanged > 0 && (
+      {all.length > SHOW_UNCHANGED_BELOW && (counts.unchanged ?? 0) > 0 && (
         <p className="text-muted-foreground text-xs">
-          「그대로」 {plan.counts.unchanged}행은 표에서 뺐습니다.
+          「그대로」 {counts.unchanged}행은 표에서 뺐습니다.
         </p>
       )}
       {rest > 0 && (

@@ -32,7 +32,8 @@ import { Label } from '@/shared/components/ui/label'
 
 const SELECT = 'border-input bg-background h-8 rounded-md border px-2 text-sm'
 
-const ACTION: Record<MoveField['action'], string> = {
+/** 칸 대응의 말 — 「작업」 화면의 옮기기 계획도 같은 말로 읽는다. */
+export const MOVE_ACTION_LABEL: Record<MoveField['action'], string> = {
   same: '같은 키',
   map: '다른 키로',
   create: '대상에 새로 생성',
@@ -219,7 +220,7 @@ export function MoveDialog({ type, targets, onDone, onClose }: MoveDialogProps) 
                           onChange={(event) => choose(one, event.target.value)}
                         >
                           <option value="">
-                            계획대로 — {ACTION[one.action]}
+                            계획대로 — {MOVE_ACTION_LABEL[one.action]}
                             {one.target && one.action !== 'drop' ? ` ${one.target}` : ''}
                           </option>
                           {targetKeys.map((key) => (

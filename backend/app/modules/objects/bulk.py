@@ -3315,7 +3315,12 @@ def apply_relations(
                 target_table="object_relations",
                 target_id=edge.id,
                 target_label=row_plan.label,
-                changes={"reason": "파일에 없어 끊음"},
+                # **양 끝을 id 로 싣는다** — 없으면 객체 이력이 이 줄을 못 찾고 지켜보기 알림도
+                # 안 간다(선은 바로 아래에서 지워져 끝을 되읽을 데가 없다).
+                changes={
+                    **audit.relation_endpoints(edge, "", ""),
+                    "reason": "파일에 없어 끊음",
+                },
                 reason="일괄 가져오기 — 파일대로 맞춤",
             )
             journal.removed(

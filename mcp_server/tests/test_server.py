@@ -617,25 +617,39 @@ def test_분석은_레시피와_options_를_경로와_질의로_건넨다() -> N
 
 
 def test_경보는_내_발생을_읽고_지표를_주면_그_지표만() -> None:
-    """만들기는 화면에서 — 이 도구는 읽기만 한다. 지표를 주면 그 지표의 경보와 발생만."""
-    events = [{"metric": "m1", "title": "a"}, {"metric": "m2", "title": "b"}]
+    """만들기는 화면에서 — 이 도구는 읽기만 한다. 지표를 주면 그 지표의 경보와 발생만.
+
+    **지표로 거르는 것은 서버다**(`metric=`). 전에는 내 모든 경보의 최근 `limit` 개를 받아
+    여기서 걸러, 다른 지표가 자주 울리면 이 지표의 발생이 밀려나 0건이 됐다 — 아래 가짜
+    백엔드는 서버처럼 「거른 뒤 `limit` 개」 를 준다."""
+    # 새것부터: m2 가 셋 울린 뒤에 m1 이 하나 — 거르기 전 최근 2개에는 m1 이 없다.
+    events = [
+        {"metric": "m2", "title": "b1"},
+        {"metric": "m2", "title": "b2"},
+        {"metric": "m2", "title": "b3"},
+        {"metric": "m1", "title": "a"},
+    ]
 
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/metrics/alerts/events":
-            return httpx.Response(200, json=events)
+            metric = request.url.params.get("metric")
+            mine = [one for one in events if metric is None or one["metric"] == metric]
+            return httpx.Response(200, json=mine[: int(request.url.params["limit"])])
         return httpx.Response(200, json=[{"id": "x", "name": "경보"}])
 
     seen = _serve(respond)
     got = asyncio.run(server.metric_alerts(_ctx("Bearer t"), limit=999))
     assert got == {"events": events}
     assert seen[0].url.params["limit"] == "200" and seen[0].method == "GET"
+    assert "metric" not in seen[0].url.params
     seen = _serve(respond)
-    one = asyncio.run(server.metric_alerts(_ctx("Bearer t"), "m1"))
-    assert one == {"alerts": [{"id": "x", "name": "경보"}], "events": [events[0]]}
+    one = asyncio.run(server.metric_alerts(_ctx("Bearer t"), "m1", limit=2))
+    assert one == {"alerts": [{"id": "x", "name": "경보"}], "events": [events[3]]}
     assert [request.url.path for request in seen] == [
         "/api/metrics/alerts/events",
         "/api/metrics/m1/alerts",
     ]
+    assert seen[0].url.params["metric"] == "m1"
 
 
 def test_이어진_칸의_주소는_서버에_묻는다() -> None:
@@ -811,6 +825,89 @@ def test_확장_호출은_그_확장_뿌리로만_간다() -> None:
     )
     # 막힌 것은 **부르기 전에** 막는다 — 위 다섯 번에 요청이 나가지 않았다.
     assert len(seen) == 1
+    # `#` 는 httpx 가 그 뒤를 버린다 — 퍼센트 꼴 · 제어 문자는 모든 요청의 자리가 막는다.
+    for bad in ("dt/pairs#/x", "dt/%2e%2e/%2E%2e/objects/mach", "dt/%2Fx", "dt/\npairs"):
+        got = asyncio.run(server.extension_call(_ctx("Bearer t"), "caegroup", bad))
+        assert "error" in got, bad
+    assert len(seen) == 1
+
+
+#: 객체 설명 · 문서에 심을 수 있는 인자 — httpx 가 `..` 를 접고 `#` 뒤를 버리고 `?` 뒤를
+#: 쿼리로 읽어, 위험 도구(ADR 0030)를 비켜 다른 엔드포인트로 갔다(2026-11-28 실측).
+_JOB = "8b0d6f54-3d0c-4a43-9a39-6a1d1d1a2b3c"
+_INJECTED = (
+    f"../part/{_JOB}?mode=detach",  # → DELETE /api/objects/part/<id>?mode=detach
+    f"../../jobs/{_JOB}/apply#",  # → POST /api/jobs/<id>/apply
+    f"{_JOB}/merge",  # 마디를 늘려 옆 경로로
+    "..",
+    ".",
+)
+
+
+def test_도구_인자로_다른_엔드포인트를_못_부른다() -> None:
+    """**요청이 나가기 전에** 막고 보통 오류 모양으로 돌려준다 — 도우미(`_delete` · `_post` ·
+    `_patch` · `_put`)든 도구가 직접 연 클라이언트든 같은 자리(`_GuardedClient`)를 지난다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"ok": True}))
+    ctx = _ctx("Bearer t")
+    for bad in _INJECTED:
+        for decision in ("withdraw", "accept"):
+            got = asyncio.run(server.relation_proposal_decide(ctx, bad, decision))
+            assert got.get("unsafe_path") is True, (bad, decision, got)
+            assert "부를 수 없는 경로" in got["error"]
+        got = asyncio.run(server.object_update(ctx, "part", bad, label="x", aliases=["y"]))
+        assert got.get("unsafe_path") is True, (bad, got)
+        got = asyncio.run(server.object_get(ctx, "part", bad))
+        assert got.get("unsafe_path") is True, (bad, got)
+        # 위험 도구 — 관리자 확인(`/api/auth/me`, `seen` 밖) 뒤에도 그 경로는 안 나간다.
+        got = asyncio.run(server.relation_remove(ctx, "part", _JOB, bad))
+        assert got.get("unsafe_path") is True, (bad, got)
+        got = asyncio.run(server.objects_list(ctx, bad))
+        assert got.get("unsafe_path") is True, (bad, got)
+    assert seen == [], [str(one.url) for one in seen]
+
+
+def test_경로_지키기는_보통의_인자를_그대로_보낸다() -> None:
+    """UUID · 한글 slug · 쿼리(`params=`)는 그대로 — 지키기가 정상 호출을 막으면 아무도 안
+    쓴다. 인자의 `%` 는 마디 안의 글자로 간다(`%252e` — 서버가 한 번 풀어도 `%2e` 라는
+    글자다)."""
+    # 0건이 아니게 — 0건이면 목록이 까닭(`diagnose`)을 한 번 더 묻는다.
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [{"id": "x"}], "total": 1}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(server.object_get(ctx, "part", _JOB, as_of="2026-01-01"))
+    asyncio.run(server.objects_list(ctx, "부품", q="볼트 #1?"))
+    asyncio.run(server.relation_proposal_decide(ctx, _JOB, "accept", note="사람이 확인함"))
+    asyncio.run(server.object_get(ctx, "part", "50%2e"))
+    assert [one.url.path for one in seen] == [
+        f"/api/objects/part/{_JOB}",
+        "/api/objects/부품",
+        f"/api/objects/relation-proposals/{_JOB}/accept",
+        "/api/objects/part/50%2e",
+    ]
+    assert seen[0].url.params["as_of"] == "2026-01-01"
+    assert seen[1].url.params["q"] == "볼트 #1?"
+    assert seen[3].url.raw_path == b"/api/objects/part/50%252e"
+
+
+def test_경로의_거절_까닭() -> None:
+    ok = ("/api/objects/part", "/api/objects/%EB%B6%80%ED%92%88/x", "/api/a/b.c/d..e")
+    for path in ok:
+        assert server._path_refusal(path) is None, path
+    bad = (
+        "/api/objects/part/../jobs/x/apply",
+        "/api/objects/./part",
+        "/api/objects/part/x?mode=detach",
+        "/api/objects/part/x#y",
+        "/api/objects/part\\x",
+        "/api/objects/%2e%2E/jobs",
+        "/api/objects/a%2Fb",
+        "/api/objects/a%5cb",
+        "/api/objects/a\tb",
+        "/api/objects/a\x7fb",
+        "http://elsewhere/api/x",
+        "//elsewhere/api/x",
+    )
+    for path in bad:
+        assert server._path_refusal(path) is not None, path
 
 
 def test_본문은_본문_있는_메서드에만_실린다() -> None:

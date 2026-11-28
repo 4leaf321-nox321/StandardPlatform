@@ -95,10 +95,16 @@ def diff(expected: dict[str, Any], dump: dict[str, Any]) -> list[str]:
                 + ("(빈 값은 칸이 아예 안 온다 — 받은 행의 칸으로 통째로 바꿉니다, 규칙 6)" if b is None else "")
             )
 
+    types_moved: dict[str, str] = expected.get("moved") or {}
     for (slug, key) in sorted(set(have) - set(want)):
         moved = (previous.get(slug) or {}).get(key)
         if moved:
             problems.append(f"[옛 식별자 남음] {slug}:{key} 는 {moved} 로 바뀌었습니다 — 행을 새 key 로 옮깁니다(규칙 5)")
+        elif slug in types_moved:
+            problems.append(
+                f"[옮겨 간 것이 살아 있음] {slug}:{key} — {slug} 의 객체는 {types_moved[slug]} 로 옮겨졌습니다. "
+                "카탈로그의 moved_to 를 보고 이 행을 비활성으로 둡니다(규칙 17)"
+            )
         else:
             problems.append(
                 f"[살아 있으면 안 됨] {slug}:{key} — 지워졌거나 · 합쳐졌거나 · 안 보이게 됐습니다(규칙 4 · 7 · 9)"
@@ -119,7 +125,9 @@ def diff(expected: dict[str, Any], dump: dict[str, Any]) -> list[str]:
     for one in sorted(set(have_lines) - want_lines):
         old = (previous.get(one[0]) or {}).get(one[1]) or (previous.get(one[4]) or {}).get(one[3])
         hint = "끝의 식별자가 바뀌었습니다 — 선의 끝도 새 key 로 옮깁니다(규칙 5)" if old else (
-            "끊겼거나 · 끝이 지워졌거나 · 안 보이게 됐습니다(규칙 7 · 9 · 10)"
+            f"끝의 타입이 {types_moved[one[4]]} 로 옮겨졌습니다 — 선의 도착 타입을 바꿉니다(규칙 17)"
+            if one[4] in types_moved
+            else "끊겼거나 · 끝이 지워졌거나 · 안 보이게 됐습니다(규칙 7 · 9 · 10)"
         )
         problems.append(f"[끊겼어야 할 선] {one[0]}:{one[1]} -{one[2]}→ {one[4]}:{one[3]} — {hint}")
     return problems

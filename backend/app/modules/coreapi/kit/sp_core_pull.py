@@ -22,6 +22,18 @@
     · 모르는 칸은 무시한다(공개 측이 칸을 추가해도 깨지지 않는다)
     · 처음부터 받았으면(--full · reset · 정의 판 변경) 끝까지 받은 뒤 안 온 것을 정리한다
     · 404 는 두 가지다 — 공개 안 된 타입은 건너뛰고 알리고, 커서를 못 읽으면 다시 받는다
+    · 카탈로그의 타입에 moved_at 이 있으면(공개 측이 그 타입의 객체를 다른 타입으로 옮겼다)
+      그때 앞의 행을 moved_to 로 옮겨 놓는다 — 「전부 안 옴」 으로 멈추지 않는다(아래)
+
+moved_to 는 무엇인가
+    공개 측이 같은 개념의 두 타입을 합치면(「다른 타입으로 옮기기」) 원 타입의 객체가 전부 대상
+    타입으로 간다 — 식별자(key)는 그대로다. 옮긴 객체는 대상 타입의 행으로 다시 오고, 원 타입은
+    비어서 처음부터 받으면 0건이다. 그것을 장애로 읽고 멈추거나(옛 키트), 「안 온 것」 으로 지우지
+    않게 카탈로그가 그 타입에 moved_at(옮긴 때) · moved_to(간 곳)를 싣는다. 이 키트는 대상 타입을
+    먼저 받고, 원 타입의 행 가운데 그때 앞의 것으로 대상 표에 같은 key 가 온 것을 비활성으로 두고
+    (moved_to 칸에 간 곳), 그 선을 대상 쪽으로 옮긴다. 대상에 아직 없는 것은 그대로 두고 알린다.
+    moved_to 가 비었으면 공개하지 않은 타입으로 옮긴 것이다 — 그때 앞의 행을 비활성으로 둔다
+    (hidden 과 같다 — 이름 · 칸은 남긴다).
 
 reset 은 무엇인가
     오래 안 받아 갔으면 서버가 「그 시점부터는 **끊긴 것을 알려 줄 수 없다**」 고 말한다
@@ -33,7 +45,8 @@ reset 은 무엇인가
 끝나는 값
     0  정상
     1  멈춤(인증 · 주소 · 연결 · 서버 오류) — 화면의 마지막 줄이 까닭이다
-    2  끝까지 돌았지만 사람이 볼 것이 있다(공개 안 된 타입 · 정리를 멈춘 타입) — 「확인 필요」 줄
+    2  끝까지 돌았지만 사람이 볼 것이 있다(공개 안 된 타입 · 정리를 멈춘 타입 · 옮겨 놓지 못한
+       타입) — 「확인 필요」 줄
 """
 from __future__ import annotations
 
@@ -45,13 +58,14 @@ import os
 import sqlite3
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
 import requests
 
 #: 이 키트의 판 — 바뀐 것은 CHANGES.md 에 같은 이름으로 적는다.
-KIT_VERSION = "2026-11-27"
+KIT_VERSION = "2026-11-28"
 
 ENVELOPE = (
     "key",
@@ -207,6 +221,11 @@ def diff_catalog(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
         now = set(new[slug].get("relations") or [])
         out += [f"  + {slug} 관계 {one}" for one in sorted(now - was)]
         out += [f"  - {slug} 관계 {one}" for one in sorted(was - now)]
+    for slug in sorted(new):
+        moved_at = new[slug].get("moved_at")
+        if moved_at and moved_at != (old.get(slug) or {}).get("moved_at"):
+            to = new[slug].get("moved_to") or "공개하지 않은 타입"
+            out.append(f"  > 타입 {slug} 의 객체를 {to}(으)로 옮김 ({moved_at})")
     return out
 
 
@@ -237,10 +256,22 @@ def chunks(items: list[Any], size: int = 400) -> Iterator[list[Any]]:
 
 
 def object_table(db: sqlite3.Connection, type_slug: str) -> None:
+    """객체 표를 마련한다. `moved_to` — 공개 측이 이 행의 객체를 다른 타입으로 옮겼으면 간 곳
+    (NULL 이면 옮기지 않았다, 빈 문자열이면 공개하지 않은 타입으로 옮겼다). 옛 키트가 만든 표면
+    칸을 더한다."""
     db.execute(
         f'CREATE TABLE IF NOT EXISTS "{type_slug}" '
         "(key TEXT PRIMARY KEY, label TEXT, status TEXT, updated_at TEXT, "
-        "deleted INTEGER, merged_into TEXT, properties TEXT)"
+        "deleted INTEGER, merged_into TEXT, properties TEXT, moved_to TEXT)"
+    )
+    if not any(one[1] == "moved_to" for one in db.execute(f'PRAGMA table_info("{type_slug}")')):
+        db.execute(f'ALTER TABLE "{type_slug}" ADD COLUMN moved_to TEXT')
+
+
+def table_exists(db: sqlite3.Connection, name: str) -> bool:
+    return (
+        db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+        is not None
     )
 
 
@@ -391,9 +422,10 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
             "label=excluded.label, status=excluded.status, updated_at=excluded.updated_at, "
             "deleted=excluded.deleted, merged_into=excluded.merged_into"
         )
-        # 살아 있는 행은 칸을 **통째로** 바꾼다 — 합치면 SP 에서 비운 칸이 남는다.
+        # 살아 있는 행은 칸을 **통째로** 바꾼다 — 합치면 SP 에서 비운 칸이 남는다. 다른 타입으로
+        # 옮겨 갔던 것이 이 타입으로 다시 오면(되돌려 옮김) 옮겨 간 표시도 지운다.
         db.executemany(
-            insert + ", properties=excluded.properties",
+            insert + ", properties=excluded.properties, moved_to=NULL",
             [values(one) for one in shown if not one.get("deleted")],
         )
         # 지운 행은 칸이 빈 채로 온다 — 가진 칸은 두고(이미 쓴 기록이 그 값을 보인다) 비활성만.
@@ -533,18 +565,122 @@ def too_many(gone: int, held: int) -> bool:
     return gone > GONE_FLOOR and gone > GONE_LIMIT * held
 
 
+def before(at: Any, moved_at: str) -> bool:
+    """이 행의 시각(`updated_at`)이 옮긴 때와 같거나 앞인가 — 시각을 못 읽으면 앞으로 본다
+    (옮긴 타입에서 받은 것이다). 공개 측의 시각은 늘 같은 모양(…Z)이라 글자로도 견줄 수 있지만,
+    고쳐 쓴 저장 코드가 모양을 바꿨을 수 있어 시각으로 읽는다."""
+    if not at:
+        return True
+    try:
+        first = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+        second = datetime.fromisoformat(moved_at.replace("Z", "+00:00"))
+        return first <= second
+    except (TypeError, ValueError):  # 못 읽거나 시간대가 없는 시각 — 글자로 견준다
+        return str(at) <= moved_at
+
+
+def waiting_keys(db: sqlite3.Connection, type_slug: str, moved_at: str) -> set[str]:
+    """옮긴 타입에서 아직 옮겨 놓지 못한 행(활성이고 옮긴 때 앞) — 정리에서 뺀다."""
+    if not moved_at:
+        return set()
+    return {
+        str(key)
+        for key, at in db.execute(f'SELECT key, updated_at FROM "{type_slug}" WHERE deleted=0')
+        if before(at, moved_at)
+    }
+
+
+def settle_moved(cfg: dict[str, Any], type_slug: str, moved_to: str, moved_at: str) -> tuple[int, int]:
+    """공개 측이 이 타입의 객체를 **다른 타입으로 옮겼다**(카탈로그의 moved_at) — (옮겨 놓은 수, 아직
+    못 옮긴 수).
+
+    옮긴 때 앞의 활성 행만 본다(그 뒤의 것은 이 타입에 새로 생긴 것이다). moved_to 가 있으면 그
+    표에 **같은 key 가 온 것만** 비활성으로 두고(지우지 않는다 — 이미 쓴 기록이 그 행을 가리킬 수
+    있다), 그 행에서 나가는 선은 moved_to 의 선 표로, 그 행으로 가는 선의 도착 타입은 moved_to 로
+    옮긴다. 아직 안 온 것(moved_to 를 안 받거나 받기가 실패했다)은 그대로 둔다 — 알리기만 한다.
+    moved_to 가 비었으면 공개하지 않은 타입으로 옮긴 것이다 — hidden 처럼 비활성으로 두고 선을
+    끊는다. 몇 번 불러도 같다(이미 옮겨 놓은 행은 비활성이라 다시 안 본다).
+    """
+    db = connect(cfg)
+    try:
+        object_table(db, type_slug)
+        due = sorted(waiting_keys(db, type_slug, moved_at))
+        if moved_to:
+            there: set[str] = set()
+            if table_exists(db, moved_to):
+                for part in chunks(due):
+                    marks = ",".join("?" * len(part))
+                    there.update(
+                        str(key)
+                        for (key,) in db.execute(
+                            f'SELECT key FROM "{moved_to}" WHERE key IN ({marks})', part
+                        )
+                    )
+            done = [key for key in due if key in there]
+        else:
+            done = due
+        for part in chunks(done):
+            marks = ",".join("?" * len(part))
+            db.execute(
+                f'UPDATE "{type_slug}" SET deleted=1, moved_to=? WHERE key IN ({marks})',
+                [moved_to, *part],
+            )
+        if moved_to:
+            relocate_relations(db, type_slug, moved_to, done)
+        else:
+            cut_touching(db, type_slug, done)
+        db.commit()
+        return len(done), len(due) - len(done)
+    finally:
+        db.close()
+
+
+def relocate_relations(db: sqlite3.Connection, type_slug: str, moved_to: str, keys: list[str]) -> None:
+    """옮긴 행의 선을 간 곳으로 — 나가는 선은 moved_to 의 선 표로, 들어오는 선은 도착 타입을
+    moved_to 로. 공개 측은 이 선들을 다시 보내지 않는다(선은 바뀌지 않았다 — 끝 객체의 타입만
+    바뀌었다). 같은 선이 이미 있으면 하나로 겹친다."""
+    if not keys:
+        return
+    mine, theirs = f"{type_slug}__relations", f"{moved_to}__relations"
+    if table_exists(db, mine):
+        relations_table(db, mine)
+        relations_table(db, theirs)
+        for part in chunks(keys):
+            marks = ",".join("?" * len(part))
+            db.execute(
+                f'INSERT OR REPLACE INTO "{theirs}" '
+                "(src,relation,dst,dst_type,evidence_note,updated_at,properties) "
+                "SELECT src, relation, dst, dst_type, evidence_note, updated_at, properties "
+                f'FROM "{mine}" WHERE src IN ({marks})',
+                part,
+            )
+            db.execute(f'DELETE FROM "{mine}" WHERE src IN ({marks})', part)
+    for table in relation_tables(db):
+        db.executemany(
+            f'UPDATE OR REPLACE "{table}" SET dst_type=? WHERE dst=? AND dst_type IN (?, \'\')',
+            [(moved_to, key, type_slug) for key in keys],
+        )
+
+
 def prune_rows(
-    cfg: dict[str, Any], type_slug: str, seen: set[str], *, allow_shrink: bool
+    cfg: dict[str, Any], type_slug: str, seen: set[str], *, allow_shrink: bool, moved_at: str = ""
 ) -> tuple[int, int]:
     """처음부터 받았으면 **이번에 안 온 것을 비활성으로 둔다** — (정리한 수, 멈춘 수).
 
     `since` 없이 받으면 지워진 것은 오지 않는다 — 「지워졌다」 를 들을 길이 없으니 부재로
     안다. 마지막 쪽까지 받은 뒤에만 부른다(중간에 대조하면 아직 안 받은 것이 지워진다).
+    다른 타입으로 옮긴 타입이면(`moved_at`) 옮긴 때 앞의 행은 대조하지 않는다 — 안 온 것이
+    아니라 옮겨 간 것이다(`settle_moved` 가 다룬다).
     """
     db = connect(cfg)
     try:
         object_table(db, type_slug)
-        held = [key for (key,) in db.execute(f'SELECT key FROM "{type_slug}" WHERE deleted=0')]
+        moved = waiting_keys(db, type_slug, moved_at)
+        held = [
+            key
+            for (key,) in db.execute(f'SELECT key FROM "{type_slug}" WHERE deleted=0')
+            if key not in moved
+        ]
         gone = [key for key in held if key not in seen]
         if too_many(len(gone), len(held)) and not allow_shrink:
             return 0, len(gone)
@@ -559,16 +695,24 @@ def prune_rows(
 
 
 def prune_relations(
-    cfg: dict[str, Any], type_slug: str, seen: set[tuple[str, ...]], *, allow_shrink: bool
+    cfg: dict[str, Any],
+    type_slug: str,
+    seen: set[tuple[str, ...]],
+    *,
+    allow_shrink: bool,
+    moved_at: str = "",
 ) -> tuple[int, int]:
-    """선도 같다 — 처음부터 받았으면 이번에 안 온 선을 끊는다. (끊은 수, 멈춘 수)."""
+    """선도 같다 — 처음부터 받았으면 이번에 안 온 선을 끊는다. (끊은 수, 멈춘 수). 옮긴 타입에서
+    아직 옮겨 놓지 못한 행의 선은 대조하지 않는다(`prune_rows` 와 같다)."""
     table = f"{type_slug}__relations"
     db = connect(cfg)
     try:
         relations_table(db, table)
+        moved = waiting_keys(db, type_slug, moved_at) if table_exists(db, type_slug) else set()
         held = [
             tuple(one)
             for one in db.execute(f'SELECT src, relation, dst, dst_type FROM "{table}"')
+            if one[0] not in moved
         ]
         gone = [one for one in held if one not in seen]
         if too_many(len(gone), len(held)) and not allow_shrink:
@@ -594,6 +738,8 @@ def new_counts() -> dict[str, int]:
         "revived": 0,
         "gone": 0,
         "held_back": 0,
+        "moved": 0,
+        "moved_waiting": 0,
     }
 
 
@@ -644,14 +790,23 @@ def pages(
 
 
 def pull_type(
-    cfg: dict[str, Any], type_slug: str, state: dict[str, str], *, allow_shrink: bool = False
+    cfg: dict[str, Any],
+    type_slug: str,
+    state: dict[str, str],
+    *,
+    allow_shrink: bool = False,
+    moved: tuple[str, str] | None = None,
 ) -> dict[str, int]:
-    """한 타입의 객체. 처음부터 받았으면 끝까지 받은 뒤 안 온 것을 비활성으로 둔다."""
+    """한 타입의 객체. 처음부터 받았으면 끝까지 받은 뒤 안 온 것을 비활성으로 둔다.
+
+    `moved` — 카탈로그가 이 타입을 다른 타입으로 옮겼다고 말하면 (moved_to, moved_at). 받은 뒤
+    그때 앞의 행을 옮겨 놓고(`settle_moved`), 정리는 그 뒤에 생긴 행만 대조한다. 간 곳(moved_to)을
+    **먼저** 받아야 옮겨 놓을 수 있다 — main 이 그 차례로 부른다."""
     counts = new_counts()
     seen: set[str] = set()
     last: dict[str, Any] = {}
     for body in pages(cfg, f"/core/{type_slug}", state.get(type_slug, ""), counts, type_slug):
-        items = body.get("items") or []
+        items = alive_wins(body.get("items") or [], seen)
         # 자기 DB 로 고친 save_rows 가 아무것도 돌려주지 않아도 돈다(옛 키트에서 옮겨 온 것).
         done = save_rows(cfg, type_slug, items) or {}
         counts["renamed"] += done.get("renamed", 0)
@@ -660,9 +815,11 @@ def pull_type(
         counts["deleted"] += sum(1 for one in items if one.get("deleted"))
         seen.update(str(one["key"]) for one in items if not one.get("deleted"))
         last = body
+    if moved is not None:
+        counts["moved"], counts["moved_waiting"] = settle_moved(cfg, type_slug, *moved)
     if counts["full"]:
         counts["gone"], counts["held_back"] = prune_rows(
-            cfg, type_slug, seen, allow_shrink=allow_shrink
+            cfg, type_slug, seen, allow_shrink=allow_shrink, moved_at=moved[1] if moved else ""
         )
     # **끝까지 받았을 때만 시각을 옮긴다.**
     if last.get("as_of"):
@@ -670,8 +827,36 @@ def pull_type(
     return counts
 
 
+def alive_wins(items: list[dict[str, Any]], seen: set[str]) -> list[dict[str, Any]]:
+    """한 번 받기 안에서 **같은 key 의 산 행이 이긴다** — 그 key 의 무덤은 버린다.
+
+    한 흐름에 같은 key 가 둘 오면 서로 다른 객체다(공개 측은 객체마다 지금 상태 하나를 준다) —
+    지웠다 같은 key 로 다시 만들었거나, 다른 타입에서 옮겨 와 같은 key 의 객체로 병합됐다(진
+    쪽의 무덤은 `merged_into` 가 제 key 다). 무덤을 뒤에 적용하면 산 행을 비활성으로 만든다.
+    이미 이 받기에서 산 채로 왔거나(`seen`) 이 쪽에 산 채로 있으면 무덤을 버리고, 제 key 로
+    합쳐졌다는 무덤도 버린다. 무덤이 먼저 오고 산 행이 뒤에 오면 산 행이 되살린다."""
+    here = {str(one["key"]) for one in items if not one.get("deleted")}
+    return [
+        one
+        for one in items
+        if not (
+            one.get("deleted")
+            and (
+                str(one["key"]) in seen
+                or str(one["key"]) in here
+                or one.get("merged_into") == one["key"]
+            )
+        )
+    ]
+
+
 def pull_relations(
-    cfg: dict[str, Any], type_slug: str, state: dict[str, str], *, allow_shrink: bool = False
+    cfg: dict[str, Any],
+    type_slug: str,
+    state: dict[str, str],
+    *,
+    allow_shrink: bool = False,
+    moved_at: str = "",
 ) -> dict[str, int]:
     """그 타입에서 출발하는 선 — 객체와 **같은 규칙**. 기준 시각은 `<타입>#relations` 로 따로."""
     mark = f"{type_slug}#relations"
@@ -692,7 +877,7 @@ def pull_relations(
         last = body
     if counts["full"]:
         counts["gone"], counts["held_back"] = prune_relations(
-            cfg, type_slug, seen, allow_shrink=allow_shrink
+            cfg, type_slug, seen, allow_shrink=allow_shrink, moved_at=moved_at
         )
     if last.get("as_of"):
         state[mark] = str(last["as_of"])
@@ -714,7 +899,22 @@ def tail(counts: dict[str, int]) -> str:
         parts.append(f"안 와서 정리 {counts['gone']}")
     if counts["held_back"]:
         parts.append(f"정리 멈춤 {counts['held_back']}")
+    if counts["moved"]:
+        parts.append(f"다른 타입으로 옮겨 놓음 {counts['moved']}")
+    if counts["moved_waiting"]:
+        parts.append(f"옮겨 갔는데 아직 못 옮겨 놓음 {counts['moved_waiting']}")
     return "".join(f" · {one}" for one in parts)
+
+
+def moved_types(catalog: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """카탈로그에서 다른 타입으로 옮긴 타입 — slug → (moved_to 또는 "", moved_at).
+
+    moved_at 이 없는 공개 측(이 판 전)은 이 칸을 싣지 않는다 — 그때는 빈 사전이다."""
+    return {
+        str(one["slug"]): (str(one.get("moved_to") or ""), str(one["moved_at"]))
+        for one in catalog.get("types") or []
+        if one.get("moved_at")
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -752,6 +952,9 @@ def main(argv: list[str] | None = None) -> int:
         one["slug"]: bool(one.get("relations"))
         for one in catalog.get("types") or []
     }
+    # 다른 타입으로 옮긴 타입은 **간 곳을 먼저** 받는다 — 그래야 옮겨 놓을 행이 그 표에 있다.
+    moved = moved_types(catalog)
+    wanted = sorted(wanted, key=lambda slug: slug in moved)
     state: dict[str, str] = {} if args.full else load_state(cfg)
     if changed and state:
         # 새로 열린 칸 · 관계의 기존 값은 바뀐 것이 아니라서 증분으로 오지 않는다.
@@ -771,7 +974,9 @@ def main(argv: list[str] | None = None) -> int:
     pulled: list[str] = []
     for type_slug in wanted:
         try:
-            counts = pull_type(cfg, type_slug, state, allow_shrink=args.allow_shrink)
+            counts = pull_type(
+                cfg, type_slug, state, allow_shrink=args.allow_shrink, moved=moved.get(type_slug)
+            )
         except NotPublished as caught:
             problems.append(f"{type_slug}: 공개되지 않은 타입이라 건너뛰었습니다 — {caught}")
             continue
@@ -781,6 +986,17 @@ def main(argv: list[str] | None = None) -> int:
             f"(삭제 {counts['deleted']}) · {counts['pages']}페이지{tail(counts)}"
         )
         held(type_slug, counts)
+        if counts["moved_waiting"]:
+            to, at = moved[type_slug]
+            why = (
+                f"{to} 를 받지 않아서입니다 — config.ini 의 types 에 {to} 를 더하세요"
+                if to not in wanted
+                else f"{to} 에 아직 안 왔습니다 — 다음 실행에서 다시 봅니다"
+            )
+            problems.append(
+                f"{type_slug}: 공개 측이 객체를 {to}(으)로 옮겼는데({at}) {counts['moved_waiting']}건을 "
+                f"옮겨 놓지 못해 그대로 두었습니다(지우지 않음). {why}"
+            )
         revived = revived or counts["revived"] > 0
         save_state(cfg, state)
 
@@ -794,7 +1010,13 @@ def main(argv: list[str] | None = None) -> int:
         if not has_relations.get(type_slug):
             continue
         try:
-            edges = pull_relations(cfg, type_slug, state, allow_shrink=args.allow_shrink)
+            edges = pull_relations(
+                cfg,
+                type_slug,
+                state,
+                allow_shrink=args.allow_shrink,
+                moved_at=moved[type_slug][1] if type_slug in moved else "",
+            )
         except NotPublished as caught:
             problems.append(f"{type_slug} 관계: 공개되지 않아 건너뛰었습니다 — {caught}")
             continue

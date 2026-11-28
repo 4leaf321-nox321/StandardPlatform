@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -429,6 +429,37 @@ def test_타이머는_차례가_되면_넣고_돌거나_기다리면_안_넣는�
 
     monkeypatch.setattr(get_settings(), "embedding_backend", "off")
     assert services.schedule(db, now=tomorrow + services.FULL_EVERY) is None
+
+
+def test_바뀐_것만의_성공은_하루_한_번의_전부를_미루지_않는다(
+    client: TestClient,
+    admin: Signed,
+    db: Session,
+    ollama: list[list[str]],
+) -> None:
+    """「전부」 의 차례를 **아무 계산이나** 마지막으로 성공한 때로 셌다 — 하루에 한 번만
+    고쳐도 「바뀐 것만」 이 시계를 다시 돌려, 바쁜 설치에서는 하루 한 번의 「전부」(놓친 줄 ·
+    모델 바뀜을 해시로 다시 보기)가 영영 차례가 안 됐다."""
+    part = _make_type(client, admin, label="부품")
+    _make_object(client, admin, part, label="볼트")
+    db.add(SemanticTarget(type_id=db.scalar(_type_id(part))))
+    db.commit()
+    assert services.schedule(db) == "full"
+    _sync_now(db)
+    _make_object(client, admin, part, label="너트")
+    assert services.schedule(db) == "changed"
+    _sync_now(db)
+
+    # 「전부」 는 25시간 전, 「바뀐 것만」 은 한 시간 전에 끝났다.
+    now = datetime.now(UTC)
+    for full, ago in ((True, timedelta(hours=25)), (False, timedelta(hours=1))):
+        db.execute(
+            update(Job)
+            .where(Job.kind == services.SYNC_KIND, Job.params.contains({"full": full}))
+            .values(created_at=now - ago, finished_at=now - ago)
+        )
+    db.commit()
+    assert services.schedule(db, now=now) == "full"
 
 
 def _type_id(slug: str) -> Any:

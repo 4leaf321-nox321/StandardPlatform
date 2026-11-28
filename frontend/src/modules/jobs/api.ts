@@ -29,6 +29,10 @@ export interface Job {
   parent_id: string | null
   /** 이 계획을 적용한(또는 적용 중인) 작업 — 있으면 다시 적용하지 않는다. */
   applied_by?: string | null
+  /** 그 적용 작업의 상태 — `queued` · `running` · `done`(ADR 0101). `applied_by` 만 보면 아직
+   *  대기 중인 적용도 「적용했습니다」 로 읽힌다. 실패 · 취소된 적용은 셈하지 않아 둘 다 비어
+   *  온다(다시 적용할 수 있다). */
+  applied_status?: JobStatus | null
   input_file_name: string | null
   has_output: boolean
   requested_by_name: string | null

@@ -423,3 +423,47 @@ def test_도는_계산에는_합치지_않고_기다리는_것만_합친다(
         db.commit()
     while job_services.process_one("test-worker"):
         pass
+
+
+def test_타입_옮기기가_있으면_원_타입과_대상의_지표를_전량으로_센다(
+    client: TestClient, admin: Signed
+) -> None:
+    """**옮겨 간 쪽은 객체가 떠나 「바뀐 기록」 이 없다**(ADR 0094) — 증분이 0건을 보고 셀을
+    그대로 둬, 원 타입의 지표가 떠난 기록을 계속 셌고(전량 주기 7일까지) 대상의 지표는 옮겨
+    온 기록을 안 더했다(2026-11-28 점검). 옮기기가 그 지표가 읽는 타입에서 · 으로 있었으면
+    전량이다."""
+    from tests.api.test_ontology import _make_property, _make_type
+
+    tag = uuid.uuid4().hex[:6]
+    old = _make_type(client, admin, label=f"접수 {tag}", usage="log", key_policy="optional")
+    new = _make_type(client, admin, label=f"접수2 {tag}", usage="log", key_policy="optional")
+    for slug in (old, new):
+        _make_property(client, admin, slug, key="received", label="접수일", data_type="date")
+    for day in ("2026-01-05", "2026-01-20", "2026-02-03"):
+        _make_object(client, admin, old, label=f"건 {day}", properties={"received": day})
+    _make_object(
+        client, admin, new, label="건 2026-02-10", properties={"received": "2026-02-10"}
+    )
+    spec = {"measure": "count", "time": {"address": "properties.received", "grain": "month"}}
+    leaving = _define(client, admin, source=old, spec=spec, label="원 타입")["slug"]
+    landing = _define(client, admin, source=new, spec=spec, label="대상")["slug"]
+    assert _recount(client, admin, leaving)["mode"] == "incremental"
+    assert _recount(client, admin, landing)["mode"] == "incremental"
+
+    def total(slug: str) -> int:
+        return sum(int(one[6] or 0) for one in _cells(slug))
+
+    assert (total(leaving), total(landing)) == (3, 1)
+
+    moved = client.post(
+        f"/api/ontology/types/{old}/move",
+        json={"to": new, "apply": True},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200 and moved.json()["applied"] is True, moved.text
+    for slug in (leaving, landing):
+        run = _recount(client, admin, slug)
+        assert run["mode"] == "full" and "타입 옮기기가 있었다" in run["note"], run
+    assert (total(leaving), total(landing)) == (0, 4)
+    # 그다음은 다시 증분 — 옮기기는 지난 워터마크 앞의 일이 됐다.
+    assert _recount(client, admin, leaving)["mode"] == "incremental"

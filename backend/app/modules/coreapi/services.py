@@ -23,6 +23,21 @@
 
 보이던 부서에서 안 보이는 부서로 옮긴 객체는 그 자격에게 **사라진 것**이다 — 무덤(`deleted`
 · `hidden`)으로 알린다. 안 그러면 받는 쪽은 그 행을 영영 살아 있는 것으로 든다.
+
+## 다른 타입으로 옮긴 것(ADR 0094)
+
+타입 옮기기는 객체 id 를 그대로 둔 채 타입을 바꾼다. 옮긴 객체는 바뀐 때가 옮긴 때로 올라
+**대상 타입의 `since` 로 온다.** 원 타입에는 물을 행이 없다 — 객체가 떠났다. 그대로 두면 원
+타입의 받는 쪽은 떠난 행을 영영 살아 있는 것으로 들고, 처음부터 다시 받으면 0건이라 「전부 안
+오면 멈춤」 에 걸렸다(2026-11-28 점검). 그래서 원 타입의 카탈로그 · 쪽에 **떠난 때와 간 곳**
+(`moved_at` · `moved_to`)을 싣는다 — 받는 쪽은 그 때 앞의 행을 `moved_to` 로 옮겨 놓는다. 옮긴
+일은 판(`revision`)에도 든다: 옛 키트는 판이 바뀌면 처음부터 다시 받고, 원 타입이 비어 와서
+**지우지 않고 「확인 필요」 로 멈춘다**(모르는 칸으로 무엇을 지우게 하지 않는다).
+
+옮기면서 대상의 같은 식별자 객체로 병합된 것(`merge_duplicates`)은 진 쪽이 **같은 `key`** 의
+무덤(`merged_into` 가 제 `key`)이 된다 — 그대로 보내면 받는 쪽은 이긴 쪽의 행을 비활성으로
+만든다. 그 무덤은 빼고, 이긴 쪽이 이 흐름에 따로 오지 않을 때만 그 자리에 이긴 쪽의 지금 행을
+한 번 보낸다(`_without_same_key_graves` — 두 번 보내면 형제 SP 가 같은 식별자로 거절한다).
 """
 
 from __future__ import annotations
@@ -35,7 +50,7 @@ import uuid
 import zipfile
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     DateTime,
@@ -101,6 +116,9 @@ from app.modules.workspaces.models import WorkspaceMember
 from app.shared import audit
 from app.shared.errors import NotFound, code
 from app.shared.permissions import sees_every_department, visible_owner_clause
+
+if TYPE_CHECKING:
+    from app.modules.ontology import move
 
 #: 한 번에 줄 행의 기본·상한. 상한을 서버가 강제하는 이유는 목록과 같다 — 받는 쪽이
 #: `limit=1000000` 을 넣는 날 이쪽이 죽는다.
@@ -342,12 +360,14 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
 
     open_slugs = {one.slug for one in types}
     ends = load_ends(db)
+    trail = _trail(db)
     for object_type in types:
         defs = _shown_defs(db, object_type)
         count = counts.get(object_type.id, 0)
         latest = latest_of.get(object_type.id)
         opened = open_relation_kinds(db, object_type, open_slugs, ends)
         kinds = [one.slug for one in opened]
+        moved_to, moved_at = moved_of(trail, object_type, set(ids))
         out.append(
             CoreTypeOut(
                 slug=object_type.slug,
@@ -360,9 +380,17 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
                 relations_endpoint=(f"{base}/{object_type.slug}/relations" if kinds else None),
                 relations=kinds,
                 relation_kinds=opened,
+                moved_at=moved_at,
+                moved_to=moved_to,
             )
         )
-        marks.append(_mark(object_type, defs, [_kind_mark(one) for one in opened]))
+        mark = _mark(object_type, defs, [_kind_mark(one) for one in opened])
+        if moved_at:
+            # **옮긴 일은 판에 든다** — 받는 쪽이 가진 행이 있는 곳이 바뀌었다. 옮긴 적 없는
+            # 타입의 판 재료는 예전 그대로다(올리기만 해서 모든 받는 쪽이 처음부터 다시 받지
+            # 않게).
+            mark += f";moved>{moved_to or '-'}@{moved_at}"
+        marks.append(mark)
 
     return CoreCatalogOut(
         system=get_settings().app_slug,
@@ -372,6 +400,30 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
         as_of=_stamp(datetime.now(UTC)) or "",
         types=out,
     )
+
+
+def _trail(db: Session) -> move.Trail:
+    """옮기기 · slug 변경의 감사 기록(`ontology/move.Trail`) — 카탈로그 · 쪽이 함께 쓴다.
+    부를 때 불러온다 — `ontology.move` 는 객체 · 지표 쪽을 함께 불러, 맨 위에서 부르면 지표의
+    계산(`metrics/compute` 가 이 모듈을 부른다)과 차례가 꼬일 수 있다."""
+    from app.modules.ontology import move as move_module
+
+    return move_module.Trail(db)
+
+
+def moved_of(
+    trail: move.Trail, object_type: ObjectType, open_ids: set[uuid.UUID]
+) -> tuple[str | None, str | None]:
+    """(`moved_to`, `moved_at`) — 이 타입의 객체를 다른 타입으로 옮겼으면(ADR 0094).
+
+    간 곳이 공개 타입이 아니면 `moved_to` 는 비운다 — 「없다」 와 「안 열었다」 를 같은 말로
+    답하는 창구라 어느 타입인지 밝히지 않는다(`find_core_type`). 떠난 때는 준다: 받는 쪽이 그
+    행들을 사라진 것으로 다루게."""
+    gone = trail.left(object_type)
+    if gone is None:
+        return None, None
+    to = gone.to_slug if gone.to_id is not None and gone.to_id in open_ids else None
+    return to, _stamp(gone.at)
 
 
 def latest_changes(ids: list[uuid.UUID], visible: ColumnElement[bool]) -> Select[Any]:
@@ -588,8 +640,14 @@ def page(
     ).all()
     more = len(picked) > limit
     picked = picked[:limit]
-    found = [one for one, _ in picked]
     hidden = {one.id for one, visible in picked if not visible}
+    # 병합으로 같은 `key` 의 이긴 쪽이 있는 무덤은 빼거나 이긴 쪽의 지금 행으로(머리말). 쪽의
+    # 자리(커서)는 받은 행 그대로다.
+    found = _without_same_key_graves(
+        _same_key_winners(db, user, object_type, [one for one, seen in picked if seen]),
+        [one for one, _ in picked],
+        since,
+    )
     shown_rows = [one for one in found if one.id not in hidden]
 
     ref_keys = _ref_keys(db, user, defs, [one.properties or {} for one in shown_rows])
@@ -649,7 +707,9 @@ def page(
         )
         db.commit()
 
-    last_row = found[-1] if found else None
+    last_row = picked[-1][0] if picked else None
+    # 옮긴 타입은 빈 쪽을 준다 — 쪽마다 떠난 때 · 간 곳을 실어 「바뀐 것 없음」 으로 안 읽게.
+    moved_to, moved_at = moved_of(_trail(db), object_type, {one.id for one in core_types(db)})
     return CorePageOut(
         type_slug=object_type.slug,
         # **끝까지 받았을 때만 시계가 온다.** 쪽이 남았는데 `as_of` 를 주면, 거기서 멈춘 쪽은
@@ -663,6 +723,8 @@ def page(
             else None
         ),
         items=items,
+        moved_at=moved_at,
+        moved_to=moved_to,
     )
 
 
@@ -719,6 +781,73 @@ def _moved_away(user: User, since: datetime) -> ColumnElement[bool]:
         AuditEntry.changes.has_key("owner_workspace_id"),
         or_(before.is_(None), before.in_(mine)),
     )
+
+
+def _same_key_winners(
+    db: Session, user: User, object_type: ObjectType, rows: list[ObjectInstance]
+) -> dict[uuid.UUID, ObjectInstance]:
+    """병합된 무덤 가운데 **이긴 쪽이 같은 `key`** 인 것 → 그 이긴 쪽(살아 있고 · 같은
+    타입이고 · 보이는 것만).
+
+    받는 쪽은 행을 (타입, `key`) 로 쥔다. 다른 타입에서 옮겨 와(ADR 0094) 대상의 같은 식별자
+    객체로 병합된 진 쪽은 `key` 가 이긴 쪽과 같다 — 그 무덤(`deleted`, `merged_into` 가 제
+    `key`)을 보내면 받는 쪽은 이긴 쪽의 행을 비활성으로 만든다. 같은 쪽에 이긴 쪽이 함께 와도
+    차례(바뀐 때 · id)에 따라 무덤이 뒤에 설 수 있다. 그래서 그 자리에 이긴 쪽의 지금 행을
+    보낸다 — 받는 쪽에는 같은 행을 한 번 더 받는 것뿐이다."""
+    graves = {
+        one.id: one
+        for one in rows
+        if one.deleted_at is not None and one.merged_into_id is not None and one.key
+    }
+    if not graves:
+        return {}
+    winners = {
+        one.id: one
+        for one in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_({one.merged_into_id for one in graves.values()}),
+                ObjectInstance.type_id == object_type.id,
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+    }
+    out: dict[uuid.UUID, ObjectInstance] = {}
+    for grave_id, grave in graves.items():
+        winner = winners.get(grave.merged_into_id) if grave.merged_into_id else None
+        if winner is not None and winner.key == grave.key:
+            out[grave_id] = winner
+    return out
+
+
+def _without_same_key_graves(
+    twins: dict[uuid.UUID, ObjectInstance],
+    rows: list[ObjectInstance],
+    since: datetime | None,
+) -> list[ObjectInstance]:
+    """쪽의 행 — 같은 `key` 의 이긴 쪽이 있는 무덤(`_same_key_winners`)은 **빼고**, 이긴
+    쪽이 이 흐름에 안 오면 그 자리에 이긴 쪽의 지금 행을 한 번만 둔다.
+
+    이긴 쪽은 진 쪽의 빈 칸을 채우면(병합) 함께 바뀌어 같은 `since` 의 흐름에 따로 온다 —
+    그때 무덤 자리에도 이긴 쪽을 두면 **같은 행이 두 번** 갔고(같은 쪽이면 한 쪽 안에서),
+    형제 SP 의 받기는 「같은 식별자가 N행에도 있습니다」 로 그 조각을 거절해 시계가 영영 안
+    움직였다(2026-11-28 검토). 그래서 이긴 쪽이 이 쪽에 있거나 `since` 뒤에 바뀌었으면(이
+    흐름의 어딘가에 온다) 무덤만 뺀다. 이긴 쪽이 안 바뀌었으면 이 흐름에 오지 않으므로 무덤
+    자리에 한 번 둔다 — 같은 이긴 쪽을 가리키는 무덤이 여럿이어도 한 번."""
+    present = {one.id for one in rows}
+    placed: set[uuid.UUID] = set()
+    out: list[ObjectInstance] = []
+    for one in rows:
+        winner = twins.get(one.id)
+        if winner is None:
+            out.append(one)
+            continue
+        coming = since is not None and winner.updated_at > since
+        if winner.id in present or winner.id in placed or coming:
+            continue
+        placed.add(winner.id)
+        out.append(winner)
+    return out
 
 
 def _gone_out(row: ObjectInstance) -> CoreRowOut:

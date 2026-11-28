@@ -1136,6 +1136,24 @@ def _last_finished(db: Session) -> Any:
     ).first()
 
 
+def _last_laid(db: Session, layout: MapLayout) -> datetime:
+    """지도가 마지막으로 **차례를 마친** 때 — 판을 만든 때와 마지막으로 끝난 전체 배치 · 덧붙임
+    중 늦은 것.
+
+    새 기준정보가 없는 덧붙임은 판을 새로 만들지 않는다(집계 · 점 표만 새로, `run_append`).
+    판의 때로만 세면 그런 밤이 하루만 지나도 `APPEND_MISSED`(30시간)를 넘고, 그 뒤로는 덧붙임이
+    끝나자마자 다시 차례가 되어 **5분마다** 들어갔다 — 개발 DB 에 11-08 부터 799번, 그 사이
+    한 시간마다의 집계는 한 번도 차례가 안 됐다(2026-11-28)."""
+    from app.modules.jobs.models import Job
+
+    finished = db.scalar(
+        select(func.max(Job.finished_at)).where(
+            Job.kind.in_(("graph_map_full", "graph_map_append")), Job.status == "done"
+        )
+    )
+    return max(layout.created_at, finished) if finished is not None else layout.created_at
+
+
 def paused(db: Session) -> str | None:
     """타이머가 지도 작업을 **넣지 않는** 까닭(ADR 0049) — 넣으면 None.
 
@@ -1188,7 +1206,7 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
         if any(counted.get(one, 0) for one in masters):
             kind = "graph_map_full"
     else:
-        since = now - layout.created_at
+        since = now - _last_laid(db, layout)
         night = now.astimezone().hour == get_settings().graph_map_night_hour
         counted_row = db.get(MapCounted, 1)
         if (night and since >= APPEND_EVERY) or since >= APPEND_MISSED:

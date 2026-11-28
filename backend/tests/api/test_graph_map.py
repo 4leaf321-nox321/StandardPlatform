@@ -795,6 +795,8 @@ def test_타이머는_집계와_덧붙임의_차례를_DB_시각으로_본다(
             .where(MapLayout.id == layout.id)
             .values(created_at=datetime.now(UTC) - timedelta(hours=31))
         )
+        # 판을 만든 전체 배치도 그때 끝났다 — 차례는 판 · 끝난 배치 중 늦은 것으로 센다.
+        _age_laying(db, timedelta(hours=31))
         db.commit()
         assert mapbuild.schedule(db) == "graph_map_append"
         db.execute(
@@ -806,6 +808,67 @@ def test_타이머는_집계와_덧붙임의_차례를_DB_시각으로_본다(
             update(MapLayout)
             .where(MapLayout.id == layout.id)
             .values(created_at=datetime.now(UTC))
+        )
+        db.commit()
+
+
+def _age_laying(db: Any, ago: Any) -> None:
+    """끝난 전체 배치 · 덧붙임을 `ago` 전에 끝난 것으로 — 스위트가 DB 를 함께 쓰므로 남의
+    것까지(차례는 설치 전체의 마지막 배치로 센다)."""
+    from datetime import UTC, datetime
+
+    db.execute(
+        update(Job)
+        .where(
+            Job.kind.in_(("graph_map_full", "graph_map_append")),
+            Job.status == "done",
+            Job.finished_at > datetime.now(UTC) - ago,
+        )
+        .values(finished_at=datetime.now(UTC) - ago)
+    )
+
+
+def test_새_기준정보가_없는_덧붙임도_차례를_마친_것이다(
+    client: TestClient, admin: Signed
+) -> None:
+    """새 기준정보가 없는 덧붙임은 판을 새로 만들지 않는다 — 판의 때로만 세던 때는 판이
+    30시간을 넘은 뒤로 덧붙임이 끝나자마자 다시 차례가 되어 **5분마다** 들어갔고(개발 DB 에
+    799번), 한 시간마다의 집계는 한 번도 차례가 안 됐다."""
+    from datetime import UTC, datetime, timedelta
+
+    _world(client, admin)
+    _relayout(client, admin)
+    with SessionLocal() as db:
+        layout = mapbuild.current(db)
+        assert layout is not None
+        two_days = timedelta(hours=48)
+        db.execute(
+            update(MapLayout)
+            .where(MapLayout.id == layout.id)
+            .values(created_at=datetime.now(UTC) - two_days)
+        )
+        _age_laying(db, two_days)
+        db.commit()
+        assert mapbuild.schedule(db) == "graph_map_append"  # 밤을 놓쳤다 — 아무 때나
+        db.execute(
+            update(Job)
+            .where(Job.kind.in_(mapbuild.KINDS), Job.status == "queued")
+            .values(status="cancelled")
+        )
+        db.commit()
+    appended = _run("graph_map_append")
+    assert appended.status == "done" and (appended.result or {}).get("new") == 0, appended
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        again = mapbuild.current(db)
+        assert again is not None and again.id == layout.id  # 판은 그대로다
+        assert mapbuild.schedule(db, now=now) is None  # 방금 덧붙임 · 방금 집계
+        # 한 시간 뒤에는 집계의 차례 — 덧붙임이 아니다.
+        assert mapbuild.schedule(db, now=now + timedelta(hours=1)) == "graph_map_count"
+        db.execute(
+            update(Job)
+            .where(Job.kind.in_(mapbuild.KINDS), Job.status == "queued")
+            .values(status="cancelled")
         )
         db.commit()
 

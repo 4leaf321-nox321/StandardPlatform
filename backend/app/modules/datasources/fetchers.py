@@ -285,7 +285,7 @@ def fetch_sp_core(
             "가져올 코어 타입을 적으세요 — 상대의 `GET /api/core` 가 목록을 줍니다.",
             status=422,
         )
-    return _core_pages(
+    got = _core_pages(
         url=f"{base_url.rstrip('/')}/core/{type_slug.strip()}",
         what="/api/core/<타입>",
         since=since,
@@ -297,6 +297,30 @@ def fetch_sp_core(
         shape=core_row,
         extra_params={"shape": shape} if shape != "core" else None,
     )
+    got.rows = last_alive_per_key(got.rows)
+    return got
+
+
+def last_alive_per_key(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """한 차례에 **같은 `key` 의 산 행이 둘 이상** 오면 마지막 것만 — 무덤은 그대로 둔다.
+
+    쪽을 넘기는 사이 바뀐 객체는 앞 쪽(옛 값)과 뒤 쪽(새 값)에 두 번 오고, 허브가 타입을 옮기며
+    같은 식별자의 객체로 병합한 것(ADR 0094)도 같은 `key` 로 여러 번 올 수 있다. 그대로 넘기면
+    일괄 입력이 「같은 식별자가 N행에도 있습니다」 로 그 조각을 통째로 거절하고, 시계가 안
+    움직여 다음 차례에도 같은 것을 받는다 — 영영 멈춘다(2026-11-28 검토). 흐름은 바뀐 때 차례라
+    뒤의 것이 지금 값이다. 무덤과 산 행이 겹치면 산 것이 이긴다(`services._sync_body`)."""
+    last: dict[str, int] = {}
+    for index, one in enumerate(rows):
+        key = one.get("key")
+        if key not in (None, "") and not one.get(CORE_DELETED):
+            last[str(key)] = index
+    return [
+        one
+        for index, one in enumerate(rows)
+        if one.get(CORE_DELETED)
+        or one.get("key") in (None, "")
+        or last.get(str(one.get("key"))) == index
+    ]
 
 
 #: 「여기까지 봤다」 만 묻는 `since` — 이보다 뒤에 바뀐 것은 없으니 빈 쪽과 시계만 온다.

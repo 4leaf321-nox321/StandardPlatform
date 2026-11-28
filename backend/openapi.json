@@ -18206,7 +18206,7 @@
           "metrics"
         ],
         "summary": "My Events",
-        "description": "내 경보들의 최근 발생 — 새것부터. 「요즘 무엇이 울렸나」.",
+        "description": "내 경보들의 최근 발생 — 새것부터. 「요즘 무엇이 울렸나」.\n\n`metric` 을 주면 **그 지표의 것만 세어** `limit` 개 — 전부의 최근 `limit` 개를 받아\n거르면 다른 지표가 자주 울릴 때 이 지표의 발생이 밀려나 0건이 된다(MCP `metric_alerts`\n가 그랬다).",
         "operationId": "my_events_api_metrics_alerts_events_get",
         "parameters": [
           {
@@ -18232,6 +18232,24 @@
               "title": "Baseline"
             },
             "description": "처음 확인에서 본 것(알리지 않은 것)도"
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 지표(slug)에 건 경보의 발생만 — 모르는 지표면 404",
+              "title": "Metric"
+            },
+            "description": "이 지표(slug)에 건 경보의 발생만 — 모르는 지표면 404"
           }
         ],
         "responses": {
@@ -32432,6 +32450,28 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "moved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moved At"
+          },
+          "moved_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moved To"
           }
         },
         "type": "object",
@@ -33629,6 +33669,28 @@
             },
             "type": "array",
             "title": "Relation Kinds"
+          },
+          "moved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moved At"
+          },
+          "moved_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Moved To"
           }
         },
         "type": "object",

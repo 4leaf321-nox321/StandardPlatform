@@ -6,7 +6,7 @@
 
 실제 SP 의 코어 API 와 **같은 모양 · 같은 규칙**으로 답한다. 실제 SP 에서는 일부러 만들 수
 없는 상황(식별자가 두 번 바뀜 · 합치기 · 안 보이게 됨 · 선을 남긴 삭제 · 되살림 · 커서 오류 ·
-오래 안 받음 · 정의 판 바뀜 · 공개 거둠 · 토큰 범위 줄어듦)을 단계마다 일으킨다.
+오래 안 받음 · 정의 판 바뀜 · 공개 거둠 · 토큰 범위 줄어듦 · 타입 합치기)을 단계마다 일으킨다.
 
 단계마다 할 일
     1. POST /_step            다음 단계로 — 세상이 바뀌고, 이번 단계의 설명 · 실행 방법이 온다
@@ -77,6 +77,8 @@ class World:
         self.closed_race: set[str] = set()
         self.frozen: dict[str, Any] | None = None
         self.ids = 0
+        #: 다른 타입으로 옮긴 타입 → (간 곳, 옮긴 때의 시계) — 카탈로그 · 쪽의 moved_to · moved_at.
+        self.moves: dict[str, tuple[str, int]] = {}
 
     # --- 바꾸기 -------------------------------------------------------------------------
 
@@ -212,6 +214,26 @@ class World:
         """소유 부서가 토큰이 못 보는 곳으로 옮겨 감 — `hidden` 무덤이 가고, 선은 말없이 빠진다."""
         self.objects[oid].update(hidden=True, at=self.now())
 
+    def move(self, source: str, target: str) -> None:
+        """타입 합치기 — source 의 객체 **전부**를 target 으로(식별자 그대로). 옮긴 객체는 바뀐 때가
+        올라 target 의 「바뀐 것」 으로 나가고, source 는 비어 카탈로그 · 쪽에 moved_at · moved_to 가
+        실린다. 선은 그대로다(끝 객체의 타입만 바뀐다 — 다시 나가지 않는다). source 를 끝으로 둔
+        관계 종류는 target 도 끝으로 받는다."""
+        for one in self.objects.values():
+            if one["type"] == source:
+                one.update(type=target, at=self.now())
+        for spec in self.kinds.values():
+            if source in spec["dst"] and target not in spec["dst"]:
+                spec["dst"].append(target)
+        self.moves[source] = (target, self.now())
+
+    def moved(self, type_slug: str) -> dict[str, Any]:
+        """카탈로그 · 쪽의 두 칸 — 옮긴 적 없으면 둘 다 null. 간 곳이 공개 전이면 간 곳은 비운다."""
+        if type_slug not in self.moves:
+            return {"moved_at": None, "moved_to": None}
+        target, tick = self.moves[type_slug]
+        return {"moved_at": stamp(tick), "moved_to": target if self.types[target]["open"] else None}
+
     def purge_graves(self) -> None:
         """끊긴 선의 기록을 지운다 — 그보다 앞선 since 로 물으면 reset 으로 답한다."""
         self.purged_before = self.now()
@@ -314,6 +336,7 @@ class World:
             "since": stamp(since) if since is not None else None,
             "next": nxt,
             "items": items,
+            **self.moved(type_slug),
         }
 
     def relation_rows(self, type_slug: str, since: int | None, cursor: str | None, limit: int) -> dict[str, Any]:
@@ -400,10 +423,13 @@ class World:
                     "relations": kinds,
                     "relation_kinds": [self.kind_entry(k) for k in kinds],
                     "properties": self.types[slug]["properties"],
+                    **self.moved(slug),
                 }
             )
+        # 옮긴 일도 판에 든다 — 실제 SP 처럼.
         shape = [
-            (t["slug"], t["properties"], t["relations"], t["relation_kinds"]) for t in types
+            (t["slug"], t["properties"], t["relations"], t["relation_kinds"], t["moved_at"], t["moved_to"])
+            for t in types
         ]
         digest = hashlib.sha256(json.dumps(shape, sort_keys=True).encode()).hexdigest()
         return {
@@ -417,16 +443,16 @@ class World:
     def kind_entry(self, kind: str) -> dict[str, Any]:
         spec = self.kinds[kind]
         dst_types = [t for t in spec["dst"] if self.types[t]["open"]]
-        end = (
-            {"slug": spec["interface"], "interface": True, "types": dst_types}
+        ends = (
+            [{"slug": spec["interface"], "interface": True, "types": dst_types}]
             if spec["interface"]
-            else {"slug": spec["dst"][0], "interface": False, "types": dst_types}
+            else [{"slug": t, "interface": False, "types": [t]} for t in dst_types]
         )
         return {
             "slug": kind,
             "label": spec["label"],
             "src": [{"slug": spec["src"], "interface": False, "types": [spec["src"]]}],
-            "dst": [end],
+            "dst": ends,
             "effectivity": False,
             "quantity_key": "",
             "lineage_source": "",
@@ -459,6 +485,8 @@ class World:
             "relations": sorted(relations),
             "previous_keys": previous,
             "ignore_types": sorted(self.closed_race),
+            # 옮긴 타입 → 간 곳 — 채점기가 「옮겨 간 것이 살아 있음」 을 짚는 데 쓴다(규칙 17).
+            "moved": {slug: target for slug, (target, _tick) in self.moves.items()},
             "ref_properties": {
                 slug: {
                     p["key"]: p["ref_type_slug"]
@@ -623,8 +651,10 @@ def step_5(w: World) -> list[str]:
 
 def step_6(w: World) -> list[str]:
     w.types["plant"]["open"] = True
+    w.add_type("site", "사업장", [{"key": "region", "label": "지역", "data_type": "text"}], open=True)
+    w.make("site", "ST-1", "평택", region="경기")
     return [
-        "plant 타입을 공개함 — 정의 판(revision)이 바뀐다.",
+        "plant 타입을 공개함 — 정의 판(revision)이 바뀐다. site(사업장) 타입도 새로 공개함(ST-1 한 건).",
         "plant 로 가는 선(made_at 2개 · inspected_by 1개)은 **예전에 만든 것**이라 since 로는 안 온다 — "
         "정의 판이 바뀌면 처음부터 다시 받아야 받는다.",
         "inspected_by 는 끝이 인터페이스다 — P-1X→K-1 이 vendor 와 plant 에 하나씩, 두 선이다 "
@@ -656,6 +686,21 @@ def step_8(w: World) -> list[str]:
     ]
 
 
+def step_9(w: World) -> list[str]:
+    w.frozen = None
+    for one in w.objects.values():
+        one["silent"] = False
+    w.move("plant", "site")
+    return [
+        "토큰 범위가 돌아옴 — 8단계에 안 보이던 부품이 다시 보인다(바뀐 것은 없어 다시 오지 않는다).",
+        "plant(공장)의 객체를 전부 site(사업장)로 옮김(타입 합치기) — 식별자는 그대로다(PL-1 · K-1).",
+        "plant 는 비어 처음부터 받으면 0건이다 — 카탈로그 · 쪽의 plant 에 moved_at · moved_to(site)가 실린다. "
+        "「전부 안 옴」 으로 멈추지 말고, site 를 먼저 받은 뒤 plant 쪽 행을 비활성으로 두고(지우지 않음) 그 행으로 "
+        "가는 선(made_at · inspected_by)의 도착 타입을 site 로 옮긴다(선은 다시 오지 않는다).",
+        "옮긴 객체는 site 의 「바뀐 것」 으로 온다. 정의 판도 바뀐다.",
+    ]
+
+
 #: (제목, 실행 방법, 기대하는 결과 상태, 보는 규칙, 일으키는 것)
 STEPS = [
     ("첫 적재", "보통", "정상", "1 · 2 · 3 · 6 · 15", step_1),
@@ -666,6 +711,7 @@ STEPS = [
     ("정의 판 바뀜 — 타입 공개", "보통", "정상", "12 · 15", step_6),
     ("공개 거둠 — 그 타입만 건너뜀", "보통", "확인 필요", "11 · 16", step_7),
     ("토큰 범위 줄어듦 — 처음부터 다시 받기", "처음부터", "확인 필요", "7 · 16", step_8),
+    ("타입 합치기 — 다른 타입으로 옮김", "보통", "정상", "12 · 17", step_9),
 ]
 
 

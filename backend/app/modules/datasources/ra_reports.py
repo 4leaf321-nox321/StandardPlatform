@@ -10,7 +10,8 @@ ReportArchive(RA)의 발행 보고서 피드(`GET /api/feeds/published-reports`)
                건너뛴다
     쪽 넘김    RA 의 커서는 두 값(`updated_since` · `after_id`)이다
     쌓기       증분(저장한 커서에서 5분 겹쳐) + 하루 한 번 전량(본문 없이 — 태그만 바뀐 것을
-               메운다)
+               메운다. 그 차례는 저장한 커서에서 본문까지 한 번 더 읽고, 커서는 그것으로만
+               옮긴다)
     원본 상태  전량 대조에서 안 온 것은 「원본에서 내려감」 — **지우지도 사용 중지하지도
                않는다**
     다시 찾기  외부 식별자와 `RA-<번호>` 로만 — 이름으로 붙이지 않는다(같은 제목의 보고서가
@@ -26,6 +27,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import httpx
@@ -248,7 +250,7 @@ def _data(response: httpx.Response) -> Any:
 
 def mode_of(source: DataSource, now: datetime | None = None) -> str:
     """`initial`(커서가 없다 — 본문까지 전량) · `reconcile`(하루 한 번 — 본문 없이 전량,
-    대조) · `incremental`(지난 커서에서 5분 겹쳐)."""
+    대조, 그리고 지난 커서에서 본문까지) · `incremental`(지난 커서에서 5분 겹쳐)."""
     if not source.since_mark:
         return "initial"
     now = now or datetime.now(UTC)
@@ -286,7 +288,14 @@ def fetch(
     transport: httpx.BaseTransport | None,
 ) -> Fetched:
     """피드를 끝까지(상한 안에서) 읽어 평평한 행으로. 끝까지 받았을 때만 `as_of`(다음 커서)를
-    채운다 — 중간에 끊긴 채 커서를 옮기면 남은 것을 영영 안 받는다."""
+    채운다 — 중간에 끊긴 채 커서를 옮기면 남은 것을 영영 안 받는다.
+
+    **전량 대조는 두 번 읽는다**(본문을 받는 소스면) — 본문 없이 전량(대조 · 태그만 바뀐
+    것), 그리고 지난 커서에서 본문까지(증분과 같은 읽기). **커서는 뒤엣것으로만 옮긴다.**
+    전량의 끝 커서로 옮기던 때는 지난 증분 뒤에 새로 오거나 본문이 바뀐 보고서가 대조에서
+    본문 없이 들어오고, 다음 증분은 그 뒤에서 시작해 **그 본문이 영영 안 왔다**(2026-11-28).
+    간격이 하루 이상인 소스는 차례마다 대조라 본문이 한 번도 안 왔다 — 그래서 커서를 멈추기만
+    하지 않고 대조가 본문도 받는다."""
     opts = options_of(source.options)
     if not opts.board:
         raise _refuse(
@@ -294,21 +303,63 @@ def fetch(
             "RA 조직을 선택하세요 — 그 조직과 하위 조직의 게시판에 게시된 보고서를 "
             "수신합니다.",
         )
+    read = partial(
+        _read,
+        source,
+        opts,
+        auth=auth,
+        page_size=page_size,
+        max_rows=max_rows,
+        transport=transport,
+    )
+    if mode == "incremental":
+        return read(since=source.since_mark, text=opts.include_text)
+    if mode != "reconcile" or not opts.include_text:
+        # 처음은 본문까지 전량. 본문을 안 받는 소스의 대조는 전량 한 번이 전부다 — 그 끝 커서로
+        # 옮겨도 놓치는 것이 없다.
+        return read(since=None, text=opts.include_text)
+    # 전량은 본문 없이 — 빈 칸은 「안 건드림」 이라 본문 없이 받아도 우리 본문은 그대로다.
+    whole = read(since=None, text=False)
+    whole.as_of = None
+    if whole.truncated:
+        return whole
+    recent = read(since=source.since_mark, text=True)
+    # 같은 보고서는 뒤에 읽은 것(본문이 실린 것) 하나만 — 깨진 행이 오류 목록에 두 번 안 서게.
+    fresh = {str(row.get(_ID)) for row in recent.rows if row.get(_ID)}
+    whole.rows = [
+        row for row in whole.rows if not row.get(_ID) or str(row.get(_ID)) not in fresh
+    ] + recent.rows
+    whole.pages += recent.pages
+    whole.truncated = recent.truncated
+    whole.as_of = recent.as_of
+    return whole
+
+
+def _read(
+    source: DataSource,
+    opts: Options,
+    *,
+    since: str | None,
+    text: bool,
+    auth: Auth,
+    page_size: int,
+    max_rows: int,
+    transport: httpx.BaseTransport | None,
+) -> Fetched:
+    """피드 한 번 읽기 — `since`(저장한 커서)가 있으면 거기서 5분 겹쳐(증분), 없으면 전량."""
     params: dict[str, str] = {
         "board": opts.board,
         "include_descendants": "true" if opts.include_descendants else "false",
         "phase": opts.phase,
         "limit": str(max(1, min(page_size, PAGE_MAX))),
     }
-    # 전량 대조는 본문 없이 — 본문이 바뀌면 `updated_at` 이 움직여 증분이 잡는다. 빈 칸은 「안
-    # 건드림」 이라 본문 없이 받아도 우리 본문은 그대로다.
-    if opts.include_text and mode != "reconcile":
+    if text:
         params["include_text"] = "true"
     old_mark: datetime | None = None
-    if mode == "incremental":
-        old_mark, _ = _decode(source.since_mark)
+    if since is not None:
+        old_mark, _ = _decode(since)
         params["updated_since"] = (old_mark - OVERLAP).isoformat()
-    out = Fetched(full=mode != "incremental")
+    out = Fetched(full=since is None)
     last: dict[str, Any] | None = None
     url = _url(source.base_url, FEED_PATH)
     try:

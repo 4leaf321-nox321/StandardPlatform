@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ImportPlan } from '@/modules/objects/api'
 import {
   ImportPlanTable,
+  planChangesSomething,
   planIsClean,
   RENDER_MAX,
   SHOW_UNCHANGED_BELOW,
@@ -54,6 +55,22 @@ describe('계획 표', () => {
     render(<ImportPlanTable plan={bare as ImportPlan} />)
     expect(screen.getByText('줄 1')).toBeInTheDocument()
     expect(planIsClean(bare as ImportPlan)).toBe(true)
+  })
+
+  it('모양이 다른 결과(바뀌는 칸 · 셈이 없는 줄)를 받아도 멈추지 않는다', () => {
+    // 「작업」 화면이 검토함 결과를 이 표에 넘겼을 때 `changes.join` 에서 화면 전체가 멈췄다
+    // (2026-11-28 점검). 넘기는 쪽도 고쳤지만, 이 표도 모르는 모양에 멈추지 않는다.
+    const odd = {
+      applied: true,
+      rows: [
+        { row: 0, action: 'done', label: '「앤시스」 는 무엇인가', key: null, message: '처리' },
+      ],
+    } as unknown as ImportPlan
+    render(<ImportPlanTable plan={odd} />)
+    expect(screen.getByText('「앤시스」 는 무엇인가')).toBeInTheDocument()
+    expect(screen.getByText('done')).toBeInTheDocument()
+    expect(planIsClean(odd)).toBe(true)
+    expect(planChangesSomething(odd)).toBe(false)
   })
 
   it('경고는 줄 아래에 적고, 「그대로」 여도 경고가 있으면 뺄 수 없다', () => {

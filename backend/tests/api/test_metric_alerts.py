@@ -517,3 +517,66 @@ def test_판정_유보는_자료가_들어온_뒤_다시_서지_않으면_지운
     assert _after(slug)["new"] == 0
     assert client.get(events_url, headers=admin.headers).json() == []
     assert _notes(client, admin, "metric.alert") == []
+
+
+def test_내_발생은_지표로_좁히면_그_지표의_것만_세어_limit_개다(
+    client: TestClient, admin: Signed
+) -> None:
+    """MCP `metric_alerts(slug=…)` 는 내 모든 경보의 최근 `limit` 개를 받아 지표로 걸렀다 —
+    다른 지표가 자주 울리면 이 지표의 발생은 그 뒤로 밀려 0건(「안 울렸다」)이 됐다.
+    `metric=` 이면 서버가 그 지표의 것만 세어 준다. 모르는 지표는 빈 목록이 아니라 404."""
+    from datetime import timedelta
+
+    from app.database import SessionLocal
+    from app.modules.metrics.models import MetricAlert, MetricAlertEvent, MetricDef
+
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    me = client.get("/api/auth/me", headers=admin.headers).json()
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        ids = {slug: id_ for slug, id_ in db.execute(select(MetricDef.slug, MetricDef.id))}
+        loud, quiet = (
+            MetricAlert(
+                metric_id=ids[slug], owner_id=uuid.UUID(me["id"]), name=name, recipe="sprt"
+            )
+            for slug, name in ((sales["slug"], "자주"), (cases["slug"], "가끔"))
+        )
+        db.add_all([loud, quiet])
+        db.flush()
+        # 새것부터: 자주 울리는 경보가 셋 — 가끔 울리는 경보의 하나는 그보다 앞(오래된 것).
+        db.add_all(
+            [
+                MetricAlertEvent(
+                    alert_id=loud.id,
+                    key=f"k{n}",
+                    title=f"자주 {n}",
+                    created_at=now - timedelta(minutes=n),
+                )
+                for n in range(3)
+            ]
+            + [
+                MetricAlertEvent(
+                    alert_id=quiet.id,
+                    key="k",
+                    title="가끔",
+                    created_at=now - timedelta(hours=1),
+                )
+            ]
+        )
+        db.commit()
+        quiet_id = str(quiet.id)
+
+    def events(**params: Any) -> list[dict[str, Any]]:
+        got = client.get("/api/metrics/alerts/events", params=params, headers=admin.headers)
+        assert got.status_code == 200, got.text
+        return list(got.json())
+
+    assert all(one["metric"] == sales["slug"] for one in events(limit=2))
+    (only,) = events(limit=2, metric=cases["slug"])
+    assert only["alert_id"] == quiet_id and only["title"] == "가끔"
+    assert len(events(limit=10, metric=sales["slug"])) == 3
+    unknown = client.get(
+        "/api/metrics/alerts/events", params={"metric": "없는지표"}, headers=admin.headers
+    )
+    assert unknown.status_code == 404, unknown.text

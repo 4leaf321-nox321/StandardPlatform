@@ -5,6 +5,7 @@
 - 모양이 다른 칸 · 대상에 없는 선택 값 · 겹치는 식별자 · 같은 별칭 · 식별자 정책은 막는다.
   겹치는 식별자는 `merge_duplicates` 로 병합한다.
 - 이력은 옮기기 전 기록을 대상의 키로 읽는다. 값이 많으면 작업으로.
+- 옮긴 객체의 바뀐 때는 옮긴 때로 오르고, 계보 선의 낡음 판정은 옮기기 전 그대로다.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditEntry
 from app.modules.objects.models import ObjectAlias, ObjectInstance
-from tests.api.conftest import Signed, finish_job
+from tests.api.conftest import Signed, clock_settled, finish_job
 from tests.api.test_ontology import _link, _make_object, _make_property, _make_type
 
 
@@ -146,7 +147,9 @@ def test_옮기면_칸_참조_관계_별칭이_따라오고_원_타입은_비고
     assert acme["properties"] == {"country": "한국", "weight": 4, "memo": "주"}
     db.expire_all()
     after = db.scalar(select(ObjectInstance.updated_at).where(ObjectInstance.id == w["acme"]))
-    assert after == before
+    # **바뀐 때는 옮긴 때로 오른다** — 그대로 두면 「지난번 이후」 로 묻는 쪽(코어 API · 코어
+    # 구독 · 지표 증분 · 지도의 점)이 옮긴 객체를 못 본다(2026-11-28 점검).
+    assert before is not None and after is not None and after > before
     kinds = client.get("/api/ontology/types", headers=admin.headers).json()
     supplier_id = next(one for one in kinds if one["slug"] == supplier)["id"]
     alias = db.scalars(select(ObjectAlias).where(ObjectAlias.object_id == w["acme"])).one()
@@ -311,3 +314,35 @@ def test_큰_타입은_계획도_작업으로_센다(
     assert job.status_code == 202, job.text
     plan = finish_job(client, admin, job.json())
     assert plan["status"] == "done" and plan["result"]["applied"] is False, plan
+
+
+def test_바뀐_때를_올려도_계보_선의_낡음_판정은_옮기기_전_그대로다(
+    client: TestClient, admin: Signed
+) -> None:
+    """개정 칸이 없는 원천은 「원천의 바뀐 때 > 고정한 때」 로 낡음을 본다. 옮기기가 바뀐 때만
+    올리면 옮긴 원천 아래의 파생물이 전부 거짓 「낡음」 이 된다 — 낡지 않던 선은 고정한 때도
+    함께 올리고, 낡았던 선은 낡은 채로 둔다."""
+    from tests.api.test_lineage import _kind, _lineage, _patch
+
+    old = _make_type(client, admin, label=f"메시 {_hex()}", key_policy="optional")
+    _make_property(client, admin, old, key="memo", label="메모", data_type="text")
+    new = _make_type(client, admin, label=f"메시2 {_hex()}", key_policy="optional")
+    _make_property(client, admin, new, key="memo", label="메모", data_type="text")
+    result = _make_type(client, admin, label=f"결과 {_hex()}", key_policy="optional")
+    made = _kind(client, admin, source="src", src_type_slugs=[old], dst_type_slugs=[result])
+    fresh = _make_object(client, admin, old, label="M-1", properties={"memo": "가"})
+    stale = _make_object(client, admin, old, label="M-2", properties={"memo": "가"})
+    r1 = _make_object(client, admin, result, label="R-1")
+    r2 = _make_object(client, admin, result, label="R-2")
+    for src, dst in ((fresh, r1), (stale, r2)):
+        assert _link(client, admin, old, src["id"], made, dst["id"]).status_code == 201
+    clock_settled()
+    _patch(client, admin, old, stale["id"], properties={"memo": "나"})
+    assert _lineage(client, admin, result, r1["id"])["state"] == "fresh"
+    assert _lineage(client, admin, result, r2["id"])["state"] == "direct"
+
+    clock_settled()
+    done = _move(client, admin, old, new, apply=True)
+    assert done.status_code == 200 and done.json()["applied"] is True, done.text
+    assert _lineage(client, admin, result, r1["id"])["state"] == "fresh"
+    assert _lineage(client, admin, result, r2["id"])["state"] == "direct"

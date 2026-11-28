@@ -12,7 +12,13 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import Signed, notifications_of
-from tests.api.test_ontology import _make_object, _make_property, _make_type
+from tests.api.test_ontology import (
+    _link,
+    _make_object,
+    _make_property,
+    _make_relation,
+    _make_type,
+)
 
 
 def _profile(client: TestClient, who: Signed, slug: str, object_id: str) -> dict[str, Any]:
@@ -151,3 +157,204 @@ def test_종류_변경은_객체마다_알리지_않고_이력에만_남긴다(
     assert len(notifications_of(client, manager, "object.changed")) == before
     history = client.get(f"/api/objects/{part}/{bolt['id']}/history", headers=admin.headers)
     assert history.json()[0]["changes"]["properties.qty"] == {"before": "3", "after": 3}
+
+
+# --- 관계 ---------------------------------------------------------------------------
+
+
+def test_관계가_생기고_바뀌고_끊기면_두_끝을_지켜보는_사람에게_간다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """선의 기록은 객체가 아니라 선의 표(`object_relations`)에 남는다 — 객체의 일만 보던
+    때는 「관계가 추가됐습니다」 가 목록에 있는데도 한 번도 안 갔다. 그 말은 어느 끝에서 읽어도
+    맞으므로 두 끝 모두에 — 도착 끝에서는 역방향의 말로."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "part_of", label="속함", inverse_label="포함")
+    motor = _make_object(client, admin, part, label="모터")
+    drive = _make_object(client, admin, part, label="구동부")
+    for one in (motor, drive):
+        assert _watch(client, manager, part, one["id"], True).status_code == 200
+    before = len(notifications_of(client, manager, "object.changed"))
+    mine = len(notifications_of(client, admin, "object.changed"))
+
+    made = _link(client, admin, part, motor["id"], kind, drive["id"])
+    assert made.status_code == 201, made.text
+    got = notifications_of(client, manager, "object.changed")
+    assert len(got) == before + 2
+    by_title = {one["title"]: one for one in got[:2]}
+    assert set(by_title) == {"모터 — 관계가 추가됐습니다", "구동부 — 관계가 추가됐습니다"}
+    assert "속함: 구동부" in by_title["모터 — 관계가 추가됐습니다"]["body"]
+    assert "포함: 모터" in by_title["구동부 — 관계가 추가됐습니다"]["body"]
+    assert by_title["모터 — 관계가 추가됐습니다"]["link"] == f"/o/{part}/{motor['id']}"
+
+    edge = f"/api/objects/{part}/{motor['id']}/relations/{made.json()['relation_id']}"
+    edited = client.patch(edge, json={"evidence_note": "BOM 기준"}, headers=admin.headers)
+    assert edited.status_code == 200, edited.text
+    got = notifications_of(client, manager, "object.changed")
+    assert len(got) == before + 4
+    assert {one["title"] for one in got[:2]} == {
+        "모터 — 관계가 수정됐습니다",
+        "구동부 — 관계가 수정됐습니다",
+    }
+    assert client.delete(edge, headers=admin.headers).status_code == 204
+    got = notifications_of(client, manager, "object.changed")
+    assert len(got) == before + 6
+    assert {one["title"] for one in got[:2]} == {
+        "모터 — 관계가 해제됐습니다",
+        "구동부 — 관계가 해제됐습니다",
+    }
+    # 만든 사람(admin)도 두 끝을 지켜보지만 — 자기가 한 일이다.
+    assert len(notifications_of(client, admin, "object.changed")) == mine
+
+
+def test_객체를_지우며_끊은_선은_다른_끝에만_알린다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """지운 객체를 지켜보는 사람은 「지워졌습니다」 한 통이면 된다 — 선마다 한 통씩 더 가면
+    잡음이다. 다른 끝을 지켜보는 사람에게는 그 선이 끊어진 일이다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "uses", label="씀")
+    gone = _make_object(client, admin, part, label="옛 부품")
+    stays = _make_object(client, admin, part, label="남는 부품")
+    assert _link(client, admin, part, gone["id"], kind, stays["id"]).status_code == 201
+    for one in (gone, stays):
+        _watch(client, manager, part, one["id"], True)
+    before = len(notifications_of(client, manager, "object.changed"))
+
+    deleted = client.delete(
+        f"/api/objects/{part}/{gone['id']}", params={"mode": "detach"}, headers=admin.headers
+    )
+    assert deleted.status_code == 204, deleted.text
+    got = notifications_of(client, manager, "object.changed")
+    assert sorted(one["title"] for one in got[: len(got) - before]) == [
+        "남는 부품 — 관계가 해제됐습니다",
+        "옛 부품 — 지워졌습니다",
+    ]
+
+
+def test_한_번에_이은_선_여럿은_한_통으로_묶는다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """일괄 입력 한 번이 허브 하나에 선 수천 개를 이으면 그 허브를 지켜보는 사람에게 수천 통이
+    간다 — (사람 · 객체 · 일)마다 한 통에 수를 적는다."""
+    import uuid
+
+    from app.modules.objects import watches
+    from app.shared import events
+
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "uses", label="씀")
+    hub = _make_object(client, admin, part, label="허브")
+    leaves = [_make_object(client, admin, part, label=f"잎{n}") for n in range(3)]
+    _watch(client, manager, part, hub["id"], True)
+    before = len(notifications_of(client, manager, "object.changed"))
+
+    watches.on_events(
+        [
+            events.ChangeEvent(
+                action="object.relation.add",
+                target_table="object_relations",
+                target_id=uuid.uuid4(),
+                target_label="",
+                workspace_id=None,
+                actor_id=None,
+                actor_label="일괄 입력",
+                actor_client=None,
+                actor_token=None,
+                changes={"relation": kind, "src": leaf["id"], "dst": hub["id"]},
+            )
+            for leaf in leaves
+        ]
+    )
+    got = notifications_of(client, manager, "object.changed")
+    assert len(got) == before + 1
+    assert got[0]["title"] == "허브 — 관계가 추가됐습니다(3건)"
+    assert "외 2건" in got[0]["body"]
+
+
+def test_끝을_안_실은_선의_기록은_선에서_끝을_읽는다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """일괄 가져오기의 선 고침은 기록에 끝을 안 싣는다(`object_relations` 의 id 와 바뀐 칸뿐) —
+    선은 아직 있으니 거기서 두 끝을 읽는다."""
+    import uuid
+
+    from app.modules.objects import watches
+    from app.shared import events
+
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "uses", label="씀")
+    one = _make_object(client, admin, part, label="갑")
+    two = _make_object(client, admin, part, label="을")
+    made = _link(client, admin, part, one["id"], kind, two["id"])
+    assert made.status_code == 201, made.text
+    _watch(client, manager, part, two["id"], True)
+    before = len(notifications_of(client, manager, "object.changed"))
+
+    watches.on_events(
+        [
+            events.ChangeEvent(
+                action="object.relation.update",
+                target_table="object_relations",
+                target_id=uuid.UUID(made.json()["relation_id"]),
+                target_label="갑 씀 을",
+                workspace_id=None,
+                actor_id=None,
+                actor_label="일괄 가져오기",
+                actor_client=None,
+                actor_token=None,
+                changes={"properties": {"before": {}, "after": {"n": 1}}},
+            )
+        ]
+    )
+    got = notifications_of(client, manager, "object.changed")
+    assert len(got) == before + 1
+    assert got[0]["title"] == "을 — 관계가 수정됐습니다"
+    assert "씀의 반대: 갑" in got[0]["body"], got[0]
+
+
+def test_파일대로_맞춤이_끊은_선도_두_끝을_지켜보는_사람에게_간다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """묶음의 「파일대로 맞춤」 은 파일에 없는 선을 끊고 곧바로 지운다 — 그 기록에 끝이 없으면
+    선을 되읽을 데가 없어 알림이 안 갔다(이력에서도 그 줄을 못 찾았다)."""
+    import uuid
+
+    from tests.api.conftest import bundle_import
+
+    # 식별자는 시험마다 새로 — 끝 타입을 정하지 않은 관계라, 같은 DB 의 다른 시험이
+    # 만든 「A」 와 겹치면 끝이 모호해진다(병렬 시험에서 실제로 그랬다).
+    tag = uuid.uuid4().hex[:6]
+    a, b, c = f"A{tag}", f"B{tag}", f"C{tag}"
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    kind = _make_relation(client, admin, "uses", label="씀")
+    one = _make_object(client, admin, part, label="갑", key=a)
+    two = _make_object(client, admin, part, label="을", key=b)
+    _make_object(client, admin, part, label="병", key=c)
+    made = _link(client, admin, part, one["id"], kind, two["id"])
+    assert made.status_code == 201, made.text
+    _watch(client, manager, part, two["id"], True)
+    before = len(notifications_of(client, manager, "object.changed"))
+
+    replaced = bundle_import(
+        client,
+        admin,
+        {
+            "relations": [
+                {
+                    "type_slug": part,
+                    "mode": "replace",
+                    "rows": [{"src": a, "relation": kind, "dst": c}],
+                }
+            ],
+            "apply": True,
+        },
+    )
+    assert replaced["applied"] is True, replaced
+    got = notifications_of(client, manager, "object.changed")
+    assert len(got) == before + 1, got
+    assert got[0]["title"] == "을 — 관계가 해제됐습니다"
+    assert "갑" in got[0]["body"], got[0]
+    history = client.get(f"/api/objects/{part}/{two['id']}/history", headers=admin.headers)
+    assert history.status_code == 200, history.text
+    assert "파일대로 맞춤" in history.text, history.text

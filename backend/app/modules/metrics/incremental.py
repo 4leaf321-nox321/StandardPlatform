@@ -33,6 +33,9 @@
 - 바뀐 기록이 많다(기본 원천의 20% 넘게 — 그러면 전량이 오히려 싸다).
 - 워터마크 전부터 있던 기록인데 그 뒤의 감사 기록이 없다 — 옛 날짜를 모른다(줄마다 감사를 안
   남기는 백필 등).
+- **타입 옮기기**(ADR 0094)가 워터마크 뒤에 그 지표가 읽는 타입(원천 · 너머 · 트리)에서 · 으로
+  있었다. 옮겨 간 쪽은 객체가 떠나 「바뀐 기록」 이 하나도 없다 — 증분은 0건을 보고 떠난 기록을
+  계속 셌다(옮겨 온 쪽은 바뀐 때가 올라 보이지만, 이 일은 감사 기록으로 따로 안다).
 """
 
 from __future__ import annotations
@@ -158,6 +161,54 @@ def _foreign_change(
     ):
         return "거쳐 가는 관계가 바뀌었다"
     return None
+
+
+def _moved(
+    db: Session, built: spec_module.Built, foreign: list[str], since: datetime
+) -> str | None:
+    """`since` 뒤에 이 지표가 읽는 타입(원천 · 너머 · 「하위 전체」 의 트리)에서 옮겨
+    갔거나 그리로 옮겨 온 일(ADR 0094)이 있으면 그 까닭.
+
+    옮겨 간 쪽은 객체가 떠나 「바뀐 기록」 이 없다 — 증분은 0건을 보고 셀을 그대로 둬,
+    떠난 기록을 `METRICS_FULL_EVERY_DAYS` 동안 계속 셌다. 옮겨 온 쪽은 바뀐 때가 올라
+    보이지만(그 기록들의 감사가 없어 어차피 전량이다) 같은 까닭을 적는다. 너머 · 트리의
+    타입은 정의가 대상으로 바뀌어 주소를 다시 풀면 대상이 나온다 — 둘 다 본다."""
+    if (
+        db.scalar(
+            select(AuditEntry.id)
+            .where(AuditEntry.action == "ontology.type.move", AuditEntry.created_at > since)
+            .limit(1)
+        )
+        is None
+    ):
+        return None
+    from app.modules.ontology.move import Trail
+
+    try:
+        slugs = _tree_types(built)
+    except Exception:
+        slugs = set()  # 못 푸는 조건은 아래 길(`_foreign_change` · `_tree_change`)이 말한다
+    for address in foreign:
+        try:
+            chain = built.plan.resolver.parse_chain(axes.split_tree(address)[0])
+        except Exception:
+            continue  # 못 푸는 주소는 `_foreign_change` 가 전량으로 보낸다
+        for hop in chain.hops:
+            slugs.update(hop.target_slugs)
+    ids = {built.source.id}
+    if slugs:
+        ids |= set(
+            db.scalars(
+                select(ObjectType.id).where(
+                    ObjectType.slug.in_(load_ends(db).types_of(sorted(slugs)))
+                )
+            )
+        )
+    found = Trail(db).touching(ids, since)
+    if not found:
+        return None
+    shown = " · ".join(f"{one.source} → {one.target}" for one in found[:3])
+    return f"타입 옮기기가 있었다({shown})"
 
 
 def _tree_types(built: spec_module.Built) -> set[str]:
@@ -302,6 +353,9 @@ def plan(
         return "계보 조건(낡은 것만)이 든 지표다(원천이 바뀌면 기록의 시각 없이 답이 바뀐다)"
     since = current.watermark
     foreign = _foreign_addresses(built.spec)
+    moved = _moved(db, built, foreign, since)
+    if moved is not None:
+        return moved
     if foreign:
         reason = _foreign_change(db, built, foreign, since)
         if reason is not None:

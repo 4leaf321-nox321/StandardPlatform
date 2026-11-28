@@ -1009,12 +1009,13 @@ def filestore_gc(work: Work) -> dict[str, Any]:
             # 저장소 대부분이 고아 — 적용 전에 사람이 읽을 경고(자동 정리는 여기서 멈춘다).
             "warnings": [foreign] if foreign else [],
             "summary": (
-                f"지울 것 — 고아 파일 {len(found.orphans):,}개 · 임시 파일 "
-                f"{len(found.temp):,}개({size}) · 훑은 파일 {found.scanned:,}개 · 하루가 안 "
-                f"지나 남길 것 {found.recent:,}개" + (f" — 주의: {foreign}" if foreign else "")
+                f"삭제할 것 — 고아 파일 {len(found.orphans):,}개 · 임시 파일 "
+                f"{len(found.temp):,}개({size}) · 탐색한 파일 {found.scanned:,}개 · 업로드한 "
+                f"지 하루가 안 되어 남길 것 {found.recent:,}개"
+                + (f" — 주의: {foreign}" if foreign else "")
             ),
         }
-    work.progress("지우기", 0, 0)
+    work.progress("삭제", 0, 0)
     done = gc.clean(work.db, found)
     return {
         "applied": True,

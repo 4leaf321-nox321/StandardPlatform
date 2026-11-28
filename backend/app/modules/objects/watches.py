@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -32,38 +33,52 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.modules.accounts.models import User
 from app.modules.notifications import services as notifications
-from app.modules.objects.models import ObjectInstance, ObjectWatch
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.objects.models import ObjectInstance, ObjectRelation, ObjectWatch
+from app.modules.objects.system import HIDDEN_LABEL
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import events
 from app.shared.batches import chunks
 from app.shared.permissions import visible_owner_clause
 
 logger = logging.getLogger(__name__)
 
-#: 알릴 만한 것 — 객체 자신이 바뀌는 일. 만들기는 뺀다(막 만든 사람만 지켜보고 있고,
-#: 그 사람은 방금 자기가 만들었다).
+#: 선의 일 — 선 하나에 끝이 둘이라 **두 끝을 지켜보는 사람 모두**에게 간다(「관계가
+#: 추가됐습니다」 는 어느 끝에서 읽어도 맞는 말이고, 객체의 이력도 두 끝 모두에 그 줄을
+#: 싣는다).
+#: 기록은 객체가 아니라 선의 표(`object_relations` · 원 표와 이은 `object_links`)에 남는다 —
+#: 객체의 일만 보던 때는 이 셋이 목록에 있는데도 한 번도 안 갔다(2026-11-28).
+RELATION_ACTIONS = frozenset(
+    {"object.relation.add", "object.relation.update", "object.relation.remove"}
+)
+RELATION_TABLES = frozenset({"object_relations", "object_links"})
+
+#: 알릴 만한 것 — 객체 자신이 바뀌는 일과 그것에 걸린 선의 일. 만들기는 뺀다(막 만든 사람만
+#: 지켜보고 있고, 그 사람은 방금 자기가 만들었다). 「이력의 그 값으로」(`object_restore`)는
+#: 고치기와 같은 `object.update` 로 남는다 — 지운 객체를 되살리는 길은 없다(AGENTS.md).
 WATCHED_ACTIONS = {
     "object.update",
     "object.delete",
-    "object.restore",
     "object.merge",
-    "object.relation.add",
-    "object.relation.update",
-    "object.relation.remove",
+    *RELATION_ACTIONS,
     "object.years.set",
     "object.attachment.add",
     "object.attachment.remove",
 }
 
+#: 이 일이 같은 커밋에 있으면 그 객체의 선 알림은 안 보낸다 — 객체를 지우면 선도 함께
+#: 끊기는데(`lifecycle.delete_detaching`), 「지워졌습니다」 한 통 뒤에 선마다 한 통씩 더 가면
+#: 그것은 잡음이다.
+_SWALLOWS_RELATIONS = frozenset({"object.delete", "object.merge"})
+
 #: 무엇이 바뀌었는지 한 줄로. 사람이 알림만 보고 열지 말지를 정한다.
 LABELS = {
     "object.update": "값이 바뀌었습니다",
     "object.delete": "지워졌습니다",
-    "object.restore": "되살아났습니다",
     "object.merge": "다른 것과 합쳐졌습니다",
-    "object.relation.add": "관계가 생겼습니다",
-    "object.relation.update": "관계가 바뀌었습니다",
-    "object.relation.remove": "관계가 끊어졌습니다",
+    # 선의 말은 용어집대로(추가 · 수정 · 해제) — 처음으로 화면에 나가는 문구다.
+    "object.relation.add": "관계가 추가됐습니다",
+    "object.relation.update": "관계가 수정됐습니다",
+    "object.relation.remove": "관계가 해제됐습니다",
     "object.years.set": "연도가 바뀌었습니다",
     "object.attachment.add": "첨부가 추가됐습니다",
     "object.attachment.remove": "첨부가 삭제됐습니다",
@@ -211,6 +226,144 @@ def _visible_to(
     return out
 
 
+@dataclass(frozen=True)
+class _End:
+    """선의 기록 하나를 **지켜볼 수 있는 한 끝**에서 본 것."""
+
+    event: events.ChangeEvent
+    watched: uuid.UUID
+    other: uuid.UUID | None
+    relation: str
+    outgoing: bool
+    """지켜보는 끝이 출발 쪽인가 — 도착 쪽이면 관계를 역방향의 말로 읽는다."""
+
+
+def _uuid(raw: object) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(raw)) if raw else None
+    except ValueError:
+        return None
+
+
+def _relation_ends(db: Session, linked: list[events.ChangeEvent]) -> list[_End]:
+    """선의 기록마다 양 끝 — 기록이 실은 `src` · `dst`(`audit.relation_ends` 의 모양)에서.
+
+    끝을 안 실은 기록(일괄 가져오기의 선 고침)은 선에서 읽는다. 끊은 선은 이미 없어 못 찾는다 —
+    그런 기록은 알리지 않는다(끝을 짐작해 엉뚱한 사람에게 보내지 않는다)."""
+    bare = [
+        one.target_id
+        for one in linked
+        if one.target_table == "object_relations"
+        and one.target_id is not None
+        and not (_uuid(one.changes.get("src")) and _uuid(one.changes.get("dst")))
+    ]
+    edges = {
+        row.id: row
+        for batch in chunks(bare)
+        for row in db.execute(
+            select(
+                ObjectRelation.id,
+                ObjectRelation.src_object_id,
+                ObjectRelation.dst_object_id,
+                ObjectRelation.relation,
+            ).where(ObjectRelation.id.in_(batch))
+        )
+    }
+    out: list[_End] = []
+    for one in linked:
+        src, dst = _uuid(one.changes.get("src")), _uuid(one.changes.get("dst"))
+        relation = str(one.changes.get("relation") or "")
+        edge = edges.get(one.target_id) if one.target_id is not None else None
+        if (src is None or dst is None) and edge is not None:
+            src, dst, relation = edge.src_object_id, edge.dst_object_id, edge.relation
+        if src is not None:
+            out.append(_End(one, src, dst, relation, outgoing=True))
+        if dst is not None and dst != src:
+            out.append(_End(one, dst, src, relation, outgoing=False))
+    return out
+
+
+def _relation_detail(
+    end: _End,
+    kinds: dict[str, RelationType],
+    objects: dict[uuid.UUID, ObjectInstance],
+    visible: set[uuid.UUID],
+) -> str:
+    """「관계의 말: 다른 끝」 — **다른 끝은 받는 사람이 지금 볼 수 있을 때만 이름으로.**
+    못 보면 「(볼 수 없는 객체)」. 원 표의 끝(부서 · 사람)은 여기서 볼 수 있는지 모르므로
+    이름을 안 싣는다."""
+    # 방향에 맞는 말 — 「관련 객체」 와 같은 규칙(`objects/routes.py`).
+    kind = kinds.get(end.relation)
+    if kind is None:
+        word = end.relation
+    elif end.outgoing or not kind.directed:
+        word = kind.label
+    else:
+        word = kind.inverse_label or f"{kind.label}의 반대"
+    other = objects.get(end.other) if end.other is not None else None
+    if other is None:
+        return word
+    name = other.label if other.id in visible else HIDDEN_LABEL
+    return f"{word}: {name}" if word else name
+
+
+def _notify_relations(
+    db: Session,
+    ends: list[_End],
+    by_object: dict[uuid.UUID, list[uuid.UUID]],
+    objects: dict[uuid.UUID, ObjectInstance],
+    types: dict[uuid.UUID, ObjectType],
+    seen: dict[uuid.UUID, set[uuid.UUID]],
+    gone: set[uuid.UUID],
+) -> int:
+    """선의 일을 끝마다 지켜보는 사람에게 — **(사람 · 객체 · 일)마다 한 통으로 묶는다.** 일괄
+    입력 한 번이 허브 모델 하나에 선 수천 개를 이으면 그 모델을 지켜보는 사람에게 수천 통이
+    간다 — 「관계가 추가됐습니다(3,000건)」 한 통이 같은 말을 한다."""
+    groups: dict[tuple[uuid.UUID, uuid.UUID, str], list[_End]] = {}
+    for end in ends:
+        if end.watched in gone:
+            continue
+        for user_id in by_object.get(end.watched, []):
+            # 내가 한 일은 나에게 안 알린다 · 지금 볼 수 있는 사람에게만(객체의 일과 같다).
+            if end.event.actor_id and user_id == end.event.actor_id:
+                continue
+            if end.watched not in seen.get(user_id, set()):
+                continue
+            groups.setdefault((user_id, end.watched, end.event.action), []).append(end)
+    if not groups:
+        return 0
+    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    sent = 0
+    for (user_id, watched, action), found in groups.items():
+        row = objects.get(watched)
+        if row is None:  # pragma: no cover - 지켜보는 것은 객체뿐이다
+            continue
+        object_type = types.get(row.type_id)
+        first = found[0]
+        detail = _relation_detail(first, kinds, objects, seen.get(user_id, set()))
+        many = len(found) > 1
+        if many:
+            detail = f"{detail} 외 {len(found) - 1:,}건"
+        notifications.notify(
+            db,
+            user_id=user_id,
+            kind=notifications.OBJECT_CHANGED,
+            title=f"{row.label} — {LABELS[action]}" + (f"({len(found):,}건)" if many else ""),
+            body=" · ".join(
+                part
+                for part in (
+                    object_type.label if object_type else "",
+                    first.event.actor_label,
+                    detail,
+                )
+                if part
+            ),
+            link=f"/o/{object_type.slug}/{watched}" if object_type else None,
+        )
+        sent += 1
+    return sent
+
+
 def on_events(staged: list[events.ChangeEvent]) -> None:
     """커밋된 변경을 지켜보는 사람들에게. **던지지 않는다** — 알림이 실패했다고 방금
     성공한 저장이 실패로 보이면 안 된다(`shared/events.py` 가 삼키지만 여기서도 조심한다).
@@ -220,24 +373,41 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
         for one in staged
         if one.target_table == "objects" and one.action in WATCHED_ACTIONS and one.target_id
     ]
-    if not wanted:
+    linked = [
+        one
+        for one in staged
+        if one.target_table in RELATION_TABLES and one.action in RELATION_ACTIONS
+    ]
+    if not wanted and not linked:
         return
     try:
         with SessionLocal() as db:
+            ends = _relation_ends(db, linked) if linked else []
             ids = [one.target_id for one in wanted if one.target_id]
-            by_object = watchers(db, ids)
+            by_object = watchers(db, [*ids, *(end.watched for end in ends)])
             if not by_object:
                 return
+            ends = [end for end in ends if end.watched in by_object]
             types = {row.id: row for row in db.scalars(select(ObjectType))}
-            # 지켜보는 사람이 있는 것만 읽는다 — 변경이 수만 건이어도 그런 객체는 몇 개다.
+            # 지켜보는 사람이 있는 것만 읽는다 — 변경이 수만 건이어도 그런 객체는 몇 개다. 선의
+            # 다른 끝도(이름을 실을지 정하려고).
+            others = {end.other for end in ends if end.other is not None}
             objects = {
                 row.id: row
+                for batch in chunks(list({*by_object, *others}))
                 for row in db.scalars(
-                    select(ObjectInstance).where(ObjectInstance.id.in_(list(by_object)))
+                    select(ObjectInstance).where(ObjectInstance.id.in_(batch))
                 )
             }
-            labels = _property_labels(db, {row.type_id for row in objects.values()})
-            seen = _visible_to(db, by_object)
+            labels = _property_labels(
+                db, {objects[one].type_id for one in by_object if one in objects}
+            )
+            # 다른 끝은 그 선을 지켜보는 사람의 눈으로 본다.
+            looked = {key: list(value) for key, value in by_object.items()}
+            for end in ends:
+                if end.other is not None:
+                    looked.setdefault(end.other, []).extend(by_object[end.watched])
+            seen = _visible_to(db, looked)
             sent = 0
             for one in wanted:
                 target = one.target_id
@@ -280,6 +450,12 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
                         ),
                     )
                     sent += 1
+            gone = {
+                one.target_id
+                for one in wanted
+                if one.action in _SWALLOWS_RELATIONS and one.target_id is not None
+            }
+            sent += _notify_relations(db, ends, by_object, objects, types, seen, gone)
             if sent:
                 db.commit()
     except Exception:  # pragma: no cover - 알림 실패가 저장을 되돌리면 안 된다

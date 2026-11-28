@@ -531,6 +531,131 @@ def test_공개를_해제한_타입은_수신만_멈추고_받은_자료는_남�
     assert _sources(made["id"])[twin["material"]].is_active is False
 
 
+def _active(slug: str) -> set[str]:
+    """그 타입의 사용 중인(지우지 않았고 사용 중지도 아닌) 객체의 식별자."""
+    with SessionLocal() as db:
+        type_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == slug))
+        return {
+            str(key)
+            for key in db.scalars(
+                select(ObjectInstance.key).where(
+                    ObjectInstance.type_id == type_id,
+                    ObjectInstance.deleted_at.is_(None),
+                    ObjectInstance.status == "active",
+                )
+            )
+        }
+
+
+def test_허브가_다른_타입으로_옮긴_객체는_간_곳으로_받고_원_타입_쪽은_사용_중지한다(
+    client: TestClient, admin: Signed, world: tuple[str, Hub]
+) -> None:
+    """**허브가 타입을 합치면**(ADR 0094) 원 타입은 허브에서 비고 「바뀐 것」 이 없다 —
+    예전에는 구독이 아무것도 다시 받지 않아 간 곳에는 옮긴 객체가 안 오고, 원 타입에는 떠난
+    객체가 그대로 살았다(2026-11-28 점검). 이제 카탈로그의 `moved_to` 를 보고 간 곳을 처음부터
+    다시 받고, 간 곳에 같은 식별자가 온 것은 원 타입 쪽을 사용 중지한다(지우지 않는다)."""
+    tag, _ = world
+    n, twin = _names(tag, "hub"), _names(tag, "twin")
+    opened = client.patch(
+        f"/api/ontology/types/{n['memo']}", json={"core": True}, headers=admin.headers
+    )
+    assert opened.status_code == 200, opened.text
+    bundle_import(
+        client,
+        admin,
+        {
+            "objects": [
+                {
+                    "type_slug": n["memo"],
+                    "rows": [
+                        {"key": "M1", "label": "메모 1"},
+                        {"key": "M2", "label": "메모 2"},
+                    ],
+                }
+            ],
+            "apply": True,
+        },
+    )
+    made = _subscribed(client, admin, twin["group"])
+    assert _active(twin["memo"]) == {"M1", "M2"}
+    assert _active(twin["material"]) == {"AL", "ST"}
+
+    clock_settled()
+    moved = client.post(
+        f"/api/ontology/types/{n['memo']}/move",
+        json={"to": n["material"], "apply": True, "accept_core": True},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200 and moved.json()["applied"] is True, moved.text
+    clock_settled()
+
+    first = _check(client, admin, made["id"])
+    assert f"{twin['material']}_core" in first["restarted"], first
+    assert any(f"{twin['material']}(으)로 옮겼습니다" in one for one in first["notes"]), first
+    assert _active(twin["material"]) == {"AL", "ST", "M1", "M2"}
+    assert first["failed"] == 0, first
+
+    # 다음 확인 — 간 곳에 같은 식별자가 왔으니 원 타입 쪽은 사용 중지(지우지 않는다).
+    second = _check(client, admin, made["id"])
+    assert second["moved"] == {twin["memo"]: 2}, second
+    assert _active(twin["memo"]) == set()
+    assert _count(twin["memo"]) == 2, "지우지 않는다 — 이 설치의 기록이 그것을 가리킬 수 있다"
+    assert second["failed"] == 0, second
+    # 같은 옮기기를 다시 봐도 다시 받지 않는다.
+    third = _check(client, admin, made["id"])
+    assert third["restarted"] == [] and third["moved"] == {}, third
+
+
+def test_원_타입과_간_곳이_이_설치의_같은_타입이면_사용_중지하지_않는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """구독은 같은 허브 주소를 가리키는 사람이 만든 형제 코어 소스도 본다. 원 타입의 소스와
+    간 곳의 소스가 이 설치의 **같은 타입**에 넣으면 「간 곳에 온 같은 식별자」 가 그 객체
+    자신이라, 살아 있는 객체를 사용 중지했다(2026-11-28 검토) — 그때는 아무것도 안 한다."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.datasources import subscriptions
+    from app.modules.objects import aliases
+    from app.modules.objects.models import ObjectAlias
+    from app.shared.text import compare_key
+    from tests.api.test_ontology import _make_object, _make_type
+
+    tag = uuid.uuid4().hex[:6]
+    slug = _make_type(client, admin, label=f"공급사 {tag}", key_policy="optional")
+    made = _make_object(client, admin, slug, label="K-1", key="K-1")
+    with SessionLocal() as db:
+        type_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == slug))
+        assert type_id is not None
+        origin, target = (
+            DataSource(
+                slug=f"{name}_{tag}",
+                name=name,
+                kind="sp_core",
+                base_url=_base(tag),
+                entity_set=f"{name}hub{tag}",
+                type_id=type_id,
+            )
+            for name in ("old", "new")
+        )
+        db.add_all([origin, target])
+        db.flush()
+        for source in (origin, target):
+            db.add(
+                ObjectAlias(
+                    object_id=uuid.UUID(made["id"]),
+                    type_id=type_id,
+                    kind=aliases.source_kind(source.slug),
+                    value="K-1",
+                    norm=compare_key("K-1"),
+                )
+            )
+        db.flush()
+        later = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        assert subscriptions._retire_moved(db, None, origin, target, later) == (0, 0)
+        db.rollback()
+    assert _active(slug) == {"K-1"}
+
+
 def test_이_설치가_만든_같은_이름의_타입은_건드리지_않는다(
     client: TestClient, admin: Signed, world: tuple[str, Hub]
 ) -> None:

@@ -98,6 +98,17 @@ class CoreTypeOut(BaseModel):
     """`relations` 를 풀어 쓴 것 — 종류마다 양끝에 적힌 타입 · 인터페이스와 **그 끝에 설 수
     있는 열린 타입**. 끝이 인터페이스인 선을 받는 쪽은 `dst_type` 으로 어느 표에서 찾을지
     가른다(같은 `key` 가 두 구현 타입에 있을 수 있다)."""
+    moved_at: str | None = None
+    """이 타입의 객체를 **다른 타입으로 옮긴 때**(ADR 0094 — 타입 합치기). 비었으면 옮긴 적이
+    없다. 옮기기는 객체 전부를 옮긴다 — 받는 쪽이 이 타입으로 가진 행 가운데 `updated_at` 이
+    이 때보다 앞선 것은 이제 `moved_to` 에 있다(그 뒤에 이 타입에 새로 생긴 것만 여기서 온다).
+    옮긴 때가 바뀌면(또 옮김) 판(`revision`)도 바뀐다."""
+    moved_to: str | None = None
+    """옮겨 간 **공개 타입**의 slug — 그 뒤에 또 옮겼으면 마지막에 닿은 곳. 옮긴 객체는 그
+    타입의 행으로 온다(바뀐 때가 옮긴 때로 올라 `since` 로도 온다). 받는 쪽은 이 타입의 그
+    행을 지우지 말고 비활성으로 두고, 그 행을 가리키던 선 · 참조를 `moved_to` 의 같은
+    `key` 로 옮긴다. `moved_at` 이 있는데 이 칸이 비었으면 **공개하지 않은 타입으로 옮겨**
+    이 창구로는 더 받을 수 없다 — 그 행들은 사라진 것(`hidden`)처럼 다룬다."""
 
 
 class CoreCatalogOut(BaseModel):
@@ -243,6 +254,11 @@ class CorePageOut(BaseModel):
     next: str | None = None
     """다음 쪽의 커서 — **그대로 돌려준다**(모양은 약속이 아니다). 없으면 끝이다."""
     items: list[CoreRowOut]
+    moved_at: str | None = None
+    """카탈로그의 같은 칸 — 이 타입의 객체를 다른 타입으로 옮긴 때. 옮긴 타입은 빈 쪽을 주므로,
+    그것을 「바뀐 것 없음」 · 「공개 측 장애」 로 읽지 않게 쪽마다 싣는다."""
+    moved_to: str | None = None
+    """카탈로그의 같은 칸 — 옮겨 간 공개 타입(비었으면 공개하지 않은 타입으로 옮겼다)."""
 
 
 class CorePeriodOut(BaseModel):

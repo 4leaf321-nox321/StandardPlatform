@@ -167,8 +167,10 @@ cat > "$BACKUP_ROOT/LAST_BACKUP.txt" <<TXT
 보관         : 일 ${KEEP_DAILY}벌 + 일요일분 ${KEEP_WEEKLY}벌
 
 복구:
-  ./restore.sh -b '$BACKUP_ROOT' -d ${DB_NAME}_restore_check          # 확인만
-  ./restore.sh -b '$BACKUP_ROOT' -d $DB_NAME -F '$FILESTORE' -f       # 실제 복구
+  sudo ./restore.sh -b '$BACKUP_ROOT' -d ${DB_NAME}_restore_check          # 확인만
+  sudo ./restore.sh -b '$BACKUP_ROOT' -d $DB_NAME -F '$FILESTORE' -f       # 실제 복구(서비스를 멈춘 뒤)
+  DB 가 있는 서버에서 sudo 로 — DB 만들기 · 이름 바꾸기 · pgvector 는 그 서버의 postgres 계정이 한다.
+  실제 복구는 임시 DB 에 풀어 검사한 뒤 이름을 바꾸고, 지금 DB 는 ${DB_NAME}__before_restore_<시각> 으로 남긴다.
 
 주의: DB 와 첨부는 같은 시점의 것이어야 한다. 첨부는 미러 한 벌이라 옛 덤프로
       되돌리면 그 뒤에 올린 파일이 「DB 에는 없는데 파일은 있는」 상태가 된다 —

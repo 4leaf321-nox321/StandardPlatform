@@ -10,11 +10,30 @@
  * 다시 해야 한다.
  */
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react'
 
 import { jobsApi, isTerminal, STATUS_LABEL } from '@/modules/jobs/api'
 import type { Job, JobBulkResult, JobStatus } from '@/modules/jobs/api'
+import {
+  GcConfirmText,
+  GcResultView,
+  MovePlanView,
+  RenamePlanView,
+  ResultFields,
+  ReviewResultView,
+  countsLine,
+  gcPlanOf,
+  isGcResult,
+  isImportCounts,
+  moveLine,
+  moveOf,
+  renameLine,
+  renameOf,
+  resultFields,
+  reviewLine,
+  reviewOf,
+} from '@/modules/jobs/JobResultViews'
 import { TombstonePlanView, graveSummary, tombstonesOf } from '@/modules/jobs/TombstonePlanView'
 import type { ImportPlan } from '@/modules/objects/api'
 import type { RetypeOut } from '@/modules/ontology/api'
@@ -43,8 +62,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
+import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
+import { PUBLIC_PATH } from '@/shared/base'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
@@ -100,9 +121,22 @@ function Outcome({ job }: { job: Job }) {
       </span>
     )
   }
+  // 검토함 · 옮기기 · 키 변경 — 셈이 가져오기와 다르다. 가져오기의 한 줄로 읽던 때는 처리한
+  // 결정이 몇이든 「적용 — 새로 0 · 고침 0 · 그대로 0」 이었다(2026-11-28 점검).
+  const review = reviewOf(job.result)
+  if (review) return <span className="text-muted-foreground text-xs">{reviewLine(review)}</span>
+  const move = moveOf(job.result)
+  if (move) return <span className="text-muted-foreground text-xs">{moveLine(move)}</span>
+  const rename = renameOf(job.result)
+  if (rename) return <span className="text-muted-foreground text-xs">{renameLine(rename)}</span>
   const counts = (job.result as { counts?: Record<string, number>; applied?: boolean } | null)
     ?.counts
-  if (!counts) return null
+  if (!counts || typeof counts !== 'object') return null
+  // 가져오기가 아닌 셈(묶음 내보내기의 타입 · 객체 · 관계 수) — 그 수 그대로.
+  if (!isImportCounts(counts)) {
+    const line = countsLine(counts)
+    return line ? <span className="text-muted-foreground text-xs">{line}</span> : null
+  }
   const applied = (job.result as { applied?: boolean }).applied
   // 묶음의 무덤 — 「지움」 과 「사용 중지」 를 따로(ADR 0090).
   const graves = graveSummary(counts)
@@ -138,10 +172,28 @@ function hasRows(value: unknown): boolean {
   return Object.values(record).some((one) => typeof one === 'object' && hasRows(one))
 }
 
-/** 가져오기 계획인가 — 행이 있는 결과만 표로 그린다(묶음 · 내보내기는 모양이 다르다). */
+/** 가져오기 계획의 한 줄인가 — 결과(`action`)와 바뀌는 칸(`changes`)이 있다. */
+function isPlanRow(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const row = value as { action?: unknown; changes?: unknown }
+  return typeof row.action === 'string' && Array.isArray(row.changes)
+}
+
+/**
+ * 가져오기 계획인가 — 가져오기의 셈(`create` · `update` …)과 가져오기 모양의 줄만 표로 그린다
+ * (묶음 · 내보내기 · 검토함은 모양이 다르다).
+ *
+ * 줄 목록(`rows`)이 배열인 것만 보던 때는 검토함 작업(`review_apply` · `review_auto`)의 결정 결과를
+ * 이 표에 넘겼고, 그 줄에는 바뀌는 칸이 없어 펼치는 순간 화면 전체가 「이 화면을 그리지
+ * 못했습니다」 가 됐다(2026-11-28 점검).
+ */
 function planOf(job: Job): ImportPlan | null {
   const result = job.result as unknown as ImportPlan | null
-  return result && Array.isArray(result.rows) ? result : null
+  if (!result || !Array.isArray(result.rows) || !result.rows.every(isPlanRow)) return null
+  const counts = result.counts as Record<string, unknown> | undefined
+  // 목록의 요약은 줄 목록이 비어 오므로(`rows_omitted`) 그때는 셈의 모양으로 가른다.
+  const importCounts = !!counts && typeof counts === 'object' && isImportCounts(counts)
+  return importCounts || result.rows.length > 0 ? result : null
 }
 
 /**
@@ -158,16 +210,19 @@ function retypeOf(job: Job): RetypeOut | null {
 }
 
 /** 공개 타입의 계획이면 수신 시스템에 통보했다는 확인(`accept_core`)을 계획 때 받았나 — 적용
- *  작업은 계획의 요청을 그대로 들고 가므로, 안 받았으면 서버가 적용을 거절한다. */
-function retypeCoreAccepted(job: Job): boolean {
+ *  작업은 계획의 요청을 그대로 들고 가므로, 안 받았으면 서버가 적용을 거절한다. 종류 변경 ·
+ *  객체 옮기기 · 키 변경이 같다. */
+function coreAccepted(job: Job): boolean {
   const request = (job.params as { request?: { accept_core?: unknown } }).request
   return request?.accept_core === true
 }
 
-function retypeApplicable(job: Job, retype: RetypeOut): boolean {
+/** 종류 변경 · 객체 옮기기 · 키 변경의 계획을 적용할 수 있나 — 서버(`jobs.services.make_apply`
+ *  의 `errors` · 적용 작업의 `_require_core_accepted`)와 같은 판정. */
+function retypeApplicable(job: Job, retype: Pick<RetypeOut, 'errors' | 'core_consumers'>): boolean {
   return (
-    retype.errors.length === 0 &&
-    (retype.core_consumers.length === 0 || retypeCoreAccepted(job))
+    (retype.errors ?? []).length === 0 &&
+    ((retype.core_consumers ?? []).length === 0 || coreAccepted(job))
   )
 }
 
@@ -216,7 +271,7 @@ function RetypePlanView({ job, retype }: { job: Job; retype: RetypeOut }) {
           {one}
         </p>
       ))}
-      {retype.core_consumers.length > 0 && !retypeCoreAccepted(job) && (
+      {retype.core_consumers.length > 0 && !coreAccepted(job) && (
         <p className="text-destructive">
           바깥에 연 타입입니다({retype.core_consumers.join(', ')}) — 수신 시스템에 통보했다는
           확인 없이 계획했으므로 여기서 적용할 수 없습니다. 속성 화면에서 확인을 체크하고 다시
@@ -234,13 +289,27 @@ interface BundleBatch {
   error: string
 }
 
+/**
+ * 묶음 가져오기의 결과인가 — `objects` · `relations` 가 **타입마다의 목록**일 때만.
+ *
+ * 다른 작업도 같은 이름의 칸을 낸다 — 온톨로지 통째로 내보내기 · 객체 옮기기 · 키 변경의
+ * `objects` 는 수이고, 병합 · 참조 비우기의 `relations` 도 수다. 있기만 하면 펼치던 때는 그 수를
+ * 배열로 펼치려다 펼치는 순간 화면 전체가 멈췄다(`objects is not iterable`, 2026-11-28 점검).
+ */
 function bundleBatches(job: Job): BundleBatch[] | null {
   const result = job.result as unknown as {
-    objects?: BundleBatch[]
-    relations?: BundleBatch[]
+    objects?: unknown
+    relations?: unknown
   } | null
-  if (!result || (!result.objects && !result.relations)) return null
-  return [...(result.objects ?? []), ...(result.relations ?? [])]
+  if (!result || (!Array.isArray(result.objects) && !Array.isArray(result.relations))) return null
+  const batches = (value: unknown): BundleBatch[] =>
+    Array.isArray(value)
+      ? value.filter(
+          (one): one is BundleBatch =>
+            !!one && typeof one === 'object' && typeof (one as BundleBatch).type_slug === 'string',
+        )
+      : []
+  return [...batches(result.objects), ...batches(result.relations)]
 }
 
 /** 아직 적용 안 한 **깨끗한** 계획인가 — 그때만 「적용」 이 선다. **적용 단계가 있는 종류만**
@@ -259,11 +328,34 @@ function waitingForApply(job: Job, twoStep: ReadonlySet<string>): boolean {
   // 종류 변경 — 막는 것(`errors`)이 없으면. 값이 하나도 안 바뀌어도 정의의 종류는 바뀐다.
   const retype = retypeOf(job)
   if (retype) return retypeApplicable(job, retype)
+  // 객체 옮기기 · 키 변경 — 종류 변경과 같다(`ok` 가 없는 모양이라, 못 알아보던 때는 서버가 받아
+  // 주는 계획에도 「적용」 이 안 섰다).
+  const moved = moveOf(job.result) ?? renameOf(job.result)
+  if (moved) return retypeApplicable(job, moved)
   // 부서 자료 이동 — 막히는 것이 없고 옮길 것이 있으면(`ok`).
   const reassign = reassignOf(job.result)
   if (reassign) return reassign.ok
   // 묶음 — 자체 판정(`ok`)을 쓴다.
   return result.ok === true
+}
+
+/** 계획을 적용한 작업의 상태(`applied_status`, ADR 0101) — **대기 · 진행 중인 적용은 아직 아무것도
+ *  들어가지 않았다.** `applied_by` 만 보던 때는 워커가 집기도 전에 「적용했습니다」 였다. */
+const APPLIED_LABEL: Partial<Record<JobStatus, string>> = {
+  queued: '적용 대기 중',
+  running: '적용 중',
+  done: '적용함',
+}
+
+function appliedLabel(job: Pick<Job, 'applied_status'>): string {
+  return APPLIED_LABEL[job.applied_status ?? 'done'] ?? '적용함'
+}
+
+/** 적용이 아직 끝나지 않았나 — 그동안 목록을 다시 읽어 「적용함」 으로 바뀌는 것을 보인다. */
+function applyPending(job: Job): boolean {
+  return Boolean(
+    job.applied_by && (job.applied_status === 'queued' || job.applied_status === 'running'),
+  )
 }
 
 function Detail({
@@ -274,6 +366,7 @@ function Detail({
   onApply,
   onDownload,
   onDownloadRows,
+  onOpenJob,
 }: {
   job: Job
   busy: boolean
@@ -284,6 +377,8 @@ function Detail({
   onApply: () => void
   onDownload: () => void
   onDownloadRows: () => void
+  /** 다른 작업(적용 작업)을 이 화면 맨 위에 펼친다 — `?job=` 링크와 같다. */
+  onOpenJob: (id: string) => void
 }) {
   // 목록의 결과는 줄 목록을 뺀 요약이다 — 펼치면 상세(앞의 500줄, 오류 먼저)를 읽는다.
   const brief = omitsRows(listed.result)
@@ -301,6 +396,21 @@ function Detail({
   const photos = photoPlanOf(job.result)
   // 부서 자료 이동(통폐합) — 무엇이 몇 건 옮겨지나 · 무엇이 막히나. 창을 닫고 와도 여기서 적용한다.
   const reassign = reassignOf(job.result)
+  // 검토함 작업 — 결정마다 무엇이 됐나(가져오기 계획과 모양이 다르다).
+  const review = reviewOf(job.result)
+  // 객체 옮기기 · 키 변경 — 2만 건이 넘어 작업으로 계획한 것. 창을 닫고 와도 여기서 적용한다.
+  const move = moveOf(job.result)
+  const rename = renameOf(job.result)
+  // 고아 첨부 파일 정리 — 무엇을 삭제하나 · 다른 DB 의 저장소일 수 있다는 경고.
+  const gc = isGcResult(job)
+  const known =
+    plan || batches || graves || retype || photos || reassign || review || move || rename || gc
+  // **모르는 모양도 값은 적는다** — 「남길 결과가 없는 작업입니다」 는 정말 남긴 것이 없을 때만.
+  const unknown = !known && !job.error
+  const fields =
+    unknown &&
+    (resultFields(job.result).length > 0 ||
+      typeof (job.result as { summary?: unknown } | null)?.summary === 'string')
   return (
     <div className="bg-muted/30 space-y-3 px-4 py-3">
       {brief && full.loading && (
@@ -314,6 +424,10 @@ function Detail({
       {retype && <RetypePlanView job={job} retype={retype} />}
       {photos && <PhotoPlanTable plan={photos} />}
       {reassign && <ReassignPlanView result={reassign} />}
+      {review && <ReviewResultView review={review} />}
+      {move && <MovePlanView move={move} coreAccepted={coreAccepted(job)} />}
+      {rename && <RenamePlanView rename={rename} coreAccepted={coreAccepted(job)} />}
+      {gc && <GcResultView job={job} />}
       {batches && (
         <table className="text-xs">
           <tbody>
@@ -325,9 +439,9 @@ function Detail({
                     <span className="text-destructive">{one.error}</span>
                   ) : (
                     <span className="text-muted-foreground">
-                      새로 {one.plan?.counts.create ?? 0} · 고침 {one.plan?.counts.update ?? 0} ·
-                      그대로 {one.plan?.counts.unchanged ?? 0}
-                      {one.plan?.counts.error ? ` · 오류 ${one.plan.counts.error}` : ''}
+                      새로 {one.plan?.counts?.create ?? 0} · 고침 {one.plan?.counts?.update ?? 0} ·
+                      그대로 {one.plan?.counts?.unchanged ?? 0}
+                      {one.plan?.counts?.error ? ` · 오류 ${one.plan.counts.error}` : ''}
                     </span>
                   )}
                 </td>
@@ -337,9 +451,14 @@ function Detail({
         </table>
       )}
       {graves && <TombstonePlanView plan={graves} />}
-      {!plan && !batches && !retype && !photos && !reassign && !job.error && (
+      {unknown && <ResultFields result={job.result} />}
+      {unknown && (job.has_output || !fields) && (
         <p className="text-muted-foreground text-xs">
-          {job.has_output ? '만든 파일을 받으세요.' : '남길 결과가 없는 작업입니다.'}
+          {!isTerminal(job)
+            ? '아직 끝나지 않았습니다 — 끝나면 여기에 결과가 표시됩니다.'
+            : job.has_output
+              ? '만든 파일을 받으세요.'
+              : '남길 결과가 없는 작업입니다.'}
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -368,7 +487,17 @@ function Detail({
         )}
         {job.applied_by && (
           <span className="text-muted-foreground text-xs">
-            적용했습니다 — 적용 작업 <span className="font-mono">{job.applied_by.slice(0, 8)}</span>
+            {appliedLabel(job)} — 적용 작업{' '}
+            <a
+              href={`${PUBLIC_PATH}/jobs?job=${job.applied_by}`}
+              className="text-primary font-mono underline-offset-4 hover:underline"
+              onClick={(event) => {
+                event.preventDefault()
+                onOpenJob(job.applied_by as string)
+              }}
+            >
+              {job.applied_by.slice(0, 8)}
+            </a>
           </span>
         )}
         {job.status === 'done' &&
@@ -378,11 +507,15 @@ function Detail({
           (plan?.applied === false ||
             retype?.applied === false ||
             photos?.applied === false ||
-            reassign?.applied === false) && (
+            reassign?.applied === false ||
+            move?.applied === false ||
+            rename?.applied === false) && (
             <span className="text-muted-foreground text-xs">
               {reassign
                 ? '막히는 것이 있거나 이동할 것이 없어 적용할 수 없습니다 — 부서 관리의 「자료 이동」 에서 다시 미리 보세요.'
-                : '오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.'}
+                : move || rename
+                  ? '막는 것이 있거나 수신 시스템 통보 확인이 없어 적용할 수 없습니다 — 온톨로지 화면에서 다시 계획하세요.'
+                  : '오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.'}
             </span>
           )}
         {job.status === 'done' && !twoStep && plan?.applied === false && (
@@ -416,8 +549,11 @@ export default function JobsPage() {
     isSystemAdmin(user) || (job.requested_by_id != null && job.requested_by_id === user?.id)
   const [offset, setOffset] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [linked] = useState(linkedJob)
+  const [linked, setLinked] = useState(linkedJob)
   const [opened, setOpened] = useState<string | null>(linked)
+  /** 파일을 삭제하는 계획(고아 첨부 파일 정리) — 적용 전에 무엇이 사라지는지 읽고 확인한다. */
+  const [confirmGc, setConfirmGc] = useState<Job | null>(null)
+  const [gcChecked, setGcChecked] = useState(false)
   // **하나씩 펼쳐 누르는 길만 있으면 스무 건에서 아무도 끝까지 안 한다.**
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [confirming, setConfirming] = useState<'apply' | 'cancel' | null>(null)
@@ -439,6 +575,25 @@ export default function JobsPage() {
       }),
     [offset, kind, status, mine],
   )
+  const listed = page.data?.items ?? []
+  /**
+   * **링크의 작업이 이 쪽에 없으면 따로 읽어 맨 위에 펼친다.** 첫 쪽이 아니거나 거르기(「내가 시킨
+   * 것만」 · 종류 · 상태)에 빠졌을 뿐인 작업에도 「목록에 없습니다」 라고 하던 때는, 링크가 맞는데
+   * 사람은 링크가 틀린 줄 알았다. 「찾을 수 없다」 는 서버가 정말 없다고(404) 할 때만 말한다.
+   */
+  const needPinned = Boolean(linked && page.data && !listed.some((one) => one.id === linked))
+  const pinnedJob = useResource(
+    () => (needPinned && linked ? jobsApi.get(linked) : Promise.resolve(null)),
+    [linked, needPinned],
+  )
+  const pinned = needPinned && pinnedJob.data?.id === linked ? pinnedJob.data : null
+  const pinnedMissing =
+    needPinned &&
+    pinnedJob.error instanceof ApiError &&
+    // 작업 번호 꼴이 아닌 링크(422)도 「찾을 수 없다」 다.
+    (pinnedJob.error.status === 404 || pinnedJob.error.status === 422)
+  const pinnedError = needPinned && !pinnedMissing ? pinnedJob.error : null
+  const shown = pinned ? [pinned, ...listed] : listed
   const kinds = useResource(() => jobsApi.kinds(), [])
   const twoStep = useMemo(
     () => new Set((kinds.data ?? []).filter((one) => one.two_step).map((one) => one.name)),
@@ -446,9 +601,15 @@ export default function JobsPage() {
   )
   const workers = useResource(() => jobsApi.workers(), [])
 
-  // 돌고 있는 것이 있으면 다시 읽는다 — 끝난 목록을 3초마다 두드릴 이유는 없다.
-  const active = (page.data?.items ?? []).some((one) => !isTerminal(one))
-  const reload = page.reload
+  // 돌고 있는 것이 있으면 다시 읽는다 — 끝난 목록을 3초마다 두드릴 이유는 없다. 계획의 적용이
+  // 대기 · 진행 중인 것도 — 「적용 대기 중」 이 「적용함」 으로 바뀌는 것을 보인다.
+  const active = shown.some((one) => !isTerminal(one) || applyPending(one))
+  const reloadPage = page.reload
+  const reloadPinned = pinnedJob.reload
+  const reload = useCallback(() => {
+    reloadPage()
+    reloadPinned()
+  }, [reloadPage, reloadPinned])
   useEffect(() => {
     if (!active) return
     const timer = setInterval(reload, REFRESH_MS)
@@ -471,9 +632,12 @@ export default function JobsPage() {
     }
   }
 
-  /** 목록에서 고른 것들 — **한 번에 적용하거나 한 번에 취소한다.** */
-  const chosen = (page.data?.items ?? []).filter((one) => picked.has(one.id))
-  const applicable = chosen.filter((one) => ownedByMe(one) && waitingForApply(one, twoStep))
+  /** 목록에서 고른 것들 — **한 번에 적용하거나 한 번에 취소한다.** 파일을 삭제하는 계획(고아
+   * 첨부 파일 정리)은 빼고 하나씩 — 한 번에 적용하는 확인 창은 무엇이 삭제되는지 말하지 않는다. */
+  const chosen = shown.filter((one) => picked.has(one.id))
+  const ready = chosen.filter((one) => ownedByMe(one) && waitingForApply(one, twoStep))
+  const applicable = ready.filter((one) => !gcPlanOf(one))
+  const oneByOne = ready.length - applicable.length
   const cancellable = chosen.filter(
     (one) => ownedByMe(one) && !isTerminal(one) && !one.cancel_requested,
   )
@@ -502,6 +666,31 @@ export default function JobsPage() {
       const made = await jobsApi.apply(job.id)
       setOpened(made.id)
     })
+  /** 「적용」 — 파일을 삭제하는 계획은 확인 창을 거친다(무엇이 사라지나 · 다른 DB 의 저장소일 수
+   *  있다는 경고). 확인 없이 바로 적용하던 때는 그 경고를 읽을 자리가 적용 단추 옆에 없었다. */
+  const requestApply = (job: Job) => {
+    if (gcPlanOf(job)) {
+      setGcChecked(false)
+      setConfirmGc(job)
+    } else {
+      void apply(job)
+    }
+  }
+  /** 다른 작업을 맨 위에 펼친다 — 주소도 그 `?job=` 으로(다시 읽어도 같은 자리). */
+  const openJob = (id: string) => {
+    setLinked(id)
+    setOpened(id)
+    try {
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${window.location.pathname}?job=${encodeURIComponent(id)}`,
+      )
+    } catch {
+      // 주소만 못 바꾼다 — 펼치기는 이미 했다.
+    }
+  }
+  const gcPlan = confirmGc ? gcPlanOf(confirmGc) : null
   const download = (job: Job) =>
     act(job, () => jobsApi.download(job.id, job.input_file_name ?? `${job.kind}.csv`))
 
@@ -572,17 +761,18 @@ export default function JobsPage() {
       <ErrorNotice error={page.error} />
       <ErrorNotice error={actionError} />
 
-      {/* 링크로 왔는데 그 작업이 목록에 없다 — **조용히 아무것도 안 열리면** 사람은 링크가 고장 난
-          줄 안다. 계획을 본 사람만 적용할 수 있으니 대개 다른 계정으로 들어온 것이다. */}
-      {linked && page.data && !page.data.items.some((one) => one.id === linked) && (
+      {/* 링크로 왔는데 그 작업을 서버가 모른다(404) — **조용히 아무것도 안 열리면** 사람은 링크가
+          고장 난 줄 안다. 계획을 본 사람만 적용할 수 있으니 대개 다른 계정으로 들어온 것이다. */}
+      {pinnedMissing && (
         <Alert>
-          <AlertTitle>링크의 작업이 이 목록에 없습니다</AlertTitle>
+          <AlertTitle>링크의 작업을 찾을 수 없습니다</AlertTitle>
           <AlertDescription>
-            미리 보기를 한 사람(정제 도구에 등록한 토큰의 주인)으로 로그인했는지 확인하세요 —
-            계획은 그 사람만 적용합니다. 「내가 시킨 것만」 을 끄면 다른 사람의 작업도 보입니다.
+            오래되어 정리됐거나 이 계정으로는 볼 수 없는 작업입니다. 미리 보기를 한 사람(정제 도구에
+            등록한 토큰의 주인)으로 로그인했는지 확인하세요 — 계획은 그 사람만 적용합니다.
           </AlertDescription>
         </Alert>
       )}
+      <ErrorNotice error={pinnedError} />
 
       {picked.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border p-2">
@@ -610,6 +800,11 @@ export default function JobsPage() {
           {applicable.length < picked.size && (
             <span className="text-muted-foreground text-xs">
               적용은 오류 없는 계획만 — {picked.size - applicable.length}건은 빠집니다
+            </span>
+          )}
+          {oneByOne > 0 && (
+            <span className="text-muted-foreground text-xs">
+              파일을 삭제하는 계획 {oneByOne}건(고아 첨부 파일 정리)은 펼쳐서 하나씩 적용합니다
             </span>
           )}
         </div>
@@ -642,6 +837,25 @@ export default function JobsPage() {
         onClose={() => setConfirming(null)}
       />
 
+      <ConfirmDialog
+        open={confirmGc !== null && gcPlan !== null}
+        title={`첨부 저장소의 파일 ${((gcPlan?.orphans ?? 0) + (gcPlan?.temp ?? 0)).toLocaleString()}개를 삭제합니다`}
+        description={
+          gcPlan && <GcConfirmText plan={gcPlan} checked={gcChecked} onChecked={setGcChecked} />
+        }
+        confirmLabel="삭제"
+        destructive
+        confirmDisabled={(gcPlan?.warnings.length ?? 0) > 0 && !gcChecked}
+        onConfirm={async () => {
+          if (!confirmGc) return
+          // 실패는 던진다 — 확인 창이 그 말을 창 안에 남긴다.
+          const made = await jobsApi.apply(confirmGc.id)
+          setOpened(made.id)
+          reload()
+        }}
+        onClose={() => setConfirmGc(null)}
+      />
+
       {results && (
         <div className="space-y-1 rounded-md border p-3">
           <p className="text-sm font-semibold">
@@ -661,7 +875,7 @@ export default function JobsPage() {
         </div>
       )}
 
-      {page.data && page.data.items.length === 0 ? (
+      {page.data && shown.length === 0 ? (
         <EmptyState
           title="작업이 없습니다"
           hint={
@@ -678,15 +892,10 @@ export default function JobsPage() {
                 <input
                   type="checkbox"
                   aria-label="이 쪽 전부 선택"
-                  checked={
-                    (page.data?.items ?? []).length > 0 &&
-                    (page.data?.items ?? []).every((one) => picked.has(one.id))
-                  }
+                  checked={shown.length > 0 && shown.every((one) => picked.has(one.id))}
                   onChange={(event) =>
                     setPicked(
-                      event.target.checked
-                        ? new Set((page.data?.items ?? []).map((one) => one.id))
-                        : new Set(),
+                      event.target.checked ? new Set(shown.map((one) => one.id)) : new Set(),
                     )
                   }
                 />
@@ -701,7 +910,7 @@ export default function JobsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(page.data?.items ?? []).map((one) => (
+            {shown.map((one) => (
               <Fragment key={one.id}>
                 <TableRow>
                   <TableCell className="pr-0">
@@ -739,6 +948,11 @@ export default function JobsPage() {
                     {shownDateTime(one.created_at)}
                   </TableCell>
                   <TableCell>
+                    {one.id === pinned?.id && (
+                      <Badge variant="outline" className="mr-1">
+                        링크의 작업
+                      </Badge>
+                    )}
                     {one.kind_label}
                     {one.params.type_slug != null && (
                       <span className="text-muted-foreground ml-1 font-mono text-xs">
@@ -782,6 +996,9 @@ export default function JobsPage() {
                     {ownedByMe(one) && waitingForApply(one, twoStep) && opened !== one.id && (
                       <Badge variant="outline">적용 대기</Badge>
                     )}
+                    {applyPending(one) && opened !== one.id && (
+                      <Badge variant="secondary">{appliedLabel(one)}</Badge>
+                    )}
                   </TableCell>
                 </TableRow>
                 {opened === one.id && (
@@ -792,9 +1009,10 @@ export default function JobsPage() {
                         busy={busyId === one.id}
                         canApply={ownedByMe(one) && waitingForApply(one, twoStep)}
                         twoStep={twoStep.has(one.kind)}
-                        onApply={() => void apply(one)}
+                        onApply={() => requestApply(one)}
                         onDownload={() => void download(one)}
                         onDownloadRows={() => void act(one, () => jobsApi.rowsCsv(one.id))}
+                        onOpenJob={openJob}
                       />
                     </TableCell>
                   </TableRow>

@@ -18,6 +18,11 @@
    수 있는 칸을 새로 이으면 그 소스는 처음부터 다시 받는다.
 3. **공개가 해제된 타입은 수신 중지** — 그 소스를 비활성으로 두고 받은 자료는 남긴다. 다시
    공개되면 구독이 다시 활성화한다(구독이 멈춘 것만 — 사람이 비활성화한 소스는 안 건드린다).
+4. **허브가 타입의 객체를 다른 타입으로 옮겼으면**(카탈로그의 `moved_at` · `moved_to`, ADR
+   0094) 옮겨 간 곳의 소스를 처음부터 다시 받고, 그 소스가 같은 식별자로 받아 온 것은 이 설치의
+   원 타입 쪽 객체를 **사용 중지**한다(지우지 않는다 — 이 설치의 기록이 그것을 가리킬 수 있다).
+   원 타입은 허브에서 비어 「바뀐 것」 이 없으니, 그대로 두면 같은 객체가 두 타입에 산다
+   (`_moved`).
 
 ## 건드리지 않는 것
 
@@ -37,8 +42,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, select, update
+from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
 from app.modules.bundles import services as bundle_services
@@ -55,6 +60,8 @@ from app.modules.datasources.schemas import (
     CoreSubscriptionSourceOut,
     CoreSubscriptionTypeOut,
 )
+from app.modules.objects import aliases
+from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.ontology import importer, managed
 from app.modules.ontology.models import ObjectInterface, ObjectType, RelationType
 from app.modules.ontology.services import RESERVED_PROPERTY_KEYS
@@ -101,6 +108,11 @@ def managed_name(db: Session, wanted: str, system: str, slugs: set[str]) -> str:
     if any(managed.owner_of(one) == system and one.core for one in rows):
         return system
     return wanted
+
+
+#: 허브가 옮긴 타입의 객체를 한 번 확인에서 사용 중지할 수 — 넘치면 다음 확인이 잇는다(한
+#: 트랜잭션에 수백만 줄의 감사를 쌓지 않게).
+MOVED_PER_CHECK = 20_000
 
 
 #: 자동으로는 바꾸지 않는 속성의 칸 — 바꾸면 저장값을 변환하거나(종류) 못 읽게 된다(참조 대상 ·
@@ -596,6 +608,8 @@ class Reconciled:
     resumed: list[str] = field(default_factory=list)
     paused: list[str] = field(default_factory=list)
     restarted: list[str] = field(default_factory=list)
+    moved: dict[str, int] = field(default_factory=dict)
+    """허브가 다른 타입으로 옮긴 원 타입(slug) → 이번에 사용 중지한 이 설치의 객체 수."""
     notes: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
@@ -607,6 +621,7 @@ class Reconciled:
             "resumed": self.resumed,
             "paused": self.paused,
             "restarted": self.restarted,
+            "moved": self.moved,
             "notes": capped(self.notes),
         }
 
@@ -777,9 +792,191 @@ def _sources(
                 f"{source.slug}: 허브가 {slug} 의 코어 공개를 해제했거나 구독 범위에서 빠져 "
                 "수신을 중지했습니다 — 받은 자료는 남습니다. 다시 공개되면 이어 받습니다."
             )
+    state["moved"] = _moved(db, actor, row, remote, dict(state.get("moved") or {}), out)
     state["paused"] = sorted(paused)
     state["kinds"] = kinds_seen
     row.state = state
+
+
+def _moved(
+    db: Session,
+    actor: User | None,
+    row: CoreSubscription,
+    remote: dict[str, dict[str, Any]],
+    known: dict[str, Any],
+    out: Reconciled,
+) -> dict[str, Any]:
+    """허브가 **다른 타입으로 옮긴** 타입(ADR 0094) — 처음 본 옮기기는 간 곳의 소스를 처음부터
+    다시 받게 하고, 확인마다 간 곳이 같은 식별자로 받아 온 원 타입 쪽 객체를 사용 중지한다.
+    돌려주는 것은 구독이 기억할 옮기기(`state.moved` — 원 타입 → 간 곳 · 때 · 처음 본 때).
+
+    허브의 원 타입은 객체가 떠나 비어 있다 — 그 소스는 받을 것이 없고, 그대로 두면 같은 객체가
+    이 설치의 두 타입에 산다(간 곳의 소스가 새로 받아 온다). 지우지 않고 **사용 중지**로 두는
+    것은 사라진 것을 다루는 길(`services._bury`)과 같다 — 이 설치의 기록이 원 타입의 객체를
+    가리킬 수 있다. 간 곳에 **같은 식별자가 온 것만** 중지한다 — 아직 안 온 것(간 곳의 소스가
+    실패했거나 다음 차례)은 그대로 둔다. 처음 본 때보다 뒤에 고쳐진 것도 그대로 둔다(옮긴
+    뒤 허브의 원 타입에 같은 식별자가 새로 생겨 다시 받은 것이다).
+
+    옮기기는 기억해 둔다 — 원 타입을 허브가 지우거나 공개를 해제해 카탈로그에서 빠져도 남은
+    객체를 마저 다룬다. 간 곳을 처음부터 다시 받는 것은 **처음 볼 때 한 번**이다: 옮긴 객체는
+    바뀐 때가 옮긴 때로 올라 증분으로도 오지만, 이 판 전의 허브에서 옮긴 것은 안 올랐고 그
+    객체의 선(끝 타입만 바뀌었다)은 어느 쪽이든 증분으로 안 온다."""
+    now = datetime.now(UTC).isoformat()
+    sources = {one.entity_set.strip(): one for one in _own_sources(db, row)}
+    for slug, found in remote.items():
+        at = str(found.get("moved_at") or "")
+        if not at:
+            continue
+        before = known.get(slug) if isinstance(known.get(slug), dict) else None
+        to = str(found.get("moved_to") or "")
+        if before is not None and before.get("at") == at:
+            continue
+        known[slug] = {"to": to, "at": at, "seen": now}
+        if not to:
+            out.notes.append(
+                f"{slug}: 허브가 이 타입의 객체를 공개하지 않는 타입으로 옮겼습니다({at}) "
+                "— 더 받을 수 없어 이 설치의 객체는 그대로 둡니다(필요하면 사람이 정리)."
+            )
+            continue
+        target = sources.get(to)
+        if target is None:
+            out.notes.append(
+                f"{slug}: 허브가 이 타입의 객체를 {to}(으)로 옮겼습니다({at}) — {to} 는 이 "
+                "구독이 받지 않아(범위 · 건너뜀) 이 설치의 객체는 그대로 둡니다."
+            )
+            continue
+        if target.since_mark and target.slug not in out.restarted:
+            source_services.restart(target)
+            out.restarted.append(target.slug)
+        # 옮긴 객체를 가리키는 선 — 도착 타입이 간 곳으로 바뀌었다(선은 안 바뀌어 증분으로 안
+        # 온다). 간 곳을 끝으로 둔 관계 종류를 받는 소스는 선만 처음부터.
+        for other_slug, other in remote.items():
+            source = sources.get(other_slug)
+            if (
+                source is None
+                or other_slug in (slug, to)
+                or not source.relations_since_mark
+                or source.slug in out.restarted
+            ):
+                continue
+            if any(
+                to in (end.get("types") or [])
+                for kind in other.get("relation_kinds") or []
+                for end in kind.get("dst") or []
+            ):
+                source_services.restart(source, edges_only=True)
+        out.notes.append(
+            f"{slug}: 허브가 이 타입의 객체를 {to}(으)로 옮겼습니다({at}) — {to} 를 처음부터 "
+            f"다시 받고, {to} 로 같은 식별자가 온 것은 이 설치의 {slug} 쪽을 사용 중지합니다"
+            "(지우지 않음). 이 설치의 기록이 그 객체를 가리키면 "
+            f"{to} 의 같은 식별자로 바꾸십시오."
+        )
+    for slug, info in known.items():
+        if not isinstance(info, dict) or not info.get("to"):
+            continue
+        origin, target = sources.get(slug), sources.get(str(info["to"]))
+        if origin is None or target is None:
+            continue
+        done, left = _retire_moved(db, actor, origin, target, str(info.get("seen") or now))
+        if done:
+            out.moved[slug] = done
+            out.notes.append(
+                f"{slug}: 허브가 {info['to']}(으)로 옮긴 객체 {done:,}건을 사용 "
+                f"중지했습니다 — 이 설치의 {info['to']} 로 같은 식별자가 왔습니다."
+            )
+        if done >= MOVED_PER_CHECK:
+            out.notes.append(
+                f"{slug}: 한 번에 {MOVED_PER_CHECK:,}건까지 사용 중지합니다 — 나머지는 다음 "
+                "확인이 잇습니다."
+            )
+        if left and done:
+            out.notes.append(
+                f"{slug}: 아직 {info['to']} 로 안 온 {left:,}건은 다음 확인에서 다시 봅니다."
+            )
+    return known
+
+
+def _retire_moved(
+    db: Session, actor: User | None, origin: DataSource, target: DataSource, seen: str
+) -> tuple[int, int]:
+    """원 타입의 소스가 받아 온 객체 가운데 간 곳의 소스가 **같은 외부 식별자**로 받아 온 것을
+    사용 중지한다 — (중지한 수, 아직 간 곳에 없는 수). 처음 본 때(`seen`) 뒤에 고쳐진 것은
+    그대로 둔다(`_moved`).
+
+    ⚠️ **두 소스가 이 설치의 같은 타입에 넣으면 아무것도 안 한다** — 같은 허브 주소를 가리키는
+       사람이 만든 형제 코어 소스도 구독이 본다(`_own_sources`). 원 타입과 간 곳이 이 설치의 한
+       타입이면 「간 곳에 온 같은 식별자」 가 그 객체 자신이라, 살아 있는 객체를 사용 중지했다
+       (2026-11-28 검토). 간 곳의 객체는 늘 **다른 객체**여야 한다(`there.id != 그 객체`)."""
+    if origin.type_id == target.type_id:
+        return 0, 0
+    try:
+        since = datetime.fromisoformat(seen)
+    except ValueError:
+        since = datetime.now(UTC)
+    mine, theirs = aliased(ObjectAlias), aliased(ObjectAlias)
+    there = aliased(ObjectInstance)
+    alive = (
+        mine.kind == aliases.source_kind(origin.slug),
+        mine.type_id == origin.type_id,
+        ObjectInstance.type_id == origin.type_id,
+        ObjectInstance.deleted_at.is_(None),
+        ObjectInstance.status == "active",
+        ObjectInstance.updated_at < since,
+    )
+    arrived = exists().where(
+        theirs.kind == aliases.source_kind(target.slug),
+        theirs.type_id == target.type_id,
+        theirs.norm == mine.norm,
+        theirs.object_id == there.id,
+        there.id != ObjectInstance.id,
+        there.deleted_at.is_(None),
+    )
+    rows = list(
+        db.execute(
+            select(ObjectInstance.id, ObjectInstance.label, ObjectInstance.owner_workspace_id)
+            .join(mine, mine.object_id == ObjectInstance.id)
+            .where(*alive, arrived)
+            .distinct()
+            .limit(MOVED_PER_CHECK)
+        ).tuples()
+    )
+    if rows:
+        db.execute(
+            update(ObjectInstance)
+            .where(ObjectInstance.id.in_([one for one, _, _ in rows]))
+            .values(status="deprecated")
+            .execution_options(synchronize_session=False)
+        )
+        origin_type = db.get(ObjectType, origin.type_id)
+        slug = origin_type.slug if origin_type is not None else origin.entity_set
+        audit.record_rows(
+            db,
+            action="object.update",
+            actor=actor,
+            target_table="objects",
+            rows=[
+                (
+                    object_id,
+                    f"{slug}:{label}",
+                    workspace_id,
+                    {"status": {"before": "active", "after": "deprecated"}},
+                )
+                for object_id, label, workspace_id in rows
+            ],
+            reason=(
+                f"{origin.name} — 허브가 객체를 「{target.entity_set}」(으)로 옮겨 사용 "
+                "중지로 표시(이 설치의 그 타입에 같은 식별자가 왔다)"
+            ),
+        )
+    left = int(
+        db.scalar(
+            select(func.count(func.distinct(ObjectInstance.id)))
+            .join(mine, mine.object_id == ObjectInstance.id)
+            .where(*alive, ~arrived)
+        )
+        or 0
+    )
+    return len(rows), left
 
 
 def _release(source: DataSource, paused: set[str], out: Reconciled) -> None:

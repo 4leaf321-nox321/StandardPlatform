@@ -631,3 +631,224 @@ def test_지운_행은_가진_칸을_두고_비활성만_한다(tmp_path: Path) 
     assert _all(path, 'SELECT deleted, merged_into, properties FROM "vendor"') == [
         (1, "V-9", '{"grade": "B"}')
     ]
+
+
+#: 공개 측이 협력사(`vendor_old`)의 객체를 공급사(`vendor`)로 옮긴 때(ADR 0094).
+MOVED_AT = "2026-11-28T01:00:00.000000Z"
+BEFORE = "2026-11-27T09:00:00.000000Z"
+AFTER = "2026-11-28T02:00:00.000000Z"
+
+
+def _moved_catalog(
+    revision: str, *, moved: bool, moved_to: str | None = "vendor"
+) -> dict[str, Any]:
+    old: dict[str, Any] = {"slug": "vendor_old", "relations": ["uses"], "properties": []}
+    if moved:
+        old.update(moved_at=MOVED_AT, moved_to=moved_to)
+    return {
+        "system": "sp",
+        "revision": revision,
+        "types": [
+            old,
+            {"slug": "vendor", "relations": ["uses"], "properties": []},
+            {"slug": "part", "relations": ["supplied_by"], "properties": []},
+        ],
+    }
+
+
+def _before_move(out: Path) -> dict[str, Any]:
+    """옮기기 전에 받아 둔 것 — 협력사 V-1 · V-2(그 선 하나), 부품이 V-2 를 가리키는 선."""
+    cfg = {"out_dir": out, "page_size": 500}
+    kit = _kit()
+    kit.save_rows(cfg, "vendor_old", [_obj(key, updated_at=BEFORE) for key in ("V-1", "V-2")])
+    kit.save_rows(cfg, "vendor", [_obj("V-9", updated_at=BEFORE)])
+    kit.save_rows(cfg, "part", [_obj("P-1", updated_at=BEFORE)])
+    kit.save_relations(
+        cfg,
+        "vendor_old",
+        [{"src": "V-1", "relation": "uses", "dst": "P-1", "dst_type": "part"}],
+    )
+    kit.save_relations(
+        cfg,
+        "part",
+        [{"src": "P-1", "relation": "supplied_by", "dst": "V-2", "dst_type": "vendor_old"}],
+    )
+    kit.save_state(
+        cfg,
+        {
+            one: BEFORE
+            for one in (
+                "vendor_old",
+                "vendor",
+                "part",
+                "vendor_old#relations",
+                "part#relations",
+            )
+        },
+    )
+    (out / "catalog.json").write_text(
+        json.dumps(_moved_catalog("r1", moved=False)), encoding="utf-8"
+    )
+    return cfg
+
+
+def _moved_server(kit: Any, *, moved_to: str | None = "vendor", old_rows: Any = ()) -> Any:
+    """옮긴 뒤의 공개 측 — 협력사는 비어(옮긴 뒤 새로 생긴 것만) 떠난 때 · 간 곳을 싣고,
+    공급사가 옮겨 온 V-1 · V-2 를 「바뀐 것」 으로 준다. 선은 끝 타입만 바뀌어 다시 오지
+    않는다(처음부터 받으면 지금 모양으로 온다)."""
+    catalog = _moved_catalog("r2", moved=True, moved_to=moved_to)
+    landed = (
+        [] if moved_to is None else [_obj(key, updated_at=AFTER) for key in ("V-1", "V-2")]
+    )
+    pages: dict[str, list[dict[str, Any]]] = {
+        "/core/vendor_old": list(old_rows),
+        "/core/vendor": [*landed, _obj("V-9", updated_at=BEFORE)],
+        "/core/part": [_obj("P-1", updated_at=BEFORE)],
+        "/core/vendor_old/relations": [],
+        "/core/vendor/relations": (
+            [{"src": "V-1", "relation": "uses", "dst": "P-1", "dst_type": "part"}]
+            if moved_to
+            else []
+        ),
+        "/core/part/relations": (
+            [{"src": "P-1", "relation": "supplied_by", "dst": "V-2", "dst_type": moved_to}]
+            if moved_to
+            else []
+        ),
+    }
+
+    def fake(cfg_: dict[str, Any], path: str, params: dict[str, Any] | None = None) -> Any:
+        if path == "/core":
+            return catalog
+        return {"as_of": "2026-11-28T03:00:00.000000Z", "next": None, "items": pages[path]}
+
+    kit.request_json = fake
+    return fake
+
+
+def test_다른_타입으로_옮긴_타입은_멈추지_않고_행과_선을_간_곳으로_옮겨_놓는다(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """**옮긴 타입은 비어 온다** — 옛 키트는 처음부터 다시 받아 0건을 보고 「전부 안 옴」
+    으로 멈췄다(가진 행은 영영 살아 있었다). 카탈로그의 moved_to 를 보면 간 곳을 먼저 받고,
+    그때 앞의 행으로 간 곳에 같은 key 가 온 것을 비활성으로 두고(moved_to 칸), 선을 간 곳으로
+    옮긴다."""
+    kit = _kit()
+    out = tmp_path / "out"
+    _before_move(out)
+    _moved_server(kit)
+    assert kit.main(["--config", _config(tmp_path)]) == 0
+    printed = capsys.readouterr()
+    assert "> 타입 vendor_old 의 객체를 vendor(으)로 옮김" in printed.out
+    assert "다른 타입으로 옮겨 놓음 2" in printed.out and "확인 필요" not in printed.err
+
+    path = out / "sp_core.sqlite"
+    assert _all(path, 'SELECT key, deleted, moved_to FROM "vendor_old"') == [
+        ("V-1", 1, "vendor"),
+        ("V-2", 1, "vendor"),
+    ]
+    assert _all(path, 'SELECT key, deleted FROM "vendor"') == [
+        ("V-1", 0),
+        ("V-2", 0),
+        ("V-9", 0),
+    ]
+    # 선 — 나가던 것은 간 곳의 표로, 들어오던 것은 도착 타입이 간 곳으로(끊지 않는다).
+    assert _all(path, 'SELECT src, dst FROM "vendor_old__relations"') == []
+    assert _all(path, 'SELECT src, dst, dst_type FROM "vendor__relations"') == [
+        ("V-1", "P-1", "part")
+    ]
+    assert _all(path, 'SELECT src, dst, dst_type FROM "part__relations"') == [
+        ("P-1", "V-2", "vendor")
+    ]
+
+    # 다음 실행 — 같은 옮기기를 다시 봐도 아무것도 안 한다. 옮긴 뒤 새로 생긴 행은 그대로
+    # 받는다.
+    _moved_server(kit, old_rows=[_obj("V-5", updated_at=AFTER)])
+    assert kit.main(["--config", _config(tmp_path)]) == 0
+    assert _all(path, 'SELECT key, deleted, moved_to FROM "vendor_old"') == [
+        ("V-1", 1, "vendor"),
+        ("V-2", 1, "vendor"),
+        ("V-5", 0, None),
+    ]
+
+
+def test_옮겼는데_간_곳을_안_받으면_지우지_않고_알린다(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    kit = _kit()
+    out = tmp_path / "out"
+    _before_move(out)
+    _moved_server(kit)
+    assert kit.main(["--config", _config(tmp_path, "vendor_old, part")]) == 2
+    err = capsys.readouterr().err
+    assert "vendor(으)로 옮겼는데" in err and "types 에 vendor 를 더하세요" in err, err
+    assert "정리하지 않았습니다" not in err, "옮겨 간 것은 「안 온 것」 이 아니다"
+    path = out / "sp_core.sqlite"
+    assert _all(path, 'SELECT key, deleted FROM "vendor_old"') == [("V-1", 0), ("V-2", 0)]
+    assert _all(path, 'SELECT src, dst FROM "vendor_old__relations"') == [("V-1", "P-1")]
+
+
+def test_공개하지_않은_타입으로_옮기면_그때_앞의_행을_비활성으로_둔다(tmp_path: Path) -> None:
+    """간 곳을 밝히지 않으면(공개하지 않은 타입) 그 행들은 이 창구로 더 못 받는다 — hidden 처럼
+    이름 · 칸을 두고 비활성, 그 선은 끊는다. 옮긴 뒤 새로 생긴 행은 그대로."""
+    kit = _kit()
+    out = tmp_path / "out"
+    _before_move(out)
+    _moved_server(kit, moved_to=None, old_rows=[_obj("V-5", updated_at=AFTER)])
+    assert kit.main(["--config", _config(tmp_path)]) == 0
+    path = out / "sp_core.sqlite"
+    assert _all(path, 'SELECT key, deleted, moved_to FROM "vendor_old"') == [
+        ("V-1", 1, ""),
+        ("V-2", 1, ""),
+        ("V-5", 0, None),
+    ]
+    assert _all(path, 'SELECT src, dst FROM "vendor_old__relations"') == []
+    assert _all(path, 'SELECT src, dst FROM "part__relations"') == []
+
+
+def test_moved_to_를_모르는_키트는_지우지_않고_멈춘다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """**옛 키트의 안전** — moved_to 를 모르는 키트(2026-11-27 판까지)는 옮긴 일로 바뀐 판을
+    보고 처음부터 다시 받아, 빈 원 타입을 「전부 안 옴」 으로 멈춘다. 아무것도 비활성으로
+    만들지 않는다 — 공개 측이 옮긴 일을 판에 싣는 까닭이다(조용히 두 타입에 같은 행이 사는
+    것보다 「확인 필요」 가 낫다)."""
+    kit = _kit()
+    out = tmp_path / "out"
+    _before_move(out)
+    _moved_server(kit)
+    monkeypatch.setattr(kit, "moved_types", lambda catalog: {})
+    assert kit.main(["--config", _config(tmp_path)]) == 2
+    assert "정리하지 않았습니다" in capsys.readouterr().err
+    path = out / "sp_core.sqlite"
+    assert _all(path, 'SELECT key, deleted FROM "vendor_old"') == [("V-1", 0), ("V-2", 0)]
+
+
+def test_한_번_받기_안에서는_같은_key_의_산_행이_이긴다(tmp_path: Path) -> None:
+    """한 흐름에 같은 key 가 둘 오면 서로 다른 객체다 — 다른 타입에서 옮겨 와 같은 key 의
+    객체로 병합된 진 쪽의 무덤(`merged_into` 가 제 key)이 산 행 **뒤에**(다음 쪽에) 와도 산
+    행을 비활성으로 만들지 않는다. 같은 쪽 안에서도 같다."""
+    kit = _kit()
+    cfg = {"out_dir": tmp_path, "page_size": 500}
+    pages = [
+        {"as_of": None, "next": "c1", "items": [_obj("V-1", label="ACME")]},
+        {
+            "as_of": "T2",
+            "next": None,
+            "items": [
+                _obj("V-1", deleted=True, merged_into="V-1", properties={}),
+                _obj("V-2", label="한화"),
+                _obj("V-2", deleted=True, merged_into="V-9", properties={}),
+            ],
+        },
+    ]
+
+    def fake(cfg_: dict[str, Any], path: str, params: dict[str, Any] | None = None) -> Any:
+        return pages.pop(0)
+
+    kit.request_json = fake
+    kit.pull_type(cfg, "vendor", {"vendor": "T1"})
+    assert _all(tmp_path / "sp_core.sqlite", 'SELECT key, deleted, label FROM "vendor"') == [
+        ("V-1", 0, "ACME"),
+        ("V-2", 0, "한화"),
+    ]

@@ -85,10 +85,19 @@ def _mine(db: Session, user: User, metric: MetricDef, alert_id: uuid.UUID) -> Me
 def my_events(
     limit: int = Query(default=50, ge=1, le=EVENTS_MAX),
     baseline: bool = Query(default=False, description="처음 확인에서 본 것(알리지 않은 것)도"),
+    metric_slug: str | None = Query(
+        default=None,
+        alias="metric",
+        description="이 지표(slug)에 건 경보의 발생만 — 모르는 지표면 404",
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[AlertEventOut]:
-    """내 경보들의 최근 발생 — 새것부터. 「요즘 무엇이 울렸나」."""
+    """내 경보들의 최근 발생 — 새것부터. 「요즘 무엇이 울렸나」.
+
+    `metric` 을 주면 **그 지표의 것만 세어** `limit` 개 — 전부의 최근 `limit` 개를 받아
+    거르면 다른 지표가 자주 울릴 때 이 지표의 발생이 밀려나 0건이 된다(MCP `metric_alerts`
+    가 그랬다)."""
     stmt = (
         select(MetricAlertEvent, MetricAlert, MetricDef)
         .join(MetricAlert, MetricAlert.id == MetricAlertEvent.alert_id)
@@ -97,6 +106,8 @@ def my_events(
         .order_by(MetricAlertEvent.created_at.desc(), MetricAlertEvent.key)
         .limit(limit)
     )
+    if metric_slug is not None:
+        stmt = stmt.where(MetricAlert.metric_id == services.get(db, metric_slug).id)
     if not baseline:
         stmt = stmt.where(MetricAlertEvent.baseline.is_(False))
     return [_event_out(row, alert, metric) for row, alert, metric in db.execute(stmt).tuples()]

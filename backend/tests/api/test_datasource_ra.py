@@ -427,6 +427,45 @@ def test_증분은_커서에서_겹쳐_읽고_전량_대조는_지우지_않고_
     assert back["origin_state"] == "게시 중" and "removed_on" not in back
 
 
+def test_전량_대조가_끼어도_그사이_바뀐_본문을_받는다(
+    client: TestClient, admin: Signed, ra: FakeRA
+) -> None:
+    """**전량 대조는 본문 없이 읽는다 — 그 끝 커서로 옮기면 그사이의 본문이 영영 안 온다.**
+
+    지난 증분 뒤에 새로 오거나 본문이 바뀐 보고서가 대조에서 본문 없이 들어오고, 대조가 커서를
+    전량의 끝으로 옮기면 다음 증분은 그 뒤에서 시작한다(5분 겹침보다 먼 것은 놓친다). 대조는
+    저장한 커서에서 본문까지 한 번 더 읽고, 커서는 그 읽기로만 옮긴다.
+    """
+    w = _setup(client, admin)
+    for rid in (1, 2):
+        ra.add(rid, f"보고 {rid}", board="cae-2", changed=rid)
+    _sync(client, admin, w["source"])  # 처음 — 본문까지 전량
+    ra.add(3, "보고 3", board="cae-2", changed=5, text="셋째 본문")
+    _sync(client, admin, w["source"])  # 증분 — 커서가 5 로
+    assert _full(client, admin, w["report"], "RA-3")["properties"]["body"] == "셋째 본문"
+
+    # 증분 뒤에 2 의 본문이 바뀌고 4 가 새로 올라왔다. 그 뒤로 한참 지나 5 가 바뀌었다 —
+    # 전량의 끝(60)에서 5분 겹쳐도 30 · 31 에는 닿지 않는다.
+    ra.add(2, "보고 2", board="cae-2", changed=30, text="고친 본문")
+    ra.add(4, "보고 4", board="cae-2", changed=31, text="넷째 본문")
+    ra.add(5, "보고 5", board="cae-2", changed=60, text="다섯째 본문")
+    _age_reconcile(w["source"])
+    ra.requests.clear()
+    done = _sync(client, admin, w["source"])  # 전량 대조
+    assert done["applied"] is True and done["counts"]["full_read"] == 1, done
+    asked = ra.feed_requests()
+    ra.requests.clear()
+    _sync(client, admin, w["source"])  # 다음 증분
+    for key, body in (("RA-2", "고친 본문"), ("RA-4", "넷째 본문"), ("RA-5", "다섯째 본문")):
+        assert _full(client, admin, w["report"], key)["properties"].get("body") == body, key
+
+    # 대조는 본문 없이 전량, 그리고 저장한 커서(5)에서 본문까지 — 다음 증분은 그 끝에서 잇는다.
+    assert len(asked) == 2, asked
+    assert "updated_since" not in asked[0] and "include_text" not in asked[0]
+    assert asked[1]["updated_since"] == _at(5 - 5) and asked[1]["include_text"] == "true"
+    assert ra.feed_requests()[0]["updated_since"] == _at(60 - 5)
+
+
 def test_RA_에서_태그를_다_빼면_우리도_비우고_그대로인_것은_그대로다(
     client: TestClient, admin: Signed, ra: FakeRA
 ) -> None:

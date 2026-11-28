@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.modules.datasources import services
+from app.modules.datasources import odata, services
 from app.modules.datasources.models import DataSource
 from tests.api.conftest import (
     Signed,
@@ -957,6 +957,72 @@ def test_선_소스의_맞춤은_그_출발점_범위만_끊는다(
         f"/api/objects/{vendor}/{rows['V-003']['id']}", headers=admin.headers
     ).json()
     assert any(one["relation"] == kind for one in third["related"]), "안 나온 출발점은 그대로"
+
+
+def test_선_소스가_끊겨_오면_맞춤을_적용하지_않아_뒤의_선이_남는다(
+    client: TestClient, admin: Signed, plm: FakeOData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**끊겨 온 표로 「파일대로 맞춤」 을 적용하면 뒤에 있던 진짜 선이 끊긴다.**
+
+    앞 5만 행만 받은 채 맞춤을 적용하던 때는, 같은 출발점의 선이라도 5만 행 뒤에 있던 것이
+    「표에 없는 선」 으로 읽혀 끊기고, 실행은 끊긴 뒤에야 「실패」 로 남았다. 끊김은 객체 쪽과
+    같이 **계획만** 세운다 — 아무것도 바뀌지 않는다.
+    """
+    vendor = _vendor_type(client, admin)
+    kind = f"partner_{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "협력",
+                    "src_type_slugs": [vendor],
+                    "dst_type_slugs": [vendor],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    rows = {}
+    for key, label in (("V-001", "ANSYS"), ("V-002", "Altair"), ("V-003", "마이다스")):
+        rows[key] = _make_object(client, admin, vendor, label=label, key=key)
+    plm.rows = [
+        {"VendorNo": "V-001", "Name": "V-002", "Short": "", "CountryCd": "", "Rating": 0},
+        {"VendorNo": "V-001", "Name": "V-003", "Short": "", "CountryCd": "", "Rating": 0},
+    ]
+    source = _source(
+        client,
+        admin,
+        vendor,
+        mapping={
+            "relations": {
+                "relation": kind,
+                "src": {"column": "VendorNo"},
+                "dst": {"column": "Name"},
+                "mode": "replace",
+            }
+        },
+    )
+    first = _sync(client, admin, source["slug"], apply=True).json()
+    assert first["counts"]["relations_create"] == 2, first
+
+    def partners() -> list[str]:
+        got = client.get(f"/api/objects/{vendor}/{rows['V-001']['id']}", headers=admin.headers)
+        return sorted(
+            one["object_label"] for one in got.json()["related"] if one["relation"] == kind
+        )
+
+    # 상한에 걸려 앞 한 행(V-001 → V-002)만 왔다 — V-001 → V-003 은 표 뒤에 있었다.
+    monkeypatch.setattr(odata, "MAX_ROWS", 1)
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["truncated"] is True, done
+    assert done["applied"] is False and done["run"]["status"] == "failed", done
+    assert any("넘어 끊었습니다" in one for one in done["errors"]), done["errors"]
+    # 계획은 끊을 것을 센다 — 그러나 적용하지 않았다.
+    assert done["counts"].get("relations_unlink") == 1, done["counts"]
+    assert partners() == ["Altair", "마이다스"]
 
 
 # --- 차례 — 가리키는 쪽부터 한 줄로 ----------------------------------------------------

@@ -109,7 +109,7 @@ def test_참고_구현은_시험장_전_단계를_통과한다(
         seen += 1
         assert problems == [], (info["step"], info["title"], problems)
         assert code == (0 if info["expect_status"] == "정상" else 2), info
-    assert seen == 8
+    assert seen == 9
 
 
 @pytest.mark.parametrize(
@@ -132,6 +132,11 @@ def test_참고_구현은_시험장_전_단계를_통과한다(
             6,
         ),
         ("절반 넘게 안 와도 정리한다", lambda kit: setattr(kit, "GONE_LIMIT", 10.0), 8),
+        (
+            "다른 타입으로 옮긴 것을 모른다",
+            lambda kit: setattr(kit, "moved_types", lambda catalog: {}),
+            9,
+        ),
     ],
 )
 def test_규칙_하나를_빼면_그_규칙을_보는_단계에서_떨어진다(

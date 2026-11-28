@@ -253,11 +253,45 @@ BACKUP_DIR=/home/<계정>/backup/<slug>
 ### 한 번은 실제로 복구해 본다
 
 ```bash
-./restore.sh -b ~/backup/<slug> -d <slug>_restore_check
+sudo ./restore.sh -b ~/backup/<slug> -d <slug>_restore_check
 ```
+
+**DB 가 있는 서버에서 `sudo` 로** 돌린다 — DB 를 만들고 이름을 바꾸는 일과 pgvector 확장은 그 서버의
+postgres 계정이 한다(앱 계정에 `CREATEDB` 를 주지 않는다). 그 전에 그 postgres 가 앱이 쓰는 바로 그
+클러스터인지(postmaster 시작 시각 · system_identifier) 견주고, 다르거나 DB 가 대기(복제본)면 아무것도 안
+바꾸고 멈춘다. 표를 푸는 것(pg_restore)은 앱 계정이다.
 
 받아만 두고 복구를 해 본 적이 없는 백업은 백업이 아니다. `restore.sh` 는 되돌린 뒤
 **DB 가 가리키는 파일이 실제로 있는지 세어 본다** — 하나라도 없으면 거기서 멈춘다.
+확인용에 `-i` · `-F` 는 붙이지 않는다 — 첨부는 백업 안의 것으로 견준다(비어 있지 않은 첨부 폴더에 쓰려면
+DB 이름이 무엇이든 `-f` 가 있어야 한다).
+
+### 실제로 되돌릴 때
+
+```bash
+sudo systemctl stop <slug> <slug>-worker <slug>-mcp      # DB 에 붙는 것을 먼저 멈춘다(타이머도)
+sudo ./restore.sh -b ~/backup/<slug> -d <slug> -i ~/apps/<slug> -f
+sudo systemctl start <slug> <slug>-worker <slug>-mcp
+```
+
+운영 DB 를 먼저 지우지 않는다. 순서는 이렇다:
+
+1. 덤프를 읽어 본다(`pg_restore -l`) — 못 읽거나 표의 행이 없으면 **아무것도 안 바꾸고** 멈춘다.
+2. 임시 DB `<slug>__restoring` 에 푼다 — 정렬(LC_COLLATE · LC_CTYPE · ICU)은 지금 DB 와 같게 만든다(정렬은 덤프에
+   안 실린다 — 기본으로 만들면 C.UTF-8 로 다시 만든 DB 가 복구 한 번에 서버 기본으로 돌아간다). 지금 DB 가 없으면 서버
+   기본대로 만들고 무엇이 됐는지 적는다. pg_restore 가 중간에 멈췄거나 표 · 행 · 색인 · 제약을 못 넣었거나
+   `alembic_version` 이 비었으면 임시 DB 를 지우고 멈춘다. 운영 DB 는 그대로다.
+3. 그때서야 이름을 바꾼다 — 지금 DB 는 `<slug>__before_restore_<시각>` 으로 **남기고** 임시 DB 를 `<slug>` 로.
+   두 이름 바꾸기는 한 트랜잭션이다. 끝에 옛 DB 를 지우는 `dropdb` 와 되돌리는 명령이 찍힌다 — 앱을 띄워 확인한
+   뒤에 지운다(디스크를 운영 DB 한 벌만큼 더 쓴다).
+
+DB 에 접속이 남아 있으면 이름을 못 바꾼다 — 풀기 전에 멈추고 누가 붙어 있는지 적는다(끊지 않는다). 계정이 없는
+autovacuum 작업자는 세지 않는다(이름 바꾸기가 스스로 내보낸다). `sudo`
+없이 돌리거나 DB 가 다른 서버에 있으면(이중화에서 DB VIP 가 저쪽에 있을 때) 앱 계정으로 하는데, 그 계정에
+`CREATEDB` 가 없으면 **아무것도 안 바꾸고** 할 일을 적고 멈춘다 — DB 서버에서 `sudo ./restore.sh …` 로 다시
+돌린다. 주인이 앱 계정이 아닌 DB 는 비켜 두지 않는다. 첨부는 백업의 것을 더하고 덮을 뿐 **백업 뒤에 올린 파일을
+지우지 않는다** — 남긴 옛 DB 로 돌아갈 때 그 파일이 있어야 한다(아무 첨부도 안 가리키는 것은 첨부 정리가 하루 뒤에
+지운다).
 
 ---
 
@@ -738,8 +772,8 @@ SP 를 고치지 않고, SP 가 정본이다.
 - **디스크** — Ollama 약 2GB(`/usr/local/lib/ollama`, GPU 라이브러리 포함) + 모델 1.2GB
   (`/usr/share/ollama/.ollama/models`). DB 는 **뜻의 자리를 담은 객체 하나에 약 14KB**(실측 — 표 5.7KB + 찾는
   색인 8.2KB) — 100만 건이면 약 14GB, 1,000만 건이면 약 140GB. 무엇을 담을지는 관리자가 칸마다 고른다(고른 것만 늘어난다).
-- **복구** — 덤프에 pgvector 가 들어 있으면 `restore.sh` 가 pg_restore 앞에서 확장을 만든다. 확장은 postgres
-  계정만 만들므로 **DB 가 있는 서버에서 `sudo` 로** 돌린다.
+- **복구** — 덤프에 pgvector 가 들어 있으면 `restore.sh` 가 pg_restore 앞에서 임시 DB 에 확장을 만든다. 확장은
+  postgres 계정만 만들므로 **DB 가 있는 서버에서 `sudo` 로** 돌린다 — 아니면 풀기 전에 멈춘다.
 - **이중화** — 패키지는 두 서버 다(승격하는 날 필요하다), 확장은 주에서 만들어 복제로 온다. 갱신은 B 먼저인데
   B 는 확장을 만들 수 없다 — B 는 패키지만 깔고 지나가고, 이어지는 A 의 갱신이 만든다. 순서를 바꿀 것도 따로
   칠 것도 없다.

@@ -249,3 +249,104 @@ def test_시험장의_응답_모양이_실제_창구와_같다(client: TestClien
     real_code = real_missing.json()["error"]["code"]
     fake_code = fake_missing.value.body["error"]["code"]
     assert real_code.split("-", 1)[1] == fake_code.split("-", 1)[1]
+
+
+def test_키트가_타입_옮기기를_따라가_처음_받은_쪽과_같아진다(
+    client: TestClient, admin: Signed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**타입 합치기**(ADR 0094) — 공개 측이 협력사의 객체를 공급사로 옮기면, 증분으로
+    따라온 쪽이 처음부터 받은 쪽과 같아야 한다: 옮긴 행은 공급사로, 협력사 쪽은 비활성, 그
+    행으로 가던 선의 도착 타입은 공급사로. 예전에는 공급사의 증분에 안 오고 협력사의 처음부터
+    받기가 0건이라 「정리 멈춤」 이었다(2026-11-28 점검)."""
+    from tests.api.conftest import clock_settled
+    from tests.api.test_core_api import _open
+    from tests.api.test_ontology import _make_type
+
+    kit = _kit()
+    vendor, part = _world(client, admin)
+    old = _make_type(
+        client, admin, label=f"협력사{uuid.uuid4().hex[:6]}", key_policy="optional"
+    )
+    _open(client, admin, old)
+    kind = f"supplies_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/relation-types",
+        json={
+            "slug": kind,
+            "label": "공급",
+            "src_type_slugs": [part],
+            "dst_type_slugs": [old],
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    _rows(
+        client, admin, old, [{"key": "V-1", "label": "ACME"}, {"key": "V-2", "label": "한화"}]
+    )
+    _rows(client, admin, vendor, [{"key": "V-9", "label": "대성"}])
+    _rows(client, admin, part, [{"key": "P-1", "label": "볼트"}])
+    linked = client.post(
+        f"/api/objects/{part}/relations/import-rows",
+        json={"rows": [{"src": "P-1", "relation": kind, "dst": "V-1"}], "apply": True},
+        headers=admin.headers,
+    )
+    assert linked.status_code == 200, linked.text
+    token = _token(client, admin, f"kit-{uuid.uuid4().hex[:6]}", ["core:read"])
+
+    def get(url: str, **kwargs: Any) -> Any:
+        kwargs.pop("timeout", None)
+        return client.get(url.replace("http://testserver", ""), **kwargs)
+
+    monkeypatch.setattr(kit.requests, "get", get, raising=False)
+
+    def run(name: str) -> Path:
+        out = tmp_path / name
+        config = tmp_path / f"{name}.ini"
+        config.write_text(
+            "[sp]\nbase_url = http://testserver/api\n"
+            f"token = {token}\ntypes = {old}, {vendor}, {part}\nout_dir = {out}\n",
+            encoding="utf-8",
+        )
+        assert kit.main(["--config", str(config)]) == 0
+        return out
+
+    def held(out: Path) -> tuple[set[tuple[str, str]], set[tuple[str, ...]]]:
+        db = sqlite3.connect(out / "sp_core.sqlite")
+        try:
+            alive = {
+                (slug, key)
+                for slug in (old, vendor, part)
+                for (key,) in db.execute(f'SELECT key FROM "{slug}" WHERE deleted=0')
+            }
+            edges = {
+                tuple(one)
+                for one in db.execute(
+                    f'SELECT src, relation, dst, dst_type FROM "{part}__relations"'
+                )
+            }
+        finally:
+            db.close()
+        return alive, edges
+
+    ours = run("ours")
+    assert held(ours)[1] == {("P-1", kind, "V-1", old)}
+
+    clock_settled()
+    moved = client.post(
+        f"/api/ontology/types/{old}/move",
+        json={"to": vendor, "apply": True, "accept_core": True},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200 and moved.json()["applied"] is True, moved.text
+    clock_settled()
+
+    ours = run("ours")
+    fresh = run("fresh")
+    assert held(ours) == held(fresh)
+    alive, edges = held(ours)
+    assert {one for one in alive if one[0] != part} == {
+        (vendor, "V-1"),
+        (vendor, "V-2"),
+        (vendor, "V-9"),
+    }
+    assert edges == {("P-1", kind, "V-1", vendor)}

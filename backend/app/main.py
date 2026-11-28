@@ -337,6 +337,14 @@ def _register_extensions() -> None:
     scopes.register_read_only_post("/api/rdf/query")
     # 바깥 SPARQL 도구의 창구(SPARQL 1.1 Protocol)도 같다 — 질의가 길면 POST 로 보낸다.
     scopes.register_read_only_post("/api/rdf/sparql")
+    # **Cypher 도 읽기다** — 그래프 사본(Neo4j)에 읽기 세션(`READ_ACCESS`)으로 묻고,
+    # 계획(`EXPLAIN`)이 읽기가 아니면 거절하며 트랜잭션은 되돌린다(`graph/cypher.run`).
+    # SP 의 DB 는 안 만진다. 안 열면 토큰으로 들어온 AI(MCP `graph_query(action="query")`)
+    # 는 **어떤 범위로도** 못 물었다 — 등록 안 된 POST 라 AUTH-105.
+    scopes.register_read_only_post("/api/graph/cypher")
+    # 태그 묶음과 비슷한 기록(`POST /api/objects/{타입}/similar`) — 태그를 본문에 싣는 묻기다.
+    # 안 열면 `objects:write` 를 요구해, 읽기 토큰의 AI 는 「전에 비슷한 것」 을 못 찾았다.
+    scopes.register_read_only_post_pattern("/api/objects/*/similar")
     # **바깥 시스템에 주는 토큰은 코어만 읽는다.** `read` 를 주면 그 계정이 볼 수 있는 전부가
     # 나간다 — 연동 하나 때문에 사내 전체를 여는 일이 된다.
     scopes.register_read_scope("/api/core", coreapi_routes.SCOPE)
