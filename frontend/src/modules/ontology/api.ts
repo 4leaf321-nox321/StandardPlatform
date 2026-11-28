@@ -418,6 +418,21 @@ export interface ImportPlan {
   /** 하나라도 있으면 **아무것도 안 바꾼다.** */
   errors: string[]
   snapshot_id: string | null
+  /**
+   * 계획의 지문 — 미리 본 이 계획대로 적용하려면 적용 요청의 `expected_fingerprint` 로 그대로
+   * 보낸다. 그 사이 계획이 바뀌었으면 서버가 ONTOLOGY-0114 로 막는다(「미리 본 뒤 바뀜」).
+   */
+  fingerprint?: string
+}
+
+/**
+ * 속성 추가의 답 — 예전에 지운 같은 키의 속성이 남긴 값(남은 저장값)이 있으면 그 수와 경고를
+ * 함께 싣는다. 남은 값이 새 정의에 맞지 않으면 추가하지 않고 ONTOLOGY-0116 으로 막는다.
+ */
+export interface PropertyCreatedOut extends PropertyDef {
+  /** 남은 저장값이 있던 객체(지운 객체 포함) — 이 속성으로 다시 보인다. 상한(2만)을 넘으면 상한 + 1. */
+  revived: number
+  warnings: string[]
 }
 
 export interface Snapshot {
@@ -626,6 +641,8 @@ export interface RenameOut {
   errors: string[]
   core_consumers: string[]
   snapshot_id: string | null
+  /** 계획의 지문 — 요청 안에서 적용할 때 `expected_fingerprint` 로 그대로 보낸다(ONTOLOGY-0114). */
+  fingerprint?: string
 }
 
 /** 객체를 다른 타입으로 옮기기(ADR 0094)의 칸 대응 한 줄. */
@@ -656,6 +673,11 @@ export interface MoveOut {
   snapshot_id: string | null
   moved: number
   merged: number
+  /**
+   * 계획의 지문 — 칸 대응 · 버리는 값의 수 · 병합할 짝 · 경고를 담는다(옮길 객체 수는 안 담는다).
+   * 요청 안에서 적용할 때 `expected_fingerprint` 로 그대로 보낸다(ONTOLOGY-0114).
+   */
+  fingerprint?: string
 }
 
 export interface MoveRequest {
@@ -665,12 +687,16 @@ export interface MoveRequest {
   merge_duplicates: boolean
   apply: boolean
   accept_core: boolean
+  /** 미리 본 계획의 지문 — 주면 적용 직전 계획이 그것과 같을 때만 옮긴다(다르면 ONTOLOGY-0114). */
+  expected_fingerprint?: string
 }
 
 export interface RenameRequest {
   to: string
   apply: boolean
   accept_core: boolean
+  /** 미리 본 계획의 지문 — 주면 적용 직전 계획이 그것과 같을 때만 바꾼다(다르면 ONTOLOGY-0114). */
+  expected_fingerprint?: string
 }
 
 /** 정의 점검의 한 줄 — 지우거나 묶을 **후보**(ADR 0092). 아무것도 안 바꾼다. */
@@ -841,8 +867,9 @@ export const ontologyApi = {
     api.post<{ slug: string; was: string }>(`/ontology/${kind}/${slug}/unlock`),
 
   properties: (slug: string) => api.get<PropertyDef[]>(`/ontology/types/${slug}/properties`),
+  /** 남은 저장값이 다시 보이면 `revived` · `warnings` 로 말하고, 새 정의에 안 맞으면 ONTOLOGY-0116. */
   createProperty: (slug: string, body: Record<string, unknown>) =>
-    api.post<PropertyDef>(`/ontology/types/${slug}/properties`, body),
+    api.post<PropertyCreatedOut>(`/ontology/types/${slug}/properties`, body),
   updateProperty: (slug: string, key: string, body: Record<string, unknown>) =>
     api.patch<PropertyDef>(`/ontology/types/${slug}/properties/${key}`, body),
   /** **삭제 전에 무엇이 사라지는지.** 확인 창이 이것을 읽어 말한다. */
@@ -922,9 +949,19 @@ export const ontologyApi = {
       interface_slugs: interfaceSlugs,
     }),
 
-  /** **기본이 미리 보기다.** 적용은 의도를 적어야 일어난다. */
-  importSchema: (body: unknown, dryRun: boolean) =>
-    api.post<ImportPlan>(`/ontology/import?dry_run=${dryRun ? 'true' : 'false'}`, body),
+  /**
+   * **기본이 미리 보기다.** 적용은 의도를 적어야 일어난다. 적용에 `expectedFingerprint`(미리 본
+   * 계획의 `fingerprint`)를 주면 그 계획대로만 적용한다 — 그 사이 바뀌었으면 ONTOLOGY-0114,
+   * 값이 많은 종류 변경이 들었으면 ONTOLOGY-0115(작업으로).
+   */
+  importSchema: (body: unknown, dryRun: boolean, expectedFingerprint?: string) =>
+    api.post<ImportPlan>(
+      `/ontology/import?${new URLSearchParams({
+        dry_run: dryRun ? 'true' : 'false',
+        ...(!dryRun && expectedFingerprint ? { expected_fingerprint: expectedFingerprint } : {}),
+      })}`,
+      body,
+    ),
   /** CSV·JSON 데이터 파일에서 타입 정의를 추론 — 아무것도 안 바꾼다. */
   infer: (file: File) => {
     const form = new FormData()

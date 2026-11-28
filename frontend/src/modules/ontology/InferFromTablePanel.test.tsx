@@ -5,6 +5,8 @@
  * - 고른 후보의 못 찾은 · 여럿에 맞는 값은 견본으로 보인다 — 넣을 때 그 행이 오류다.
  * - 제안되지 않은 열도 후보를 누르면 그 타입을 가리키는 참조 열이 된다. 왜 제안하지 않았는지도 보인다.
  * - 가리킬 타입이 없는 참조 열이 있으면 계획을 보내지 않는다.
+ * - 정의의 적용은 「정의 계획 보기」 의 지문을 싣고, 그 사이 바뀌었으면(ONTOLOGY-0114) 계획을 비운다.
+ * - 정의는 들어가고 행 추가만 실패했으면, 다시 클릭할 때 같은 정의는 다시 적용하지 않고 행만 넣는다.
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -12,6 +14,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { InferColumn, InferResult, RefCandidate } from '@/modules/ontology/api'
+import { ApiError } from '@/shared/api/client'
 
 const ontologyApi = vi.hoisted(() => ({
   infer: vi.fn(),
@@ -22,6 +25,8 @@ vi.mock('@/modules/ontology/api', async (original) => {
   const real = await original<typeof import('@/modules/ontology/api')>()
   return { ...real, ontologyApi }
 })
+const objectApi = vi.hoisted(() => ({ importRows: vi.fn() }))
+vi.mock('@/modules/objects/api', () => ({ objectApi }))
 vi.mock('@/shared/auth/AuthContext', () => ({
   useAuth: () => ({ user: { home_workspace_slug: 'hq', memberships: [] } }),
 }))
@@ -179,5 +184,74 @@ describe('표에서 타입 생성 — 참조 후보', () => {
     await open([NAME, column({ header: '모델', key: 'model', data_type: 'object_ref' })])
     expect(screen.getByText(/참조 열이 가리킬 타입을 고르세요 — 모델/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /정의 계획 보기/ })).toBeDisabled()
+  })
+
+  it('정의의 적용은 계획의 지문을 싣고, 그 사이 바뀌었으면(ONTOLOGY-0114) 계획을 비운다', async () => {
+    const PLANNED = { applied: false, changes: [], warnings: [], errors: [], fingerprint: 'fp-1' }
+    ontologyApi.importSchema.mockResolvedValueOnce(PLANNED).mockRejectedValueOnce(
+      new ApiError(409, {
+        error: {
+          code: 'APP-ONTOLOGY-0114',
+          message: '미리 본 뒤 바뀌었습니다 — 다시 미리 보세요.',
+        },
+      }),
+    )
+    await open([NAME])
+    await userEvent.click(screen.getByRole('button', { name: /정의 계획 보기/ }))
+    expect(await screen.findByText(/정의 계획 —/)).toBeInTheDocument()
+    expect(ontologyApi.importSchema).toHaveBeenLastCalledWith({}, true)
+
+    await userEvent.click(screen.getByRole('button', { name: /타입 만들고 20행 추가/ }))
+    await waitFor(() =>
+      expect(ontologyApi.importSchema).toHaveBeenLastCalledWith({}, false, 'fp-1'),
+    )
+    expect(await screen.findByText(/미리 본 뒤 바뀌었습니다/)).toBeInTheDocument()
+    // 옛 계획은 비운다 — 다시 「정의 계획 보기」 를 거쳐야 적용이 선다.
+    expect(screen.queryByText(/정의 계획 —/)).toBeNull()
+    expect(screen.getByRole('button', { name: /타입 만들고 20행 추가/ })).toBeDisabled()
+  })
+
+  it('행 추가만 실패했으면 다시 클릭할 때 정의는 다시 적용하지 않고 행만 넣는다', async () => {
+    const PLANNED = {
+      applied: false,
+      changes: [{ kind: 'type', slug: 'svc_case', action: 'create', fields: [] }],
+      warnings: [],
+      errors: [],
+      fingerprint: 'fp-1',
+    }
+    ontologyApi.importSchema
+      .mockResolvedValueOnce(PLANNED)
+      .mockResolvedValueOnce({ ...PLANNED, applied: true })
+      // 이미 생긴 타입에 옛 지문으로 다시 적용하면 계획이 「그대로」 라 막힌다.
+      .mockRejectedValueOnce(
+        new ApiError(409, {
+          error: {
+            code: 'APP-ONTOLOGY-0114',
+            message: '미리 본 뒤 바뀌었습니다 — 다시 미리 보세요.',
+          },
+        }),
+      )
+    objectApi.importRows
+      .mockRejectedValueOnce(new Error('연결이 끊겼습니다'))
+      .mockResolvedValueOnce({
+        applied: true,
+        counts: { create: 20, update: 0, error: 0 },
+        errors: [],
+        rows: [],
+      })
+    await open([NAME])
+    await userEvent.click(screen.getByRole('button', { name: /정의 계획 보기/ }))
+    await screen.findByText(/정의 계획 —/)
+    const add = screen.getByRole('button', { name: /타입 만들고 20행 추가/ })
+    await userEvent.click(add)
+    expect(await screen.findByText('연결이 끊겼습니다')).toBeInTheDocument()
+    expect(screen.getByText(/정의를 만들었습니다/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /타입 만들고 20행 추가/ }))
+    expect(await screen.findByText(/행을 넣었습니다 — 새로 20/)).toBeInTheDocument()
+    // 정의는 미리 보기 한 번 · 적용 한 번뿐이다 — 행만 다시 넣었다.
+    expect(ontologyApi.importSchema).toHaveBeenCalledTimes(2)
+    expect(objectApi.importRows).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/미리 본 뒤 바뀌었습니다/)).toBeNull()
   })
 })

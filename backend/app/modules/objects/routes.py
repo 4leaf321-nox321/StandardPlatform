@@ -439,21 +439,61 @@ def _out(
 
 
 def _visible(
-    db: Session, user: User, object_type: ObjectType, object_id: uuid.UUID
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    object_id: uuid.UUID,
+    *,
+    lock: bool = False,
 ) -> ObjectInstance:
-    row = db.scalar(
-        select(ObjectInstance).where(
-            ObjectInstance.id == object_id,
-            ObjectInstance.type_id == object_type.id,
-            ObjectInstance.deleted_at.is_(None),
-            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-        )
+    """볼 수 있는 객체 하나. `lock` 이면 **그 줄을 잠그고** 읽는다(`FOR UPDATE`).
+
+    읽은 값에 병합해 통째로 다시 쓰는 길(고치기 · 되돌리기)은 잠가야 한다. 안 잠그면 두
+    저장이 같은 옛 값을 읽어 나중에 끝난 쪽이 먼저 끝난 쪽의 칸을 지운다 — AI 가 `w` 를,
+    사람이 `c` 를 함께 고치면 `w` 가 소리 없이 사라지고, 지금 값에서 거꾸로 되짚는 이력
+    (`history_of`)도 어긋났다(2026-11-28 점검). 잠금은 그 트랜잭션이 끝날 때 풀린다. 이미
+    세션에 실린 줄이어도 잠근 뒤의 값으로 다시 채운다(`populate_existing`)."""
+    stmt = select(ObjectInstance).where(
+        ObjectInstance.id == object_id,
+        ObjectInstance.type_id == object_type.id,
+        ObjectInstance.deleted_at.is_(None),
+        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
+    if lock:
+        stmt = stmt.with_for_update(of=ObjectInstance).execution_options(
+            populate_existing=True
+        )
+    row = db.scalar(stmt)
     if row is None:
         # **없는 것과 안 보이는 것을 같은 말로 답한다.** 구별해 주면 남의 부서에
         # 무엇이 있는지 id 를 바꿔 가며 알아낼 수 있다.
         raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
     return row
+
+
+#: 그 사이 다른 저장이 있었을 때의 말 — 고치기 · 되돌리기가 같은 말을 쓴다.
+STALE_MESSAGE = "그 사이 다른 사람이 이 객체를 수정했습니다 — 다시 불러온 뒤 수정하세요."
+
+
+def _require_base(row: ObjectInstance, base: datetime | None) -> None:
+    """부르는 쪽이 읽은 때(`base_updated_at`) 뒤에 누가 저장했으면 **덮지 않는다**
+    (OBJECTS-0162).
+
+    줄을 잠근 **뒤에** 견준다 — 잠그기 전에 견주면 견준 뒤 · 잠그기 전에 끝난 저장을 못
+    본다. 안 주면 견주지 않는다(예전 그대로 — 보낸 칸만 지금 값에 병합). 앞뒤가 아니라
+    **같은 값인가**만 본다 — `updated_at` 은 저장한 트랜잭션의 시작 시각이라 나중 저장이 더
+    이른 값일 수 있다."""
+    if base is None:
+        return
+    if base.tzinfo is None:
+        # 시간대 없이 오면 UTC 로 읽는다 — 응답의 `updated_at` 은 늘 시간대를 단다.
+        base = base.replace(tzinfo=UTC)
+    if row.updated_at != base:
+        raise Conflict(
+            code("OBJECTS", 162),
+            STALE_MESSAGE,
+            details={"updated_at": row.updated_at.isoformat()},
+        )
 
 
 #: 기준일 칸의 설명 — 트리 · 목록 · 통계 · 상세 · 롤업이 같은 말로(ADR 0039).
@@ -2244,19 +2284,32 @@ def _import_objects(
 
 
 def _editable_rows(
-    db: Session, user: User, object_type: ObjectType, ids: list[uuid.UUID]
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    ids: list[uuid.UUID],
+    *,
+    lock: bool = False,
 ) -> list[ObjectInstance]:
-    """**볼 수 있는 것만 손댄다.** 목록과 같은 가시성 규칙이다."""
-    return list(
-        db.scalars(
-            select(ObjectInstance).where(
-                ObjectInstance.id.in_(ids),
-                ObjectInstance.type_id == object_type.id,
-                ObjectInstance.deleted_at.is_(None),
-                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-            )
-        )
+    """**볼 수 있는 것만 손댄다.** 목록과 같은 가시성 규칙이다.
+
+    `lock` 이면 그 줄들을 **id 차례로** 잠그고 읽는다 — 적용은 읽은 속성에 한 칸을 병합해
+    통째로 쓰므로(`bulkedit.apply_to`), 안 잠그면 그 사이 끝난 한 건 고치기의 다른 칸을
+    지운다(`_visible` 과 같은 까닭). 차례를 정하는 것은 두 일괄 수정이 겹친 줄을 서로
+    거꾸로 잡아 교착하지 않게."""
+    stmt = select(ObjectInstance).where(
+        ObjectInstance.id.in_(ids),
+        ObjectInstance.type_id == object_type.id,
+        ObjectInstance.deleted_at.is_(None),
+        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
+    if lock:
+        stmt = (
+            stmt.order_by(ObjectInstance.id)
+            .with_for_update(of=ObjectInstance)
+            .execution_options(populate_existing=True)
+        )
+    return list(db.scalars(stmt))
 
 
 def _bulk_out(
@@ -2309,7 +2362,8 @@ def bulk_edit(
     _not_bulk_editable(object_type)
     managed.require_objects_editable(object_type)
     ids = bulkedit.ids_of(payload.ids)
-    rows = _editable_rows(db, user, object_type, ids)
+    # 적용할 때는 잠그고 읽는다 — 계획도 잠근 뒤의 값으로 세워야 「이미 그 값」 이 맞다.
+    rows = _editable_rows(db, user, object_type, ids, lock=payload.apply)
     planned = bulkedit.plan(
         db,
         user,
@@ -2374,7 +2428,11 @@ def bulk_edit_undo(
     managed.require_objects_editable(object_type)
     entries = bulkedit.batch_entries(db, batch_id)
     rows = _editable_rows(
-        db, user, object_type, [one.target_id for one in entries if one.target_id]
+        db,
+        user,
+        object_type,
+        [one.target_id for one in entries if one.target_id],
+        lock=payload.apply,
     )
     undo = bulkedit.undo_plan(db, user, object_type, entries=entries, rows=rows)
     planned = undo.plan
@@ -3403,11 +3461,17 @@ def update_object(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ObjectOut:
+    """보낸 칸만 고친다(`properties` 는 보낸 키만 지금 값에 병합). `base_updated_at`(마지막으로
+    읽은 `updated_at`)을 주면 그 뒤에 누가 저장했을 때 덮지 않고 409(OBJECTS-0162) — 다시 읽고
+    고친다."""
     object_type = _type(db, type_slug)
-    row = _visible(db, user, object_type, object_id)
+    # **잠그고 읽는다** — 읽은 값에 병합해 통째로 쓰므로, 안 잠그면 함께 온 저장이 서로의 칸을
+    # 지운다(`_visible`).
+    row = _visible(db, user, object_type, object_id, lock=True)
     access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 16))
 
     managed.require_objects_editable(object_type)
+    _require_base(row, payload.base_updated_at)
     before = audit_state(row)
 
     if payload.key is not None:
@@ -4077,9 +4141,11 @@ def restore_object(
     """그 시점의 값으로 **고친다** — 저장과 같은 검증을 거쳐서. 그때 가리키던 것이
     지워졌거나 규칙이 바뀌었으면 막고 이유를 말한다."""
     object_type = _type(db, type_slug)
-    row = _visible(db, user, object_type, object_id)
+    # 고치기와 같다 — 지금 값에서 그때 값을 되짚고(`history_of`) 통째로 쓰므로 잠그고 읽는다.
+    row = _visible(db, user, object_type, object_id, lock=True)
     access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 16))
     managed.require_objects_editable(object_type, what="되돌리지")
+    _require_base(row, payload.base_updated_at)
     history.restore(db, user, row, object_type, payload.entry_id)
     db.refresh(row)
     defs = properties_of(db, object_type.id)

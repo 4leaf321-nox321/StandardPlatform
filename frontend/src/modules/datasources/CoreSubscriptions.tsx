@@ -178,8 +178,8 @@ export function CoreSubscriptions({
               {row.held && (
                 <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
                   <p className="text-sm font-medium">
-                    정의 검토 대기 — 저장된 값을 잃을 수 있어 자동으로 적용하지 않은 허브의 정의
-                    변경입니다
+                    정의 검토 대기 — 자동으로 적용하지 않은 허브의 정의 변경입니다(저장된 값을 잃을
+                    수 있는 변경 · 플랫폼 칸과 같은 키의 새 속성)
                   </p>
                   <ul className="list-disc space-y-0.5 pl-5 text-sm">
                     {row.held.lines.map((line) => (
@@ -225,9 +225,10 @@ export function CoreSubscriptions({
         description={
           <div className="space-y-2">
             <p>
-              아래 변경을 이 설치의 정의에 적용합니다. 저장된 값이 변환되거나 비워질 수 있고, 지금
-              값이 새 정의에 맞지 않는 객체는 수정할 때 거절됩니다. 적용은 묶음 기록에 남아 되돌릴
-              수 있습니다.
+              아래 변경을 이 설치의 정의에 적용합니다. 값을 잃을 수 있는 변경은 저장된 값이
+              변환되거나 비워질 수 있고, 지금 값이 새 정의에 맞지 않는 객체는 수정할 때 거절됩니다.
+              플랫폼 칸과 같은 키의 새 속성은 값을 잃지 않으며, 남겨 둔 그 타입의 화면 설정도 함께
+              적용됩니다. 적용은 묶음 기록에 남아 복원할 수 있습니다.
             </p>
             <ul className="list-disc space-y-0.5 pl-5">
               {(applying?.held?.lines ?? []).map((line) => (

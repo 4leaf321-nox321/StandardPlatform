@@ -79,6 +79,15 @@ class PropertyDefOut(BaseModel):
     거기서 수정한다. 타입의 속성에만 붙는다."""
 
 
+class PropertyCreatedOut(PropertyDefOut):
+    """새 속성 — 예전에 지운 같은 키의 속성이 남긴 값이 있으면 그 수와 경고를 함께 싣는다."""
+
+    revived: int = 0
+    """그 키에 값이 남아 있던 객체(지운 객체 포함) — 이 속성으로 다시 보인다. 상한(2만)을
+    넘으면 상한 + 1."""
+    warnings: list[str] = Field(default_factory=list)
+
+
 class PropertyDefWriteRequest(BaseModel):
     key: str
     label: str = Field(min_length=1, max_length=64)
@@ -482,6 +491,9 @@ class RenameRequest(BaseModel):
     apply: bool = False
     accept_core: bool = False
     """외부 공개 타입이면 수신 시스템에 통보했음을 확인 — 없으면 적용을 막는다."""
+    expected_fingerprint: str | None = Field(default=None, max_length=128)
+    """미리 본 계획의 지문(`fingerprint`) — 주면 적용 직전 계획이 그것과 같을 때만 바꾼다
+    (다르면 ONTOLOGY-114). 안 주면 지금 계획대로."""
 
 
 class RenamePlaceOut(BaseModel):
@@ -508,7 +520,8 @@ class RenameOut(BaseModel):
     core_consumers: list[str] = Field(default_factory=list)
     snapshot_id: uuid.UUID | None = None
     fingerprint: str = ""
-    """계획의 지문 — 작업의 적용이 「미리 본 것과 같은가」 를 본다."""
+    """계획의 지문 — 작업의 적용이 「미리 본 것과 같은가」 를 본다. 요청 안에서 적용하면
+    `expected_fingerprint` 에 그대로 보낸다(ONTOLOGY-114). 값 · 자리의 수는 안 담는다."""
 
 
 class MoveRequest(BaseModel):
@@ -523,6 +536,9 @@ class MoveRequest(BaseModel):
     """대상에 같은 식별자의 객체가 있으면 옮긴 뒤 그 객체로 병합한다."""
     apply: bool = False
     accept_core: bool = False
+    expected_fingerprint: str | None = Field(default=None, max_length=128)
+    """미리 본 계획의 지문(`fingerprint`) — 주면 적용 직전 계획이 그것과 같을 때만 옮긴다
+    (병합할 짝 · 버리는 값의 수 · 경고가 달라졌으면 ONTOLOGY-114). 안 주면 지금 계획대로."""
 
 
 class MoveFieldOut(BaseModel):
@@ -557,6 +573,8 @@ class MoveOut(BaseModel):
     moved: int = 0
     merged: int = 0
     fingerprint: str = ""
+    """계획의 지문 — 칸 대응 · 버리는 값의 수 · 병합할 짝 · 경고를 담는다(옮길 객체 수는 안
+    담는다). 요청 안에서 적용하면 `expected_fingerprint` 에 그대로 보낸다(ONTOLOGY-114)."""
 
 
 class ImplementPlanRequest(BaseModel):
@@ -711,6 +729,9 @@ class ImportPlanOut(BaseModel):
     similar_meaning: str = "none"
     """뜻으로 견주었나 — `ready` · `off`(꺼둔 설치) · `unavailable`(못 계산함 — 이름으로만,
     까닭은 `warnings`) · `none`(새 타입 · 관계 종류가 없거나 미리 보기가 아님)."""
+    fingerprint: str = ""
+    """계획의 지문 — 미리 본 이 계획대로 적용하려면 적용 요청의 `expected_fingerprint` 에
+    그대로 보낸다(그 사이 계획이 바뀌었으면 ONTOLOGY-114 로 막는다)."""
 
 
 class SnapshotOut(BaseModel):

@@ -358,7 +358,11 @@ def apply_to(
     planned: EditPlan,
 ) -> None:
     """계획에서 `change` 인 것만 실제로 바꾼다. **커밋은 부르는 쪽이** — 감사 기록과
-    같은 트랜잭션에 있어야 「값은 바뀌었는데 기록은 없는」 상태가 안 생긴다."""
+    같은 트랜잭션에 있어야 「값은 바뀌었는데 기록은 없는」 상태가 안 생긴다.
+
+    ⚠️ `rows` 는 **잠가 읽은 줄**이어야 한다(`routes._editable_rows(lock=True)` — id 차례).
+       속성은 읽은 값에 한 칸을 병합해 통째로 쓰므로, 안 잠근 줄이면 읽은 뒤 끝난 다른 저장의
+       칸을 옛 값으로 되돌린다."""
     wanted = {one.id for one in planned.rows if one.action == "change"}
     by_id = {row.id: row for row in rows}
     defs = properties_of(db, object_type.id)

@@ -560,7 +560,7 @@
           "accounts"
         ],
         "summary": "Signup",
-        "description": "가입 신청. 승인 전까지는 로그인할 수 없다(status=pending).",
+        "description": "가입 신청. 승인 전까지는 로그인할 수 없다(status=pending). **아이디가 이미 있어도\n같은 답**(202 · 같은 말)이고 그때는 아무것도 만들지 않는다 — 로그인 없이 아이디가\n있는지를 알아낼 수 없게. 만든 계정은 싣지 않는다(시스템 관리자가 승인 대기에서 본다).",
         "operationId": "signup_api_accounts_signup_post",
         "requestBody": {
           "content": {
@@ -573,12 +573,12 @@
           "required": true
         },
         "responses": {
-          "201": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountOut"
+                  "$ref": "#/components/schemas/SignupOut"
                 }
               }
             }
@@ -7258,6 +7258,7 @@
           "ontology"
         ],
         "summary": "Create Property",
+        "description": "속성 하나를 만든다. **예전에 지운 같은 키의 속성이 값을 남겼으면** 그 값이 다시 보인다 —\n새 정의에 안 맞는 값이 있으면 막고(ONTOLOGY-116 — 맞는 종류로 만든 뒤 「종류 변경」, 또는\n다른 키), 맞으면 만들고 그 수를 `revived` · `warnings` 로 말한다.",
         "operationId": "create_property_api_ontology_types__slug__properties_post",
         "parameters": [
           {
@@ -7286,7 +7287,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PropertyDefOut"
+                  "$ref": "#/components/schemas/PropertyCreatedOut"
                 }
               }
             }
@@ -7810,7 +7811,7 @@
           "ontology"
         ],
         "summary": "Rename Property Key",
-        "description": "**속성 키 변경**(ADR 0093) — 정의 · 객체 값 · 타입 화면 설정 · 저장된 뷰 · 지표 ·\n장표 틀의 주소 · 데이터 소스 칸 대응 · 뜻으로 찾기 대상 · 그래프 지도 · 검토함의 기억을 한\n번에 바꾼다.\n\n`apply=false`(기본)면 계획: 바뀌는 자리와 건수(`places`), 바꿀 수 없는 바깥 자리와\n바꾼 뒤에도 깨지는 뷰 · 지표(`warnings`), 막는 것(`errors` — 문서 · 파일 속성, 공통\n속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 키 · 남은 저장값 …). 적용 직전 정의를\n스냅샷으로 남긴다. 객체의 `updated_at` 은 그대로이고, 이력은 이 전의 기록을 새 키로 읽는다.\n값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-105 — `…/rename-key/job` 으로 작업을 만든다.",
+        "description": "**속성 키 변경**(ADR 0093) — 정의 · 객체 값 · 타입 화면 설정 · 저장된 뷰 · 지표 ·\n장표 틀의 주소 · 데이터 소스 칸 대응 · 뜻으로 찾기 대상 · 그래프 지도 · 검토함의 기억을 한\n번에 바꾼다.\n\n`apply=false`(기본)면 계획: 바뀌는 자리와 건수(`places`), 바꿀 수 없는 바깥 자리와\n바꾼 뒤에도 깨지는 뷰 · 지표(`warnings`), 막는 것(`errors` — 문서 · 파일 속성, 공통\n속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 키 · 남은 저장값 …). 적용 직전 정의를\n스냅샷으로 남긴다. 객체의 `updated_at` 은 그대로이고, 이력은 이 전의 기록을 새 키로 읽는다.\n값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-105 — `…/rename-key/job` 으로 작업을 만든다.\n적용할 때 미리 본 계획의 `fingerprint` 를 `expected_fingerprint` 로 보내면 그 사이 계획이\n달라졌을 때 바꾸지 않는다(ONTOLOGY-114 — 다시 미리 본다).",
         "operationId": "rename_property_key_api_ontology_types__slug__properties__key__rename_key_post",
         "parameters": [
           {
@@ -7934,7 +7935,7 @@
           "ontology"
         ],
         "summary": "Move Type Objects",
-        "description": "**객체를 다른 타입으로 옮기기 · 타입 합치기**(ADR 0094) — 객체 id 를 그대로 둔 채 타입을\n바꾼다. 참조 칸 · 관계 · 첨부 · 문서 · 이력은 id 로 이어져 따라온다.\n\n`apply=false`(기본)면 계획: 칸 대응(`fields` — 같은 키 · 다른 키 · 새로 만들기 ·\n버림, 값 건수, 막는 까닭), 바뀌는 자리(`places`), 원 타입에 남는 것 · 빌 필수\n칸(`warnings`), 막는 것(`errors` — 모양이 다른 칸 · 겹치는 식별자(`merge_duplicates` 로\n병합) · 같은 별칭 · 식별자 정책 · 원천 잠금 · 데이터 소스가 넣는 중 …). 원 타입은 빈 채로\n남는다 — 삭제는 삭제 미리 보기로. 옮길 객체가 2만 건을 넘으면 ONTOLOGY-106 —\n`…/move/job`.",
+        "description": "**객체를 다른 타입으로 옮기기 · 타입 합치기**(ADR 0094) — 객체 id 를 그대로 둔 채 타입을\n바꾼다. 참조 칸 · 관계 · 첨부 · 문서 · 이력은 id 로 이어져 따라온다.\n\n`apply=false`(기본)면 계획: 칸 대응(`fields` — 같은 키 · 다른 키 · 새로 만들기 ·\n버림, 값 건수, 막는 까닭), 바뀌는 자리(`places`), 원 타입에 남는 것 · 빌 필수\n칸(`warnings`), 막는 것(`errors` — 모양이 다른 칸 · 겹치는 식별자(`merge_duplicates` 로\n병합) · 같은 별칭 · 식별자 정책 · 원천 잠금 · 데이터 소스가 넣는 중 …). 원 타입은 빈 채로\n남는다 — 삭제는 삭제 미리 보기로. 옮길 객체가 2만 건을 넘으면 ONTOLOGY-106 —\n`…/move/job`. 적용할 때 미리 본 계획의 `fingerprint` 를 `expected_fingerprint` 로 보내면\n병합할 짝 · 버리는 값의 수 · 경고가 그 사이 달라졌을 때 옮기지 않는다(ONTOLOGY-114).",
         "operationId": "move_type_objects_api_ontology_types__slug__move_post",
         "parameters": [
           {
@@ -8040,7 +8041,7 @@
           "ontology"
         ],
         "summary": "Rename Type Slug",
-        "description": "**타입 slug 변경**(ADR 0093) — 정의 · 참조 속성의 대상 · 관계 종류의 끝 · 화면\n설정의 트리 · 저장된 뷰 · 지표 · 장표 틀의 주소(`in.<slug>:<키>`) · 원 표와 맺은 관계 ·\n못 찾은 말 · 웹훅 · 검토함 · 알림 링크를 한 번에 바꾼다. 객체는 id 로 타입을 가리켜\n그대로다.\n\n`apply=false`(기본)면 계획(`places` · `warnings` · `errors`). 외부 공개 타입은 주소\n(`/api/core/<slug>`)가 바뀌므로 `accept_core`. 옛 주소(`/o/<옛 slug>`)로 열면 새 slug 를\n안내한다.",
+        "description": "**타입 slug 변경**(ADR 0093) — 정의 · 참조 속성의 대상 · 관계 종류의 끝 · 화면\n설정의 트리 · 저장된 뷰 · 지표 · 장표 틀의 주소(`in.<slug>:<키>`) · 원 표와 맺은 관계 ·\n못 찾은 말 · 웹훅 · 검토함 · 알림 링크를 한 번에 바꾼다. 객체는 id 로 타입을 가리켜\n그대로다.\n\n`apply=false`(기본)면 계획(`places` · `warnings` · `errors`). 외부 공개 타입은 주소\n(`/api/core/<slug>`)가 바뀌므로 `accept_core`. 옛 주소(`/o/<옛 slug>`)로 열면 새 slug 를\n안내한다. `expected_fingerprint` 는 키 변경과 같다(ONTOLOGY-114).",
         "operationId": "rename_type_slug_api_ontology_types__slug__rename_post",
         "parameters": [
           {
@@ -8405,7 +8406,7 @@
           "ontology"
         ],
         "summary": "Import Schema",
-        "description": "정의를 통째로 받아 **한 트랜잭션으로** 적용한다.\n\n**기본이 `dry_run=true` 인 이유**: 기계가 부르는 자리이고, 실수가 기계 속도로\n반영되면 그 아래 쌓인 것이 전부 흔들린다. 적용은 **의도를 적어야** 일어난다.\n\n**더하고 고치기만 한다.** 「스키마에 없으니 지운다」 로 만들면 부분 스키마를\n한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.",
+        "description": "정의를 통째로 받아 **한 트랜잭션으로** 적용한다.\n\n**기본이 `dry_run=true` 인 이유**: 기계가 부르는 자리이고, 실수가 기계 속도로\n반영되면 그 아래 쌓인 것이 전부 흔들린다. 적용은 **의도를 적어야** 일어난다.\n\n**더하고 고치기만 한다.** 「스키마에 없으니 지운다」 로 만들면 부분 스키마를\n한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.\n\n적용(`dry_run=false`)에 미리 보기의 `fingerprint` 를 `expected_fingerprint` 로 주면 사람이\n읽은 그 계획대로만 적용한다 — 그 사이 다른 가져오기 · 화면 수정 · 동기화가 계획을 바꿨으면\nONTOLOGY-114. 값이 있는 객체가 2만 건을 넘는 종류 변경은 요청 안에서 값을 세지 않고\n(경고), 적용은 ONTOLOGY-115 — 「종류 변경」 작업이나 묶음 가져오기 작업으로.",
         "operationId": "import_schema_api_ontology_import_post",
         "parameters": [
           {
@@ -8432,6 +8433,25 @@
               "title": "Source"
             },
             "description": "이 정의를 관리하는 원천의 이름(`managed_by`) — 적으면 이 가져오기가 세우는 타입 · 관계 종류 · 인터페이스가 그 원천의 것으로 잠긴다(묶음 가져오기의 `source` 와 같다)"
+          },
+          {
+            "name": "expected_fingerprint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "미리 본 계획의 `fingerprint` — 주면 지금 계획이 그것과 같을 때만 적용한다(다르면 ONTOLOGY-114). 안 주면 지금 계획대로",
+              "title": "Expected Fingerprint"
+            },
+            "description": "미리 본 계획의 `fingerprint` — 주면 지금 계획이 그것과 같을 때만 적용한다(다르면 ONTOLOGY-114). 안 주면 지금 계획대로"
           }
         ],
         "requestBody": {
@@ -8683,7 +8703,7 @@
           "ontology"
         ],
         "summary": "Restore Snapshot",
-        "description": "그때의 정의를 다시 덮어씌운다.\n\n**그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈\n곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.\n\n`dry_run` 은 가져오기의 미리 보기와 같은 계획이다(기계가 되돌리기 전에 사람에게 보일\n자리). 기본이 적용인 것은 화면이 확인 창을 거친 뒤에 부르기 때문이다.",
+        "description": "그때의 정의를 다시 덮어씌운다.\n\n**그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈\n곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.\n\n`dry_run` 은 가져오기의 미리 보기와 같은 계획이다(기계가 되돌리기 전에 사람에게 보일\n자리). 기본이 적용인 것은 화면이 확인 창을 거친 뒤에 부르기 때문이다. 미리 본 계획의\n`fingerprint` 를 `expected_fingerprint` 로 주면 그 계획대로만 되돌린다(ONTOLOGY-114).\n값이 많은 종류 변경이 들면 ONTOLOGY-115 — 그 속성을 「종류 변경」 작업으로 먼저.",
         "operationId": "restore_snapshot_api_ontology_snapshots__snapshot_id__restore_post",
         "parameters": [
           {
@@ -8707,6 +8727,25 @@
               "title": "Dry Run"
             },
             "description": "되돌리지 않고 계획만 본다 — 무엇이 바뀌고 무엇을 잃는지"
+          },
+          {
+            "name": "expected_fingerprint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "미리 본 계획(`dry_run=true`)의 `fingerprint` — 주면 지금 계획이 그것과 같을 때만 되돌린다(다르면 ONTOLOGY-114)",
+              "title": "Expected Fingerprint"
+            },
+            "description": "미리 본 계획(`dry_run=true`)의 `fingerprint` — 주면 지금 계획이 그것과 같을 때만 되돌린다(다르면 ONTOLOGY-114)"
           }
         ],
         "responses": {
@@ -12941,6 +12980,7 @@
           "objects"
         ],
         "summary": "Update Object",
+        "description": "보낸 칸만 고친다(`properties` 는 보낸 키만 지금 값에 병합). `base_updated_at`(마지막으로\n읽은 `updated_at`)을 주면 그 뒤에 누가 저장했을 때 덮지 않고 409(OBJECTS-0162) — 다시 읽고\n고친다.",
         "operationId": "update_object_api_objects__type_slug___object_id__patch",
         "parameters": [
           {
@@ -45087,6 +45127,18 @@
             "type": "boolean",
             "title": "Accept Core",
             "default": false
+          },
+          "expected_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fingerprint"
           }
         },
         "type": "object",
@@ -46478,6 +46530,18 @@
               }
             ],
             "title": "Valid To Year"
+          },
+          "base_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Updated At"
           }
         },
         "type": "object",
@@ -50325,6 +50389,206 @@
         "type": "object",
         "title": "PromoteRequest",
         "description": "있는 코드표에 붙이거나(`target_type_slug`), 새로 만든다(`new_slug`·`new_label`)."
+      },
+      "PropertyCreatedOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "owner_kind": {
+            "type": "string",
+            "title": "Owner Kind"
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Owner Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi"
+          },
+          "enum_options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum Options"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "inverse_label": {
+            "type": "string",
+            "title": "Inverse Label",
+            "default": ""
+          },
+          "min_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Value"
+          },
+          "max_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Value"
+          },
+          "decimals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decimals"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          },
+          "accept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept"
+          },
+          "default_value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Value"
+          },
+          "unique": {
+            "type": "boolean",
+            "title": "Unique"
+          },
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "interface_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interface Slug"
+          },
+          "revived": {
+            "type": "integer",
+            "title": "Revived",
+            "default": 0
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "owner_kind",
+          "owner_id",
+          "key",
+          "label",
+          "data_type",
+          "unit",
+          "help",
+          "required",
+          "multi",
+          "enum_options",
+          "ref_type_slug",
+          "min_value",
+          "max_value",
+          "decimals",
+          "pattern",
+          "default_value",
+          "unique",
+          "section",
+          "sort_order"
+        ],
+        "title": "PropertyCreatedOut",
+        "description": "새 속성 — 예전에 지운 같은 키의 속성이 남긴 값이 있으면 그 수와 경고를 함께 싣는다."
       },
       "PropertyDefOut": {
         "properties": {
@@ -54383,6 +54647,18 @@
             "type": "boolean",
             "title": "Accept Core",
             "default": false
+          },
+          "expected_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fingerprint"
           }
         },
         "type": "object",
@@ -54978,6 +55254,18 @@
             "type": "string",
             "format": "uuid",
             "title": "Entry Id"
+          },
+          "base_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Updated At"
           }
         },
         "type": "object",
@@ -59011,6 +59299,20 @@
         ],
         "title": "SheetRowOut",
         "description": "일괄 입력 표의 한 줄 — **현재값이 채워져 온다.**"
+      },
+      "SignupOut": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "SignupOut",
+        "description": "가입 신청의 답 — **아이디가 이미 있어도 같은 답이다**(같은 상태 · 같은 말). 로그인 없이\n부르는 자리라, 다르게 답하면 아무나 아이디가 있는지를 알아낸다. 만든 계정을 싣지 않는다."
       },
       "SignupRequest": {
         "properties": {
@@ -65243,6 +65545,11 @@
             "type": "string",
             "title": "Similar Meaning",
             "default": "none"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint",
+            "default": ""
           }
         },
         "type": "object",

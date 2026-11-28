@@ -1220,12 +1220,22 @@ async def ontology_import(
     schema: dict[str, Any],
     apply: bool = False,
     source: str = "",
+    expected_fingerprint: str = "",
 ) -> Any:
     """정의를 통째로 **한 트랜잭션으로** 적용한다.
 
     `apply=False`(기본)면 **아무것도 안 바꾸고** 계획만 돌려준다 — 무엇이 새로
     생기고, 무엇이 바뀌고, **무엇을 조용히 잃는지**(경고). 사람이 그 계획을 읽고
     판단할 자리다.
+
+    **적용은 사람이 읽은 그 계획대로** — `apply=True` 로 부를 때 미리 보기 응답의
+    `fingerprint` 를 `expected_fingerprint` 에 **그대로** 넘긴다(같은 `schema` · `source` 로).
+    그 사이 다른 가져오기 · 화면 수정 · 동기화가 계획을 바꿨으면 ONTOLOGY-0114 로 막힌다 —
+    아무것도 안 바뀌었다. 다시 미리 보고 새 계획을 사람에게 보인 뒤 그 지문으로 적용한다.
+    **값이 많은 종류 변경**(값이 있는 객체 2만 건 넘게)은 미리 보기가 저장값을 세지 않고
+    경고로 말하고, 적용은 요청 안에서 하지 않는다 — 이 도구가 같은 정의로 **묶음 가져오기 계획
+    작업**을 만들어 그 계획(`result`, 변환 · 비움 건수가 든)을 돌려준다. 그 계획을 사람에게
+    보이고 확인받은 뒤 `job_apply(job_id)`.
 
     **비슷한 정의**(`similar`, ADR 0091) — 계획이 새로 만드는 타입 · 관계 종류가 이미 있는
     것과 이름이 같거나 뜻이 가까우면(`near[].why` · `score`), 새 속성이 다른 타입의 같은 키 ·
@@ -1273,7 +1283,18 @@ async def ontology_import(
     params = {"dry_run": "false" if apply else "true"}
     if source:
         params["source"] = source
-    return await _post(ctx, "/api/ontology/import", schema, params=params)
+    if apply and expected_fingerprint:
+        params["expected_fingerprint"] = expected_fingerprint
+    got = await _post(ctx, "/api/ontology/import", schema, params=params)
+    if apply and isinstance(got, dict) and "ONTOLOGY-0115" in str(got.get("error", "")):
+        # 값이 많은 종류 변경 — 요청 안에서 값을 못 센다. 같은 정의를 묶음 작업으로 계획한다
+        # (작업이 값을 세고, 적용은 사람이 본 뒤 job_apply 로 — 지문은 작업이 든다).
+        bundle: dict[str, Any] = {"ontology": schema, "apply": False}
+        if source:
+            bundle["source"] = source
+        job = await _post(ctx, "/api/bundles/import", bundle)
+        return await _wait_job(ctx, job, JOB_WAIT_MAX)
+    return got
 
 
 @tool()
@@ -1569,6 +1590,7 @@ async def ontology_rename(
     key: str | None = None,
     apply: bool = False,
     accept_core: bool = False,
+    expected_fingerprint: str = "",
 ) -> Any:
     """**키 · slug 바꾸기**(ADR 0093) — `kind="property"` 면 타입 `slug` 의 속성 키 `key` →
     `to`, `kind="type"` 이면 타입 slug `slug` → `to`. 보이는 이름(label)은 `ontology_import` 로
@@ -1579,13 +1601,16 @@ async def ontology_rename(
     끝 …), `warnings`(바꿀 수 없는 바깥 자리 — .env · 정제 키트 · 원천 레시피 · 수신 시스템 ·
     문서 본문의 링크, 그리고 바꾼 뒤에도 깨지는 뷰 · 지표), `errors`(막는 것 — 문서 · 파일
     속성, 공통 속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 이름 · 남은 저장값, 그 타입을 쥔
-    작업). **계획을 사람에게 보이고** 확인받은 뒤 `apply=True`. 공개 타입이면 `core_consumers`
-    를 보이고 `accept_core=True`.
+    작업). **계획을 사람에게 보이고** 확인받은 뒤 `apply=True` — 그때 계획의 `fingerprint` 를
+    `expected_fingerprint` 에 그대로 넘긴다(그 사이 계획이 달라졌으면 ONTOLOGY-0114 — 다시 미리
+    보고 사람에게 보인다). 공개 타입이면 `core_consumers` 를 보이고 `accept_core=True`.
 
     키를 바꿀 때 값이 있는 객체가 2만 건을 넘으면 **작업이 된다**(계획 작업) — `result` 가
     계획이다. 사람이 확인하면 `job_apply(job_id)`. 적용 뒤 이 도구 · 다른 도구를 부를 때는 새
     이름을 쓴다(옛 slug 로 부르면 새 slug 를 말한다)."""
-    body = {"to": to, "apply": apply, "accept_core": accept_core}
+    body: dict[str, Any] = {"to": to, "apply": apply, "accept_core": accept_core}
+    if apply and expected_fingerprint:
+        body["expected_fingerprint"] = expected_fingerprint
     if kind == "type":
         return await _post(ctx, f"/api/ontology/types/{_seg(slug)}/rename", body)
     if kind != "property":
@@ -1595,8 +1620,10 @@ async def ontology_rename(
     path = f"/api/ontology/types/{_seg(slug)}/properties/{_seg(key)}/rename-key"
     got = await _post(ctx, path, body)
     if isinstance(got, dict) and "ONTOLOGY-0105" in str(got.get("error", "")):
-        # 값이 많은 타입 — 요청 안에서 안 끝나 작업이 된다. 작업은 늘 계획부터다.
-        job = await _post(ctx, f"{path}/job", {**body, "apply": False})
+        # 값이 많은 타입 — 요청 안에서 안 끝나 작업이 된다. 작업은 늘 계획부터다(지문은 작업이
+        # 제 것을 든다).
+        planned = {k: v for k, v in body.items() if k != "expected_fingerprint"}
+        job = await _post(ctx, f"{path}/job", {**planned, "apply": False})
         return await _wait_job(ctx, job, JOB_WAIT_MAX)
     return got
 
@@ -1610,6 +1637,7 @@ async def ontology_move(
     merge_duplicates: bool = False,
     apply: bool = False,
     accept_core: bool = False,
+    expected_fingerprint: str = "",
 ) -> Any:
     """**객체를 다른 타입으로 옮기기 · 타입 합치기**(ADR 0094) — 타입 `slug` 의 객체
     전부(지운 것 포함)를 타입 `to` 로. 객체 id 가 그대로라 참조 칸 · 관계 · 별칭 · 첨부 ·
@@ -1622,19 +1650,25 @@ async def ontology_move(
     `mapping={"원 키": "대상 키" | null}` — **버림(null)은 사람이 정한 것만**. 모양이 다른 칸은
     `ontology_retype` 로 먼저 맞춘다. 대상에 같은 식별자의 객체가 있으면 막힌다 — 같은 것이면
     사람에게 확인받아 `merge_duplicates=True`(옮긴 뒤 대상의 객체로 병합). 계획을 사람에게
-    보이고 확인받은 뒤 `apply=True`. 원 타입은 빈 채로 남는다 — 정리는 `ontology_delete`.
+    보이고 확인받은 뒤 `apply=True` — 그때 계획의 `fingerprint` 를 `expected_fingerprint` 에
+    그대로 넘긴다. 병합할 짝 · 버리는 값의 수 · 경고가 그 사이 달라졌으면 ONTOLOGY-0114 로
+    막힌다(병합 3건을 확인받았는데 2만 건을 병합하지 않게) — 다시 미리 보고 사람에게 보인다.
+    원 타입은 빈 채로 남는다 — 정리는 `ontology_delete`.
     옮길 객체가 2만 건을 넘으면 **작업이 된다**(계획 작업) — 확인 뒤 `job_apply(job_id)`."""
-    body = {
+    body: dict[str, Any] = {
         "to": to,
         "mapping": mapping or {},
         "merge_duplicates": merge_duplicates,
         "apply": apply,
         "accept_core": accept_core,
     }
+    if apply and expected_fingerprint:
+        body["expected_fingerprint"] = expected_fingerprint
     path = f"/api/ontology/types/{_seg(slug)}/move"
     got = await _post(ctx, path, body)
     if isinstance(got, dict) and "ONTOLOGY-0106" in str(got.get("error", "")):
-        job = await _post(ctx, f"{path}/job", {**body, "apply": False})
+        planned = {k: v for k, v in body.items() if k != "expected_fingerprint"}
+        job = await _post(ctx, f"{path}/job", {**planned, "apply": False})
         return await _wait_job(ctx, job, JOB_WAIT_MAX)
     return got
 
@@ -1695,7 +1729,10 @@ async def ontology_promote(
 
 @tool()
 async def ontology_restore(
-    ctx: Context, snapshot_id: str | None = None, apply: bool = False
+    ctx: Context,
+    snapshot_id: str | None = None,
+    apply: bool = False,
+    expected_fingerprint: str = "",
 ) -> Any:
     """정의를 **그때의 모습으로 되돌린다**(스냅샷). `snapshot_id` 를 비우면 되돌릴 수
     있는 스냅샷 목록(최근 50개 — 언제 · 누가 · 왜)이 온다. 가져오기 · 종류 변경 · 승격 ·
@@ -1703,15 +1740,21 @@ async def ontology_restore(
 
     `apply=False`(기본)면 계획(가져오기의 미리 보기와 같은 모양). **그 뒤에 새로 만든
     정의는 안 지운다.** 종류가 바뀐 뒤의 복원은 저장값도 다시 변환한다. 되돌리기
-    직전도 스냅샷으로 남는다. 객체는 스냅샷에 없다."""
+    직전도 스냅샷으로 남는다. 객체는 스냅샷에 없다. 계획을 사람에게 보인 뒤 `apply=True` 로
+    부를 때 계획의 `fingerprint` 를 `expected_fingerprint` 에 그대로 넘긴다(그 사이 계획이
+    달라졌으면 ONTOLOGY-0114). 값이 많은 종류 변경이 들면 ONTOLOGY-0115 — 그 속성을
+    `ontology_retype` 으로 먼저 되돌린 뒤 다시."""
     if snapshot_id is None:
         listed = await _get(ctx, "/api/ontology/snapshots")
         return {"snapshots": listed} if isinstance(listed, list) else listed
+    params = {"dry_run": "false" if apply else "true"}
+    if apply and expected_fingerprint:
+        params["expected_fingerprint"] = expected_fingerprint
     return await _post(
         ctx,
         f"/api/ontology/snapshots/{_seg(snapshot_id)}/restore",
         None,
-        params={"dry_run": "false" if apply else "true"},
+        params=params,
     )
 
 
@@ -3185,6 +3228,7 @@ async def object_update(
     status: str | None = None,
     valid_from_year: int | None = None,
     valid_to_year: int | None = None,
+    base_updated_at: str | None = None,
 ) -> Any:
     """객체를 고친다 — **보낸 것만.**
 
@@ -3201,7 +3245,12 @@ async def object_update(
 
     **계보의 원천**이면(ADR 0041) 개정 칸(`types[].revision_key`)을 고치는 순간 — 개정 칸이
     없는 타입은 무엇을 고쳐도 — 그것으로 만든 것이 낡음이 된다(영향 범위는 `object_lineage`
-    의 `impact`)."""
+    의 `impact`).
+
+    `base_updated_at` 에는 **읽을 때 받은 `updated_at` 을 글자 그대로** 넣는다(`object_get`
+    의 값 — 시각으로 바꿔 다시 쓰면 자릿수가 잘려 늘 거절된다). 그 사이 다른 사람이 고쳤으면
+    아무것도 안 바꾸고 409(OBJECTS-0162)다 — 다시 읽고 무엇이 바뀌었는지 본 뒤 고친다. 안
+    주면 지금 값 위에 보낸 칸만 병합한다(다른 칸을 함께 고친 것은 둘 다 남는다)."""
     body: dict[str, Any] = {
         name: value
         for name, value in (
@@ -3215,6 +3264,9 @@ async def object_update(
         )
         if value is not None
     }
+    if body and base_updated_at:
+        # 바꿀 것이 있을 때만 싣는다 — 이것만으로는 고칠 것이 없다.
+        body["base_updated_at"] = base_updated_at
     path = f"/api/objects/{_seg(type_slug)}/{_seg(object_id)}"
     got = await _patch(ctx, path, body) if body else None
     if aliases is not None:
@@ -3664,7 +3716,8 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
     **작업이 된다.** 워커가 **한 번에 미리 본다** — 정의를 먼저 적용하지 않아도 그
     정의로 객체와 관계를 맞춰 본다. 돌아온 `result` 는 계획이고 아직 아무것도 안 들어갔다.
     사람이 확인한 뒤 `job_apply(job_id)` — **전부 아니면 무**, 한 곳이라도 오류면 아무것도
-    안 들어간다.
+    안 들어간다. 적용은 그 계획 작업의 지문을 든다 — 그 사이 바뀌는 것 · 정의가 **잃는 값의
+    수**(종류 변경의 비움 …)가 달라졌으면 「미리 본 것과 달라졌습니다」(JOBS-20)로 막힌다.
 
     모양: `{"ontology": <ontology_import 와 같은 스키마, 없으면 생략>,
     "objects": [{"type_slug", "workspace_slug", "rows": [...]}],
@@ -4484,10 +4537,43 @@ async def metric_query(
     if where == "dims":
         if not dims or len(dims) != 1:
             return {"error": "dim_values 는 기준 하나를 dims=[이름] 으로 줍니다."}
+        # **값 목록은 거르지 않는다** — 받지 않는 인자를 말없이 버리면 「걸렀다」 고 믿은
+        # 목록이 된다(서버도 그 인자를 422 로 거절한다, ADR 0103).
+        unused = [
+            name
+            for name, given in (
+                ("filters", filters),
+                ("by", by),
+                ("period_from", period_from),
+                ("period_to", period_to),
+                ("cohort_from", cohort_from),
+                ("cohort_to", cohort_to),
+                ("split", split),
+                ("cumulative", cumulative),
+                ("composition", composition),
+            )
+            if given
+        ]
+        if unused:
+            return {
+                "error": "dim_values 는 기준의 값 목록 전체만 줍니다 — 이 인자는 쓰지 "
+                "않습니다: "
+                + ", ".join(unused)
+                + '. 거른 수는 shape="table" 에 dims · filters 로 묻습니다.',
+                "unused": unused,
+            }
         asked: list[tuple[str, Any]] = [("name", dims[0])]
         if search:
             asked.append(("q", search))
         return await _get(ctx, f"/api/metrics/{_seg(slug)}/dims", params=asked)
+    if search:
+        # `search` 는 기준 값 목록(`dim_values`)에서만 쓴다 — 셀을 거르는 줄 알고 보내면 안
+        # 거른 수를 거른 것처럼 읽는다.
+        return {
+            "error": 'search 는 shape="dim_values" 에서만 씁니다 — 셀을 거르려면 '
+            "dim_values 로 값을 찾은 뒤 filters 에 넣습니다.",
+            "unused": ["search"],
+        }
     params: list[tuple[str, Any]] = []
     if dims:
         params.append(("dims", ",".join(dims)))

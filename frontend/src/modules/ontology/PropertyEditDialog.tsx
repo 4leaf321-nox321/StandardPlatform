@@ -12,16 +12,29 @@
  * **인터페이스의 공통 속성도 이 창이다**(ADR 0006) — 두 벌이면 위젯이 갈린다. 다른 점은 둘:
  * 공통 속성에는 타입마다 정하는 칸(유일 · 기본값 · 역방향 이름)이 없고, 타입 쪽에서 공통 속성을
  * 열면 **모양 칸이 잠기고 왜 잠겼는지 적힌다**(비활성만 시키면 버그로 읽힌다).
+ *
+ * **지운 키로 다시 만들면 남은 저장값이 다시 보인다** — 속성을 지워도 객체의 값은 남기 때문이다.
+ * 서버가 그 수를 `revived` · `warnings` 로 주면 창을 닫지 않고 「추가했습니다」 와 그 말을 읽게
+ * 하고, 남은 값이 새 정의에 맞지 않아 막으면(ONTOLOGY-0116) 무엇을 할지(맞는 종류로 만든 뒤
+ * 「종류 변경」 · 다른 키)를 오류 위에 적는다. 둘 다 창의 맨 위라 그 자리로 굴려 보인다 — 아래
+ * 칸을 채우다 「추가」 를 클릭한 사람 눈에는 맨 위가 안 보인다.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import { isDetached } from '@/modules/ontology/kinds'
 import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
 import { RenameDialog } from '@/modules/ontology/RenameDialog'
 import { RetypeDialog, retypeChoices } from '@/modules/ontology/RetypeDialog'
-import type { DataType, ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
+import type {
+  DataType,
+  ObjectInterface,
+  ObjectType,
+  PropertyCreatedOut,
+  PropertyDef,
+} from '@/modules/ontology/api'
+import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -159,6 +172,11 @@ export function PropertyEditDialog({
   const [inverseLabel, setInverseLabel] = useState(property?.inverse_label ?? '')
 
   const [error, setError] = useState<Error | null>(null)
+  /** 추가했고 남은 저장값이 다시 보인다 — 창을 닫지 않고 그 말을 읽게 한다. */
+  const [created, setCreated] = useState<Pick<PropertyCreatedOut, 'revived' | 'warnings'> | null>(
+    null,
+  )
+  const noticeRef = useRef<HTMLDivElement>(null)
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [retyping, setRetyping] = useState(false)
@@ -227,16 +245,35 @@ export function PropertyEditDialog({
     setError(null)
     setSaving(true)
     try {
-      if (property) await calls.update(property.key, body())
-      else await calls.create(body())
+      if (property) {
+        await calls.update(property.key, body())
+        onChanged()
+        onClose()
+        return
+      }
+      const made: Partial<PropertyCreatedOut> | undefined = await calls.create(body())
       onChanged()
-      onClose()
+      // 예전에 지운 같은 키의 값이 다시 보인다 — 닫으면 그 말을 아무도 못 읽는다.
+      const warnings = made?.warnings ?? []
+      if (warnings.length > 0 || (made?.revived ?? 0) > 0) {
+        setCreated({ revived: made?.revived ?? 0, warnings })
+      } else {
+        onClose()
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setSaving(false)
     }
   }
+
+  /** 남은 저장값이 새 정의에 맞지 않아 추가하지 않았다(ONTOLOGY-0116). */
+  const leftoverRefused = error instanceof ApiError && error.code.endsWith('ONTOLOGY-0116')
+
+  // 알림은 창의 맨 위다 — 아래 칸을 채우다 「추가」 를 클릭했으면 그 자리가 안 보인다.
+  useEffect(() => {
+    if (error || created) noticeRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [error, created])
 
   return (
     <>
@@ -253,7 +290,28 @@ export function PropertyEditDialog({
           </DialogHeader>
 
           <div className="space-y-4">
-            {error && <ErrorNotice error={error} />}
+            <div ref={noticeRef} className="space-y-2 empty:hidden">
+              {created && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-sm">
+                  <p className="font-medium">
+                    속성을 추가했습니다
+                    {created.revived > 0 && ' — 남은 저장값이 다시 보입니다'}
+                  </p>
+                  <ul className="text-muted-foreground mt-1 list-disc space-y-0.5 pl-5">
+                    {created.warnings.map((one) => (
+                      <li key={one}>{one}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {leftoverRefused && (
+                <p className="text-destructive text-sm font-medium">
+                  같은 키에 남은 저장값이 새 정의에 맞지 않아 추가하지 않았습니다 — 저장값에 맞는
+                  종류로 추가한 뒤 「종류 변경」 으로 변경하거나, 다른 키를 입력하세요.
+                </p>
+              )}
+              {error && <ErrorNotice error={error} />}
+            </div>
             {locked && (
               <p className="rounded-md border border-sky-500/40 bg-sky-500/5 p-2 text-sm">
                 인터페이스 <b className="font-mono">{boundTo}</b> 의 <b>공통 속성</b>입니다 — 종류 ·
@@ -669,14 +727,19 @@ export function PropertyEditDialog({
             ) : (
               <span />
             )}
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={onClose} disabled={saving}>
-                취소
-              </Button>
-              <Button onClick={save} disabled={saving || !key.trim() || !label.trim()}>
-                {editing ? '저장' : '추가'}
-              </Button>
-            </div>
+            {created ? (
+              // 이미 추가했다 — 「추가」 를 다시 클릭하면 같은 키로 한 번 더 만들려 한다.
+              <Button onClick={onClose}>닫기</Button>
+            ) : (
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={onClose} disabled={saving}>
+                  취소
+                </Button>
+                <Button onClick={save} disabled={saving || !key.trim() || !label.trim()}>
+                  {editing ? '저장' : '추가'}
+                </Button>
+              </div>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

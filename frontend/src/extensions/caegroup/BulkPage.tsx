@@ -565,6 +565,12 @@ export default function BulkPage() {
   /** 표가 **지금 축 · 종류의 것**인가 — 아니면 저장을 막는다(위의 「현재값 불러오기」). */
   const sheetReady = !sheet.stale && sheet.data !== null
 
+  /** 엑셀 다운로드 — 실패(404 · 401 …)는 위의 오류 자리에(전에는 거절이 처리되지 않아 아무것도 안 떴다). */
+  function download(url: string, name: string) {
+    setFailed(null)
+    downloadFile(url, name).catch((caught: unknown) => setFailed(caught as Error))
+  }
+
   async function save() {
     if (!axis || !sheetReady) return
     setBusy(true)
@@ -719,11 +725,9 @@ export default function BulkPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() =>
-                void downloadFile(dtApi.capacityAllFileUrl(), '인프라-현재값.xlsx')
-              }
+              onClick={() => download(dtApi.capacityAllFileUrl(), '인프라-현재값.xlsx')}
             >
-              <Download className="size-4" /> 엑셀로 내려받기
+              <Download className="size-4" /> 엑셀 다운로드
             </Button>
             <Button
               className="ml-auto"
@@ -769,9 +773,9 @@ export default function BulkPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void downloadFile(dtApi.staffFileUrl('xlsx'), '인력-현재값.xlsx')}
+              onClick={() => download(dtApi.staffFileUrl('xlsx'), '인력-현재값.xlsx')}
             >
-              <Download className="size-4" /> 엑셀로 내려받기
+              <Download className="size-4" /> 엑셀 다운로드
             </Button>
             <Button
               className="ml-auto"
@@ -827,13 +831,10 @@ export default function BulkPage() {
           disabled={!axis}
           onClick={() =>
             axis &&
-            void downloadFile(
-              dtApi.sheetFileUrl(axis.key, 'xlsx', pairKind),
-              `${axis.label}-현재값.xlsx`,
-            )
+            download(dtApi.sheetFileUrl(axis.key, 'xlsx', pairKind), `${axis.label}-현재값.xlsx`)
           }
         >
-          <Download className="size-4" /> 엑셀로 내려받기
+          <Download className="size-4" /> 엑셀 다운로드
         </Button>
         <Button
           className="ml-auto"

@@ -406,3 +406,210 @@ def test_꺼_둔_웹훅의_밀린_전송은_기다렸다가_다시_켜면_나간
     assert len(inbox) == 1
     rows = client.get(f"/api/webhooks/{hook['id']}/deliveries", headers=admin.headers).json()
     assert [one["status"] for one in rows] == ["ok"]
+
+
+# --- 죽은 받는 쪽이 워커를 붙잡지 않는다 · 알림이 쌓이지 않는다(2026-11-28 점검)
+# ----------------
+#
+# 받는 쪽이 막히면(응답 없음) 한 건이 `TIMEOUT_SECONDS` 를 다 쓰는데, 예전에는 첫 시도는 식는
+# 중이어도 다 보냈고 한 바퀴에 상한이 없었다 — 하루 1,000건이면 워커 하나가 몇 시간을 기다림에
+# 썼다. 그리고 포기 알림은 한 바퀴 안에서만 하나로 묶여, 1분마다 시스템 관리자마다 하나씩
+# 쌓였다.
+
+
+def _pending(db: Session, hook: dict[str, Any], count: int, *, attempts: int = 0) -> None:
+    for n in range(count):
+        db.add(
+            WebhookDelivery(
+                webhook_id=uuid.UUID(hook["id"]),
+                event="object.create",
+                payload={"n": n},
+                attempts=attempts,
+            )
+        )
+    db.commit()
+
+
+def _attempts(db: Session, hook: dict[str, Any]) -> list[tuple[str, int]]:
+    db.expire_all()
+    rows = db.scalars(
+        select(WebhookDelivery).where(WebhookDelivery.webhook_id == uuid.UUID(hook["id"]))
+    )
+    return sorted((one.status, one.attempts) for one in rows)
+
+
+def test_잇달아_실패한_웹훅의_나머지는_이번_바퀴에_안_보낸다(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request], db: Session
+) -> None:
+    dead = _hook(client, admin, name="죽은 곳", url="http://receiver.local/fail")
+    alive = _hook(client, admin, name="사는 곳")
+    _pending(db, dead, 6)
+    _pending(db, alive, 2)
+    inbox.clear()
+
+    left = services.dispatcher.deliver_pending()
+
+    sent = [one.url.path for one in inbox]
+    assert sent.count("/fail") == services.BREAKER_FAILURES  # 여섯이 아니라 셋만 기다린다
+    assert sent.count("/hook") == 2  # 다른 웹훅은 그대로 간다
+    # 나머지는 pending 그대로 — 시도도 안 썼다(다음 바퀴가 보낸다).
+    assert _attempts(db, dead) == [("pending", 0)] * 3 + [("pending", 1)] * 3
+    assert _attempts(db, alive) == [("ok", 1)] * 2
+    assert left == 6
+
+
+def test_이미_실패하던_웹훅은_한_건만_떠_본다(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request], db: Session
+) -> None:
+    """1분마다 도는 바퀴가 그때마다 세 건씩 기다리지 않게 — 지난 시도가 실패였으면 한 건으로
+    받는 쪽이 살았는지 본다."""
+    dead = _hook(client, admin, url="http://receiver.local/fail")
+    db.execute(
+        update(Webhook)
+        .where(Webhook.id == uuid.UUID(dead["id"]))
+        .values(last_status="failed", last_at=datetime.now(UTC) - timedelta(hours=1))
+    )
+    db.commit()
+    _pending(db, dead, 4)
+    inbox.clear()
+
+    services.dispatcher.deliver_pending()
+
+    assert len(inbox) == services.PROBE_FAILURES == 1
+    assert _attempts(db, dead) == [("pending", 0)] * 3 + [("pending", 1)]
+
+
+def test_보내기_한_바퀴는_시간_상한에서_멈추고_나머지는_다음_바퀴에(
+    client: TestClient,
+    admin: Signed,
+    inbox: list[httpx.Request],
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slow = _hook(client, admin)
+    _pending(db, slow, 5)
+    inbox.clear()
+    clock = {"now": 0.0}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        inbox.append(request)
+        clock["now"] += 50.0  # 받는 쪽이 느리다 — 한 건에 50초
+        return httpx.Response(204)
+
+    monkeypatch.setattr(services.dispatcher, "transport", httpx.MockTransport(respond))
+    monkeypatch.setattr(services.dispatcher, "clock", lambda: clock["now"])
+
+    left = services.dispatcher.deliver_pending()
+
+    # 0 · 50 · 100초에 하나씩 — 150초에서 상한(120초)을 넘겨 멈춘다.
+    assert len(inbox) == 3
+    assert _attempts(db, slow) == [("ok", 1)] * 3 + [("pending", 0)] * 2
+    assert left == 2
+
+
+def test_보내기는_보낸_수를_진행으로_적는다(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request], db: Session
+) -> None:
+    """작업 화면이 「보내기 0/0」 만 보이면 2분 걸리는 바퀴가 멎은 것과 구별되지 않는다."""
+    hook = _hook(client, admin)
+    _pending(db, hook, 2)
+    seen: list[tuple[str, int, int]] = []
+
+    services.dispatcher.deliver_pending(
+        progress=lambda stage, done, total: seen.append((stage, done, total))
+    )
+
+    assert seen and seen[-1] == ("보내기", 2, 2)
+
+
+def test_포기_알림은_웹훅마다_하루에_한_번만(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request], db: Session
+) -> None:
+    """받는 쪽이 죽으면 밀린 전송이 1분마다 하나씩 포기한다 — 그때마다 알리면 시스템 관리자마다
+    1분에 하나씩 쌓였다. 다른 웹훅의 포기는 따로 알린다."""
+    dead = _hook(client, admin, name="죽은 곳", url="http://receiver.local/fail")
+    other = _hook(client, admin, name="다른 죽은 곳", url="http://receiver.local/b/fail")
+    before = len(notifications_of(client, admin, "webhook.failed"))
+
+    _pending(db, dead, 1, attempts=services.MAX_ATTEMPTS - 1)
+    services.dispatcher.deliver_pending()
+    assert len(notifications_of(client, admin, "webhook.failed")) == before + 1
+
+    # 다음 바퀴(1분 뒤)에 또 하나가 포기한다 — 같은 웹훅이면 알리지 않는다.
+    _later(db, dead)
+    _pending(db, dead, 1, attempts=services.MAX_ATTEMPTS - 1)
+    services.dispatcher.deliver_pending()
+    assert len(notifications_of(client, admin, "webhook.failed")) == before + 1
+
+    # 다른 웹훅은 따로 — 이름이 같아도 웹훅이 다르면(링크에 웹훅 id) 따로 센다.
+    _pending(db, other, 1, attempts=services.MAX_ATTEMPTS - 1)
+    services.dispatcher.deliver_pending()
+    shown = notifications_of(client, admin, "webhook.failed")
+    assert len(shown) == before + 2
+    assert shown[0]["link"] == f"/admin/webhooks?hook={other['id']}"
+    assert _attempts(db, dead) == [("failed", services.MAX_ATTEMPTS)] * 2
+
+
+def test_떠_본_것이_되면_그_바퀴의_나머지는_보통의_끊개로(
+    client: TestClient,
+    admin: Signed,
+    inbox: list[httpx.Request],
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """지난번에 실패하던 웹훅은 한 건만 떠 본다 — 그것이 되면 받는 쪽이 살아난 것이다. 그
+    뒤에도 한 번의 실패로 바퀴를 접으면, 잠깐의 오류 하나에 밀린 것이 1분씩 더
+    밀렸다(2026-11-28 검토)."""
+    flaky = _hook(client, admin)
+    db.execute(
+        update(Webhook)
+        .where(Webhook.id == uuid.UUID(flaky["id"]))
+        .values(last_status="failed", last_at=datetime.now(UTC) - timedelta(hours=1))
+    )
+    db.commit()
+    _pending(db, flaky, 6)
+    inbox.clear()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        inbox.append(request)
+        return httpx.Response(204 if len(inbox) == 1 else 500, text="boom")
+
+    monkeypatch.setattr(services.dispatcher, "transport", httpx.MockTransport(respond))
+    services.dispatcher.deliver_pending()
+
+    # 떠 본 1건이 되고, 그 뒤로는 3번 잇달아 실패해야 접는다 — 2건이 아니라 4건.
+    assert len(inbox) == 1 + services.BREAKER_FAILURES
+    assert _attempts(db, flaky) == [("ok", 1)] + [("pending", 0)] * 2 + [("pending", 1)] * 3
+
+
+def test_보내기를_도중에_취소해도_이미_포기한_전송은_알린다(
+    client: TestClient,
+    admin: Signed,
+    inbox: list[httpx.Request],
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """예전에는 포기 알림이 바퀴 끝에만 있어, 취소된 바퀴에서 「실패」 가 된 전송은 홈의 수로만
+    남고 알림은 안 갔다(2026-11-28 검토)."""
+    from app.modules.jobs.services import Cancelled
+
+    dead = _hook(client, admin, name="취소된 바퀴", url="http://receiver.local/fail")
+    _pending(db, dead, 2, attempts=services.MAX_ATTEMPTS - 1)
+    before = len(notifications_of(client, admin, "webhook.failed"))
+    clock = {"now": 0.0}
+
+    def tick() -> float:
+        clock["now"] += 5.0  # 부를 때마다 5초 — 첫 건 뒤에 진행을 적는다
+        return clock["now"]
+
+    def cancel(_stage: str, _done: int, _total: int) -> None:
+        raise Cancelled()
+
+    monkeypatch.setattr(services.dispatcher, "clock", tick)
+    with pytest.raises(Cancelled):
+        services.dispatcher.deliver_pending(progress=cancel)
+
+    assert len(inbox) == 1  # 첫 건을 보내고 진행을 적다 취소됐다
+    shown = notifications_of(client, admin, "webhook.failed")
+    assert len(shown) == before + 1 and "취소된 바퀴" in shown[0]["title"]
+    assert _attempts(db, dead) == [("failed", services.MAX_ATTEMPTS), ("pending", 2)]

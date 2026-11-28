@@ -12,8 +12,8 @@ const ACTION_LABEL: Record<ImportRow['action'], string> = {
   create: '새로',
   update: '고침',
   unchanged: '그대로',
-  unlink: '끊음',
-  delete: '지움',
+  unlink: '해제',
+  delete: '삭제',
   error: '오류',
 }
 
@@ -164,7 +164,7 @@ export function ImportPlanTable({
       )}
       {all.length > SHOW_UNCHANGED_BELOW && (counts.unchanged ?? 0) > 0 && (
         <p className="text-muted-foreground text-xs">
-          「그대로」 {counts.unchanged}행은 표에서 뺐습니다.
+          「그대로」 {counts.unchanged}행은 표에서 제외했습니다.
         </p>
       )}
       {rest > 0 && (
@@ -175,7 +175,7 @@ export function ImportPlanTable({
           </span>
           {onDownloadRows && (
             <button type="button" className="text-primary underline" onClick={onDownloadRows}>
-              모든 줄 받기(CSV)
+              모든 줄 다운로드(CSV)
             </button>
           )}
         </p>

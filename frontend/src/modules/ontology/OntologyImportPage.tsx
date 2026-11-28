@@ -4,6 +4,11 @@
  * 사람은 타입 하나를 5분에 만들고 에이전트는 200개를 5초에 만든다. 그러면
  * **적용 전에 무엇이 바뀌는지 보는 자리**와 **되돌릴 자리**가 반드시 있어야 한다 —
  * 감사 로그는 누가 뭘 했는지는 알려 주지만 되돌려 주지 않는다.
+ *
+ * **적용은 미리 본 그 계획대로만 한다** — 적용에 미리 보기의 지문(`fingerprint`)을 싣는다. 그
+ * 사이 다른 가져오기 · 화면 수정 · 동기화가 계획을 바꿨으면 서버가 ONTOLOGY-0114 로 막고, 값이
+ * 많은 종류 변경이 들었으면 ONTOLOGY-0115 로 작업의 길을 말한다. 어느 쪽이든 계획을 비우고 그
+ * 말을 표시한다.
  */
 
 import { useRef, useState } from 'react'
@@ -48,7 +53,11 @@ export default function OntologyImportPage() {
     setBusy(true)
     try {
       const body = JSON.parse(text)
-      const got = await ontologyApi.importSchema(body, dryRun)
+      const got = await ontologyApi.importSchema(
+        body,
+        dryRun,
+        dryRun ? undefined : plan?.fingerprint || undefined,
+      )
       setPlan(got)
       if (got.applied) {
         reload()

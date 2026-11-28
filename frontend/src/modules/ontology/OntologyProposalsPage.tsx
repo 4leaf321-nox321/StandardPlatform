@@ -46,7 +46,7 @@ export default function OntologyProposalsPage() {
       const next = await ontologyApi.replanProposal(one.id)
       setNotice(
         next.replanned
-          ? `「${one.summary}」 의 계획이 달라졌습니다 — 지금은 「${next.summary}」 입니다. 다시 읽고 검토함에서 고르세요.`
+          ? `「${one.summary}」 의 계획이 달라졌습니다 — 지금은 「${next.summary}」 입니다. 다시 읽고 검토함에서 선택하세요.`
           : `「${one.summary}」 의 계획은 그대로입니다.`,
       )
       found.reload()

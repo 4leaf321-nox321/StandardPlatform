@@ -37,6 +37,7 @@ export default function SlidePage() {
   const slide = fresh ?? loaded.data
   const [error, setError] = useState<Error | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [savingTitle, setSavingTitle] = useState(false)
   const [picking, setPicking] = useState<RenderedArea | null>(null)
   const [confirming, setConfirming] = useState(false)
 
@@ -132,9 +133,14 @@ export default function SlidePage() {
           className="flex items-center gap-2"
           onSubmit={(event) => {
             event.preventDefault()
-            if (renaming.trim()) {
-              void patch({ title: renaming.trim() }).then(() => setRenaming(null))
-            }
+            // 두 번 클릭해도 한 번만 보낸다 — 실패는 `patch` 가 오류 자리에 표시하고 입력은 그대로
+            // 둔다(전에는 거절이 처리되지 않은 채 흘러 아무 데도 안 떴다).
+            if (!renaming.trim() || savingTitle) return
+            setSavingTitle(true)
+            patch({ title: renaming.trim() })
+              .then(() => setRenaming(null))
+              .catch(() => undefined)
+              .finally(() => setSavingTitle(false))
           }}
         >
           <Input
@@ -145,8 +151,8 @@ export default function SlidePage() {
             className="h-8 w-96"
             autoFocus
           />
-          <Button type="submit" size="sm">
-            저장
+          <Button type="submit" size="sm" disabled={savingTitle}>
+            {savingTitle ? '저장 중…' : '저장'}
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>
             <X className="size-4" />

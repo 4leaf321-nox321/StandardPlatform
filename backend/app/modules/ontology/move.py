@@ -135,6 +135,10 @@ class Plan:
     pairs: list[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=list, repr=False)
     """(옮길 객체, 병합될 대상 객체)."""
     dropped_aliases: list[uuid.UUID] = field(default_factory=list, repr=False)
+    carried: list[str] = field(default_factory=list)
+    """정의 없이 남은 옛 값의 키 중 **그대로 옮기는 것** — 대상에 그 키의 속성이 없어 지금은 안
+    보이지만, 대상에 그 키로 속성을 만들면 다시 보인다. 옮기기 기록에 싣는다(`revived` 가
+    읽는다)."""
 
     def place(self, what: str, count: int) -> None:
         if count:
@@ -301,7 +305,9 @@ def _fields(
                     "살릴 "
                     "값이면 원 타입에 그 속성을 먼저 다시 만드십시오."
                 )
-        elif key in landing:
+        elif key not in landing:
+            out.carried.append(key)
+        else:
             out.errors.append(
                 f"원 타입에 정의 없이 남은 옛 값 「{key}」({count:,}건 — 예전에 지운 속성의 "
                 f"저장값)이 대상의 칸 「{key}」 과 겹칩니다 — 옮기면 그 칸의 값으로 "
@@ -829,11 +835,34 @@ def apply(
 
 
 def fingerprint(out: Plan) -> str:
+    """미리 본 계획과 적용 직전 계획이 같은가 — 작업의 적용 · 요청의 `expected_fingerprint` 가
+    본다.
+
+    **사람이 고른 것을 본다** — 칸 대응, **버리는 값의 수**(되돌릴 수 없다), **병합할 짝**(옮긴
+    뒤 대상의 그 객체로 합친다 — 되돌릴 수 없다), 경고 · 오류(수는 지운다). 전에는 짝을 안
+    넣어, 병합 3건을 읽고 고른 적용이 그 사이 대상에 같은 식별자가 들어와 2만 건을 병합하는
+    계획에도 그대로 통했다(2026-11-28 점검). **수의 흔들림은 보지 않는다** — 옮길 객체 · 칸마다
+    값의 수를 넣었더니, 대상에 동기화가 잦으면 계획 작업과 적용 작업 사이에 늘 바뀌어 적용이
+    영영 JOBS-20 이었다."""
     import hashlib
 
-    body: list[Any] = [out.source, out.target, out.objects, out.duplicates, out.errors]
-    body.append([(f.source, f.target, f.action, f.values) for f in out.fields])
-    return hashlib.sha256(json.dumps(body, ensure_ascii=False).encode()).hexdigest()
+    from app.modules.ontology import bounded
+
+    pairs = hashlib.sha256()
+    for moved, into in sorted((str(a), str(b)) for a, b in out.pairs):
+        pairs.update(f"{moved}>{into};".encode())
+    body: dict[str, Any] = {
+        "what": [out.source, out.target],
+        "fields": [
+            [f.source, f.target, f.action, f.blocked, f.values if f.action == "drop" else None]
+            for f in out.fields
+        ],
+        "pairs": [len(out.pairs), pairs.hexdigest()],
+        "warnings": [bounded.without_counts(one) for one in out.warnings],
+        "errors": [bounded.without_counts(one) for one in out.errors],
+    }
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 # --- 옮긴 자취 — 읽는 쪽 ------------------------------------------------------------
@@ -1030,6 +1059,34 @@ class Trail:
             to_id=at_id if known else None,
             to_slug=self.slugs[at_id] if known and at_id is not None else at_slug,
         )
+
+
+def public_departure(db: Session, object_type: ObjectType) -> Departure | None:
+    """이 타입의 객체가 옮겨 갔고 **옮길 때 이 타입이 공개(코어)였으면** 그 끝 — 아니면 None.
+
+    공개 타입에서 옮기면 카탈로그가 원 타입에 `moved_at` · `moved_to` 를 싣는다(ADR 0102 §4).
+    공개를 해제하거나 타입을 지우면 그 기록도 카탈로그에서 빠진다 — 그 전에 한 번도 받지 않은
+    연동 키트 · 코어 구독은 옛 행을 살아 있는 채로 둔다. 삭제 미리 보기가 그것을 알린다.
+
+    옮길 때 공개였나는 공개를 켜고 끈 기록(`ontology.type.core` — 화면 · 정의 가져오기가
+    남긴다)으로 읽는다: 옮긴 뒤 첫 기록의 `was`, 없으면 지금 값."""
+    trail = Trail(db)
+    gone = trail.left(object_type)
+    if gone is None:
+        return None
+    last = trail.out_of(object_type.id, object_type.slug)[-1]
+    was = db.scalar(
+        select(AuditEntry.changes["was"].astext)
+        .where(
+            AuditEntry.action == "ontology.type.core",
+            AuditEntry.target_id == object_type.id,
+            AuditEntry.seq > last.seq,
+        )
+        .order_by(AuditEntry.seq)
+        .limit(1)
+    )
+    public = was == "true" if was is not None else bool(object_type.core)
+    return gone if public else None
 
 
 def _within(one: Moved, spans: list[Span]) -> bool:

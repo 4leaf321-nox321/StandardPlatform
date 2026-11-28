@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
-from app.modules.objects import humanedits, system
+from app.modules.objects import humanedits, lifecycle, system
 from app.modules.objects import keys as key_history
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import (
@@ -204,6 +204,114 @@ def _hidden_ends(db: Session, viewer: User | None, rows: list[AuditEntry]) -> se
     return {str(one) for one in system.hidden_objects(db, viewer, ends)}
 
 
+def _ids_in(value: Any) -> set[str]:
+    """값 안의 객체 id 모양 글자 — 글자 하나 · 목록 · 칸 묶음(dict)을 훑는다."""
+    if isinstance(value, str):
+        try:
+            return {str(uuid.UUID(value))}
+        except ValueError:
+            return set()
+    if isinstance(value, list):
+        return {one for item in value for one in _ids_in(item)}
+    if isinstance(value, dict):
+        return {one for item in value.values() for one in _ids_in(item)}
+    return set()
+
+
+def _old_lifecycle(entry: AuditEntry) -> str | None:
+    """**이름을 박던 때**의 지우기 · 합치기 기록이면 그 자리에 쓸 이름 없는 까닭 — 아니면
+    None.
+
+    그때의 까닭은 「<지운 것> 을 삭제하면서 참조를 비움」 · 「<진 쪽> 을 <이긴 쪽> 에 합침」
+    이었다. 이름이 어디서 끝나는지 글자로는 못 가르므로 이름만 덜어 내지 않고 통째로 바꾼다."""
+    reason = entry.reason or ""
+    if reason.endswith(" 을 삭제하면서 참조를 비움"):
+        return lifecycle.DETACHED
+    if " 을 " in reason and reason.endswith(" 에 합침"):
+        return lifecycle.MERGED_INTO if entry.action == "object.merge" else lifecycle.MERGED
+    return None
+
+
+def _old_involved(entry: AuditEntry, own: str) -> set[str]:
+    """옛 기록에 이름이 박혔을 수 있는 객체 — 관계 기록은 양 끝, 합침 기록은 진 쪽, 칸을
+    고친 기록은 그 칸의 앞뒤 값에 든 id 전부(여러 값 칸의 다른 값도 들어 넉넉히 가린다). 이
+    객체 자신은 뺀다(보고 있는 객체다)."""
+    changes = entry.changes or {}
+    if changes.get("merged_from"):
+        found = _ids_in(changes["merged_from"])
+    elif entry.target_table != "objects":
+        found = _ids_in(changes.get("src")) | _ids_in(changes.get("dst"))
+    else:
+        prop = changes.get("properties")
+        found = (
+            _ids_in(prop.get("before")) | _ids_in(prop.get("after"))
+            if isinstance(prop, dict)
+            else set()
+        )
+    return found - {own}
+
+
+def _told(
+    db: Session, viewer: User | None, row: ObjectInstance, rows: list[AuditEntry]
+) -> dict[uuid.UUID, str]:
+    """지우기 · 합치기가 남긴 기록의 까닭을 **보는 사람에 맞게** — 기록 id → 보일 까닭.
+
+    새 기록은 까닭에 이름이 없고 표식(`lifecycle.BECAUSE`)에 id 가 있다 — 그 id 의 이름을
+    붙이되 보는 사람이 못 보는 객체는 「(볼 수 없는 객체)」 로. 옛 기록은 까닭에 이름이 박혀
+    있다 — 걸린 객체 중 하나라도 못 보면 이름 없는 까닭으로 바꾼다. 관계 기록의 끝 이름은
+    `_hidden_ends` 가 가리는데 까닭은 그대로 나가, 남의 부서 객체 이름이 이력으로 샜다
+    (2026-11-28 점검)."""
+    markers: dict[uuid.UUID, dict[str, Any]] = {}
+    old: dict[uuid.UUID, tuple[str, set[str]]] = {}
+    named: set[str] = set()
+    for entry in rows:
+        marker = (entry.changes or {}).get(lifecycle.BECAUSE)
+        if isinstance(marker, dict) and marker.get("object"):
+            markers[entry.id] = marker
+            named |= _ids_in(marker.get("object")) | _ids_in(marker.get("into"))
+            continue
+        plain = _old_lifecycle(entry)
+        if plain is not None:
+            involved = _old_involved(entry, str(row.id))
+            old[entry.id] = (plain, involved)
+            named |= involved
+    if not named:
+        return {}
+    wanted = {uuid.UUID(one) for one in named}
+    hidden = {str(one) for one in system.hidden_objects(db, viewer, wanted)}
+    labels = {
+        str(found_id): label
+        for found_id, label in db.execute(
+            select(ObjectInstance.id, ObjectInstance.label).where(
+                ObjectInstance.id.in_(sorted(wanted))
+            )
+        )
+    }
+
+    def name(raw: Any) -> str | None:
+        key = str(raw or "")
+        if key in hidden:
+            return system.HIDDEN_LABEL
+        return labels.get(key)
+
+    out: dict[uuid.UUID, str] = {}
+    for entry_id, (plain, involved) in old.items():
+        if involved & hidden:
+            out[entry_id] = plain
+    for entry_id, marker in markers.items():
+        gone = name(marker.get("object"))
+        if gone is None:
+            # 그 객체가 영구 삭제됐다(ADR 0008) — 이름 없는 까닭 그대로.
+            continue
+        if marker.get("kind") == "detach":
+            out[entry_id] = f"{gone} 을 삭제하면서 참조를 비움"
+        elif marker.get("kind") == "merge" and (into := name(marker.get("into"))):
+            # 동사는 용어집의 「병합」 — 옛 기록의 「… 에 합침」 은 `_old_lifecycle` 이
+            # 알아본다.
+            out[entry_id] = f"{gone} 을 {into} 에 병합"
+    return out
+
+
 def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) -> list[Entry]:
     """이력 — 최근 것이 앞. 값 기록마다 그 시점의 값을 붙인다. `viewer` 를 주면 관계 기록의
     저쪽 끝이 그 사람이 못 보는 객체일 때 이름을 가린다."""
@@ -212,6 +320,7 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
     running: dict[str, Any] = audit_state(row)
     workspaces = _workspace_names(db, rows)
     hidden = _hidden_ends(db, viewer, rows)
+    told = _told(db, viewer, row, rows)
     runs = _runs_of(db, row, rows)
     # **키를 바꾼 속성**(ADR 0093) — 바꾸기 전의 기록은 옛 키로 적혀 있다. 거꾸로 가며
     # 그 변경을 지날 때마다 옛 키 → 지금 키를 더해, 그 전 기록을 지금 키로 읽는다(값
@@ -242,7 +351,7 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
                     at=entry.created_at,
                     actor_label=entry.actor_label,
                     action=entry.action,
-                    reason=entry.reason,
+                    reason=told.get(entry.id, entry.reason),
                     kind="object",
                     document={
                         name: changes.get(name)
@@ -294,7 +403,7 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
                 at=entry.created_at,
                 actor_label=entry.actor_label,
                 action=entry.action,
-                reason=entry.reason,
+                reason=told.get(entry.id, entry.reason),
                 kind="object" if is_object else "relation",
                 changes=_split_properties(changes, workspaces) if is_object else {},
                 relation=relation,

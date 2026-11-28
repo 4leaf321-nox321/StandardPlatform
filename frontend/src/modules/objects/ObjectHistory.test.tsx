@@ -90,6 +90,7 @@ async function mount(canEdit = true) {
       current={CURRENT}
       refLabels={{}}
       canEdit={canEdit}
+      baseUpdatedAt="2026-08-01T10:00:00.123456+09:00"
       onRestored={onRestored}
       reloadKey={1}
     />,
@@ -142,8 +143,36 @@ describe('변경 이력', () => {
 
     objectApi.restore.mockResolvedValueOnce({})
     await userEvent.click(screen.getByRole('button', { name: '이 값으로 복원' }))
-    await waitFor(() => expect(objectApi.restore).toHaveBeenLastCalledWith('part', 'bolt', 'e1'))
+    // 「지금」 을 그린 객체의 때를 함께 보낸다 — 그 사이 누가 수정했으면 서버가 덮지 않는다.
+    await waitFor(() =>
+      expect(objectApi.restore).toHaveBeenLastCalledWith(
+        'part',
+        'bolt',
+        'e1',
+        '2026-08-01T10:00:00.123456+09:00',
+      ),
+    )
     expect(onRestored).toHaveBeenCalled()
+  })
+
+  it('그 사이 누가 수정했으면(409) 그 말을 창에 남기고 지금 값을 다시 읽는다', async () => {
+    objectApi.history.mockResolvedValue(ENTRIES)
+    objectApi.restore.mockRejectedValueOnce(
+      new ApiError(409, {
+        error: {
+          code: 'APP-OBJECTS-0162',
+          message: '그 사이 다른 사람이 이 객체를 수정했습니다 — 다시 불러온 뒤 수정하세요.',
+          details: { updated_at: '2026-08-02T10:00:00+09:00' },
+        },
+      }),
+    )
+    const onRestored = await mount()
+    await userEvent.click(await screen.findByRole('button', { name: /이 .*1\.2/ }))
+    await userEvent.click(await screen.findByRole('button', { name: '이 값으로 복원' }))
+    expect(await screen.findByText(/그 사이 다른 사람이 이 객체를 수정했습니다/)).toBeInTheDocument()
+    // 상세를 다시 읽어 창의 「지금」 이 새 값이 된다 — 창은 닫지 않는다.
+    expect(onRestored).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '이 값으로 복원' })).toBeInTheDocument()
   })
 
   it('가장 최근 기록은 지금 값과 같아 복원이 안 서고, 고칠 수 없는 사람에겐 단추가 없다', async () => {

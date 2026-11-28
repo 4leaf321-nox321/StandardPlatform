@@ -12,8 +12,26 @@ import json
 import re
 import uuid
 
-from app.modules.ontology import importer, retype, similar
+from app.modules.ontology import bounded, importer, retype, similar
 from app.modules.ontology.schemas import ChangeOut, ImportPlanOut, SimilarNearOut, SimilarOut
+from app.shared.errors import Conflict, code
+
+#: 미리 본 계획과 지금 계획이 다르다 — 화면 · MCP 가 미리 본 지문(`expected_fingerprint`)을
+#: 들고 요청 안에서 적용할 때(키 변경 · 옮기기 · 정의 가져오기 · 스냅샷 복원). 정의 제안의
+#: 「다시 셈」(ONTOLOGY-108) · 작업의 「미리 본 것과 달라졌습니다」(JOBS-20)와 같은 일이다.
+CHANGED = code("ONTOLOGY", 114)
+CHANGED_MESSAGE = (
+    "미리 본 뒤 바뀌었습니다 — 다시 미리 보세요. 그 사이 정의 · 객체가 바뀌어 지금 계획이 "
+    "읽은 계획과 다릅니다(아무것도 바꾸지 않았습니다). 새 계획을 사람에게 보인 뒤 그 "
+    "`fingerprint` 로 다시 적용하세요."
+)
+
+
+def require_fingerprint(expected: str | None, actual: str) -> None:
+    """적용 직전 — 미리 본 지문을 받았으면 지금 계획의 지문과 같아야 한다. 안 받았으면(옛
+    화면 · 스크립트) 예전처럼 지금 계획대로 적용한다."""
+    if expected and expected != actual:
+        raise Conflict(CHANGED, CHANGED_MESSAGE, details={"expected_fingerprint": expected})
 
 
 def plan_out(
@@ -22,8 +40,12 @@ def plan_out(
     applied: bool,
     snapshot_id: uuid.UUID | None,
     found: similar.Found | None = None,
+    mark: str | None = None,
 ) -> ImportPlanOut:
+    """응답 모양 — `mark` 는 계획의 지문(안 주면 `prepared` 로 센다). 지문을 센 뒤에 경고를
+    더한 계획(스냅샷 복원의 옛 모양 알림)은 그 전에 센 것을 준다."""
     return ImportPlanOut(
+        fingerprint=mark if mark is not None else fingerprint(prepared),
         applied=applied,
         changes=[
             ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields, via=c.via)
@@ -46,8 +68,8 @@ def plan_out(
     )
 
 
-#: 경고 속의 **지금 수**(「값이 있는 객체는 1,204개」) — 지문에서는 뺀다.
-_COUNTS = re.compile(r"\d[\d,]*(?:\.\d+)?")
+#: 경고 속의 **지금 수**(「값이 있는 객체는 1,204개」)는 지문에서 뺀다(`bounded.without_counts`
+#: — 상한을 넘은 「20,000개 이상」 의 「이상」 까지).
 _N = r"(\d[\d,]*)"
 #: 그러나 **잃는 값의 수**는 남긴다 — 1개를 비우는 계획을 읽고 고른 「적용」 이 1만 2천 개를
 #: 비우는 계획에도 그대로 통했다(2026-11-27 점검). 잃는 값의 경고는 넷이다 — 종류 변경의
@@ -75,6 +97,11 @@ def losses(warning: str) -> list[int]:
     return [one for one in counts if one]
 
 
+def losses_in(warnings: list[str]) -> list[list[int]]:
+    """경고들에서 잃는 값의 수 — 잃는 것이 있는 줄만 차례대로(묶음의 지문이 쓴다)."""
+    return [found for one in warnings if (found := losses(one))]
+
+
 def fingerprint(prepared: importer.Plan) -> str:
     """계획의 지문 — 바뀌는 것(종류 · 이름 · 어떻게 · 칸 · 까닭) · 경고 · 오류. 비슷한 정의는
     넣지 않는다(뜻 비교는 임베딩 서버가 있을 때만이라 같은 계획이 달리 보인다). 경고의 숫자는
@@ -87,7 +114,7 @@ def fingerprint(prepared: importer.Plan) -> str:
             [c.kind, c.owner_kind, c.slug, c.action, sorted(c.fields), c.via]
             for c in prepared.changes
         ],
-        "warnings": [_COUNTS.sub("#", one) for one in prepared.warnings],
+        "warnings": [bounded.without_counts(one) for one in prepared.warnings],
         "errors": prepared.errors,
     }
     lost = [

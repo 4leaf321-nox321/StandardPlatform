@@ -456,6 +456,158 @@ def test_기간별_표와_추이(client: TestClient, admin: Signed) -> None:
     assert [one["count"] for one in split["lines"][0]["points"]] == [1, 1, 2]
 
 
+def test_범위를_준_추이도_첫_점의_전기와_전년_동기를_낸다(
+    client: TestClient, admin: Signed
+) -> None:
+    """요청한 범위만 읽던 때는 `period_from=2026-01-01` 이면 2026 의 점 전부의 전년 동기와
+    첫 점의 전기가 비었다(2026-11-28). 범위 앞을 한 해 더 읽고, 점은 범위 안만 낸다."""
+    case = _make_type(client, admin, label="기록", usage="log")
+    _prop(client, admin, case, "received", "접수일", data_type="date")
+    _prop(client, admin, case, "symptom", "증상", data_type="text")
+    for index, (day, symptom) in enumerate(
+        [
+            ("2025-01-10", "소음"),
+            ("2025-03-05", "소음"),
+            ("2025-03-20", "발열"),
+            ("2025-12-15", "소음"),
+            ("2026-01-05", "소음"),
+            ("2026-01-06", "소음"),
+            ("2026-03-01", "발열"),
+        ],
+        1,
+    ):
+        _make_object(
+            client,
+            admin,
+            case,
+            label=f"건{index}",
+            properties={"received": day, "symptom": symptom},
+        )
+    monthly = _define(
+        client,
+        admin,
+        source=case,
+        spec={
+            "measure": "count",
+            "time": {"address": "properties.received", "grain": "month"},
+            "dimensions": [{"name": "symptom", "address": "properties.symptom"}],
+        },
+    )
+    got = _read(
+        client,
+        admin,
+        monthly["slug"],
+        "series",
+        period_from="2026-01-01",
+        period_to="2026-04-01",
+    )
+    points = got["lines"][0]["points"]
+    assert [one["label"] for one in points] == ["2026-01", "2026-02", "2026-03"]
+    assert [one["count"] for one in points] == [2, 0, 1]
+    assert [one["prev"] for one in points] == [1.0, 2.0, 0.0]
+    assert [one["yoy"] for one in points] == [1.0, 0.0, 2.0]
+    # 선을 나눠도 선마다 범위 앞을 본다 — 범위 앞에만 있는 값은 선으로 서지 않는다.
+    split = _read(
+        client,
+        admin,
+        monthly["slug"],
+        "series",
+        split="symptom",
+        period_from="2026-01-01",
+        period_to="2026-04-01",
+    )
+    lines = {one["key"]: one["points"] for one in split["lines"]}
+    assert set(lines) == {"소음", "발열"}
+    assert [one["prev"] for one in lines["소음"]] == [1.0, 2.0, 0.0]
+    assert [one["yoy"] for one in lines["소음"]] == [1.0, 0.0, 1.0]
+    assert [one["yoy"] for one in lines["발열"]] == [0.0, 0.0, 1.0]
+
+    yearly = _define(
+        client,
+        admin,
+        source=case,
+        spec={
+            "measure": "count",
+            "time": {"address": "properties.received", "grain": "year"},
+        },
+    )
+    years = _read(client, admin, yearly["slug"], "series", period_from="2026-01-01")
+    only = years["lines"][0]["points"]
+    assert [(one["count"], one["prev"], one["yoy"]) for one in only] == [(3, 4.0, 4.0)]
+
+
+def test_모양이_쓰지_않는_인자는_조용히_버리지_않고_422(
+    client: TestClient, admin: Signed
+) -> None:
+    """추이는 `cohort_from` · `dims` · `cumulative` 를, 코호트는 `period_from` ·
+    `composition` 을, 기준 값은 `d.<기준>` 을 받지 않는다 — 조용히 버리던 때는 MCP
+    `metric_query` 가 안 걸러진 수를 받고 걸렀다고 믿었다(2026-11-28). 준 것만 거절한다(빈
+    값 · 끈 스위치는 아님)."""
+    from app.shared.errors import code
+
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    slug = cases["slug"]
+
+    def get(shape: str, **params: Any) -> Any:
+        return client.get(f"/api/metrics/{slug}/{shape}", params=params, headers=admin.headers)
+
+    for shape, params, unused in (
+        ("series", {"cohort_from": "2026-01-01"}, ["cohort_from"]),
+        (
+            "series",
+            {
+                "dims": "symptom",
+                "by": "cohort",
+                "cumulative": "true",
+                "cohort_to": "2026-03-01",
+            },
+            ["dims", "by", "cumulative", "cohort_to"],
+        ),
+        (
+            "cohort",
+            {"period_from": "2026-01-01", "composition": "true"},
+            ["period_from", "composition"],
+        ),
+        ("dims", {"name": "symptom", "d.factory": "F1"}, ["d.<기준>"]),
+        ("dims", {"name": "symptom", "period_to": "2026-03-01"}, ["period_to"]),
+        ("values", {"dims": "symptom", "split": "factory"}, ["split"]),
+    ):
+        refused = get(shape, **params)
+        assert refused.status_code == 422, (shape, params, refused.text)
+        error = refused.json()["error"]
+        assert error["code"] == code("METRICS", 13)
+        assert error["details"]["unused"] == unused, (shape, params)
+        assert all(name in error["message"] for name in unused)
+
+    # 쓰는 인자 · 빈 값 · 끈 스위치는 그대로 된다.
+    assert (
+        get(
+            "series",
+            split="symptom",
+            period_from="2026-01-01",
+            cumulative="false",
+            **{
+                "d.factory": "F1",
+                "cohort_from": "",
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        get(
+            "cohort", cumulative="true", cohort_from="2026-01-01", **{"d.factory": "F1"}
+        ).status_code
+        == 200
+    )
+    assert get("dims", name="symptom", q="소").status_code == 200
+    # 거르기는 실제로 걸린다 — 추이의 「d.」 는 버려지지 않는다.
+    narrowed = get(
+        "series", period_from="2026-01-01", period_to="2026-04-01", **{"d.factory": "F2"}
+    ).json()
+    assert [one["count"] for one in narrowed["lines"][0]["points"]] == [0, 1, 2]
+
+
 def test_기간_범위는_기간_경계로_맞추고_분모도_같은_범위다(
     client: TestClient, admin: Signed
 ) -> None:

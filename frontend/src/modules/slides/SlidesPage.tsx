@@ -128,33 +128,49 @@ export default function SlidesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(page.data?.items ?? []).map((one) => (
-              <TableRow key={one.id}>
-                <TableCell>
-                  <Link to={`/slides/${one.id}`} className="font-medium hover:underline">
-                    {one.title}
-                  </Link>
-                </TableCell>
-                <TableCell className="text-sm">{one.template_name}</TableCell>
-                <TableCell className="text-sm">
-                  {one.subject ? (
-                    <Link
-                      to={`/o/${one.subject.type_slug}/${one.subject.id}`}
-                      className="hover:underline"
-                    >
-                      {one.subject.label}
-                      {one.subject.deleted && ' (지워짐)'}
-                    </Link>
-                  ) : (
-                    <span className="text-muted-foreground">(없음)</span>
-                  )}
-                </TableCell>
-                <TableCell className="text-sm">{one.author_name}</TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {shownDateTime(one.edited_at ?? one.created_at)}
-                </TableCell>
-              </TableRow>
-            ))}
+            {(page.data?.items ?? []).map((one) => {
+              // 볼 수 없는 주제(조회를 부서로 좁힌 설치의 남의 부서) — 서버가 타입을 비워 보낸다.
+              // 링크로 두면 주제는 `/o//<id>` 로, 제목은 열지 않는 한 장(SLIDES-40)으로 갔다.
+              const hidden = one.subject !== null && !one.subject.type_slug
+              return (
+                <TableRow key={one.id}>
+                  <TableCell>
+                    {hidden ? (
+                      <span
+                        className="text-muted-foreground font-medium"
+                        title="볼 수 없는 주제의 장표라 열 수 없습니다"
+                      >
+                        {one.title}
+                      </span>
+                    ) : (
+                      <Link to={`/slides/${one.id}`} className="font-medium hover:underline">
+                        {one.title}
+                      </Link>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm">{one.template_name}</TableCell>
+                  <TableCell className="text-sm">
+                    {one.subject === null ? (
+                      <span className="text-muted-foreground">(없음)</span>
+                    ) : hidden ? (
+                      <span className="text-muted-foreground">{one.subject.label}</span>
+                    ) : (
+                      <Link
+                        to={`/o/${one.subject.type_slug}/${one.subject.id}`}
+                        className="hover:underline"
+                      >
+                        {one.subject.label}
+                        {one.subject.deleted && ' (삭제됨)'}
+                      </Link>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm">{one.author_name}</TableCell>
+                  <TableCell className="text-muted-foreground text-xs">
+                    {shownDateTime(one.edited_at ?? one.created_at)}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       )}

@@ -107,6 +107,16 @@ export function PhotoCell({
     }
   }
 
+  // 다운로드의 실패(404 · 401 …)도 같은 자리에 — 전에는 거절이 처리되지 않아 아무것도 안 떴다.
+  function download(one: CellPhoto) {
+    setFailed(null)
+    attachmentApi
+      .download(one.id, one.name)
+      .catch((caught: unknown) =>
+        setFailed(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+      )
+  }
+
   if (photos.length === 0 && !canEdit) return null
   return (
     <div className="space-y-1">
@@ -177,7 +187,7 @@ export function PhotoCell({
               <button
                 type="button"
                 className="hover:text-foreground underline underline-offset-2"
-                onClick={() => void attachmentApi.download(one.id, one.name)}
+                onClick={() => download(one)}
               >
                 {one.name}
               </button>

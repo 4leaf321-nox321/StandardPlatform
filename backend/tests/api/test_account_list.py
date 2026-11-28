@@ -27,7 +27,7 @@ def _signup(client: TestClient, workspace: Workspace) -> str:
             "workspace_slug": workspace.slug,
         },
     )
-    assert made.status_code == 201, made.text
+    assert made.status_code == 202, made.text
     return email
 
 

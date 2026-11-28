@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.ontology.models import ObjectType
@@ -194,6 +195,33 @@ def split_free(
     return free, taken
 
 
+#: 겹친 별칭의 임자를 보는 사람이 못 볼 때 그 자리에 쓰는 말(용어 「볼 수 없는 객체」).
+UNSEEN_HOLDER = "볼 수 없는 객체"
+
+
+def holder_name(db: Session, holder: uuid.UUID, viewer: User | None) -> str:
+    """겹친 별칭을 가진 객체의 이름 — **보는 사람이 그 객체를 볼 수 있을 때만.**
+
+    겹침은 타입 전체에서 본다(`taken_by` — 안 보이는 객체의 별칭이어도 같은 이름이 둘이면 안
+    된다). 그래서 거절은 하되, 조회를 부서로 좁힌 설치에서 그 임자의 이름을 그대로 적으면 남의
+    부서 객체 이름이 오류 말로 샜다(2026-11-28 점검). 보는 사람을 모르면(기계의 길) 누구나 보는
+    객체(전역 · 조회를 안 좁힌 설치)일 때만 이름을 적는다."""
+    other = db.get(ObjectInstance, holder)
+    if other is None:
+        return "다른 객체"
+    if viewer is not None:
+        seen = db.scalar(
+            select(ObjectInstance.id).where(
+                ObjectInstance.id == holder,
+                visible_owner_clause(viewer, ObjectInstance.owner_workspace_id),
+            )
+        )
+        return other.label if seen is not None else UNSEEN_HOLDER
+    if other.owner_workspace_id is None or get_settings().view_scope == "all":
+        return other.label
+    return UNSEEN_HOLDER
+
+
 def require_free(
     db: Session,
     object_type: ObjectType,
@@ -201,16 +229,17 @@ def require_free(
     *,
     exclude_id: uuid.UUID | None,
     kind: str = HUMAN,
+    viewer: User | None = None,
 ) -> None:
-    """다른 객체가 쓰는 별칭이면 거절한다 — **어느 객체인지 말하며.**"""
+    """다른 객체가 쓰는 별칭이면 거절한다 — **어느 객체인지 말하며**, 보는 사람(`viewer`)이 그
+    객체를 볼 수 있을 때만 이름으로(`holder_name`)."""
     taken = taken_by(db, object_type, kind, values)
     for value in values:
         holder = taken.get(compare_key(value))
         if holder is not None and holder != exclude_id:
-            other = db.get(ObjectInstance, holder)
             raise InvalidValue(
                 code("OBJECTS", 80),
-                f"「{value}」 은 이미 {other.label if other else '다른 객체'}의 별칭입니다. "
+                f"「{value}」 은 이미 {holder_name(db, holder, viewer)}의 별칭입니다. "
                 "같은 별칭이 둘이면 어느 쪽인지 아무도 모릅니다.",
             )
 
@@ -223,8 +252,12 @@ def set_human(
     *,
     mode: str = "replace",
     verified: User | None = None,
+    viewer: User | None = None,
 ) -> tuple[list[str], list[str]]:
     """사람이 붙인 별칭. **부르는 쪽이 커밋하고 감사 기록을 남긴다.** (전, 후) 를 돌려준다.
+
+    `viewer` 는 겹침 오류(OBJECTS-80)를 읽을 사람 — 그 사람이 못 보는 객체면 이름을 적지
+    않는다. 안 주면 `verified`(화면 · 검토함에서 붙인 사람)로 본다.
 
     `mode="add"` 는 **있는 것을 지우지 않고 더한다.** 파일로 다시 적재할 때 이것이 아니면,
     사람이 화면에서 붙여 둔 별칭이 조용히 사라진다 — 그 사실은 아무 데도 안 적히고, 몇 달 뒤
@@ -241,7 +274,13 @@ def set_human(
             f"별칭이 {MAX_VALUE}자를 넘습니다: 「{long[0][:40]}…」 "
             f"({len(long[0])}자). 잘라서 넣으면 원래 이름으로는 검색이 안 됩니다.",
         )
-    require_free(db, object_type, wanted, exclude_id=row.id)
+    require_free(
+        db,
+        object_type,
+        wanted,
+        exclude_id=row.id,
+        viewer=viewer if viewer is not None else verified,
+    )
     current = [
         one
         for one in db.scalars(

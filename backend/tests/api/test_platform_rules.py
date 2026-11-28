@@ -80,6 +80,17 @@ def test_자기_계정은_못_지운다(client: TestClient, admin: Signed) -> No
     assert client.delete(f"/api/accounts/{me['id']}", headers=admin.headers).status_code == 409
 
 
+def _pending_id(db: Session, email: str) -> str:
+    """가입 신청의 답에는 계정이 없다(있는 아이디에도 같은 답이라) — DB 에서 찾는다."""
+    from sqlalchemy import select
+
+    from app.modules.accounts.models import User
+
+    found = db.scalar(select(User.id).where(User.email == email))
+    assert found is not None, email
+    return str(found)
+
+
 def test_승인하면_알림이_간다(
     client: TestClient, db: Session, admin: Signed, workspace: Workspace
 ) -> None:
@@ -94,8 +105,8 @@ def test_승인하면_알림이_간다(
             "workspace_slug": workspace.slug,
         },
     )
-    assert signup.status_code == 201, signup.text
-    account_id = signup.json()["id"]
+    assert signup.status_code == 202, signup.text
+    account_id = _pending_id(db, "newbie@example.local")
 
     approved = client.post(
         f"/api/accounts/{account_id}/approve", json={}, headers=admin.headers
@@ -118,7 +129,7 @@ def test_승인하면_알림이_간다(
 
 
 def test_거절은_사유_없이는_안_된다(
-    client: TestClient, admin: Signed, workspace: Workspace
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
 ) -> None:
     """메일이 없어 통보가 앱 안에서만 되므로, 안 적히면 신청한 사람은 이유를
     영영 모른다."""
@@ -131,7 +142,8 @@ def test_거절은_사유_없이는_안_된다(
             "workspace_slug": workspace.slug,
         },
     )
-    account_id = signup.json()["id"]
+    assert signup.status_code == 202, signup.text
+    account_id = _pending_id(db, "rejected@example.local")
 
     without = client.post(f"/api/accounts/{account_id}/reject", json={}, headers=admin.headers)
     assert without.status_code == 422

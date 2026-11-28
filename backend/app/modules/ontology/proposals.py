@@ -58,9 +58,15 @@ def _invalid(message: str, **details: Any) -> Conflict:
 
 def compute(db: Session, schema: dict[str, Any], *, source: str) -> tuple[importer.Plan, str]:
     """지금 정의로 센 계획과 그 지문. 아무것도 안 바꾼다. 모르는 항목이면 ONTOLOGY-70 —
-    정의 가져오기와 같은 말."""
+    정의 가져오기와 같은 말.
+
+    **요청 안의 계획이다**(`in_request`) — 제안 · 다시 셈 · 검토함의 미리 보기가 모두 요청
+    안에서 센다. 값이 많은 종류 변경은 저장값을 훑지 않고 경고로 말하며, 그 제안은 적용하지
+    않는다(`blocker` — 「종류 변경」 작업으로 먼저). 전에는 2,000만 건 타입의 종류 변경이 든
+    제안을 검토함에서 고를 때마다 분 단위로 값을 훑어, 그 제안은 검토함에서 적용할 수
+    없었다."""
     try:
-        prepared = importer.plan(db, schema, source=source)
+        prepared = importer.plan(db, schema, source=source, in_request=True)
     except ValueError as caught:
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
     return prepared, planview.fingerprint(prepared)
@@ -251,7 +257,24 @@ def blocker(db: Session, row: OntologyProposal) -> tuple[str | None, importer.Pl
         return stale_message(row), prepared
     if prepared.errors:
         return "계획에 오류가 있습니다 — " + " / ".join(prepared.errors[:3]), prepared
+    if prepared.deferred:
+        return deferred_message(prepared), prepared
     return None, prepared
+
+
+def deferred_message(prepared: importer.Plan) -> str:
+    """값이 많은 종류 변경이 든 제안 — 검토함에서 적용하지 않는다. 사람이 읽은 계획에는
+    변환 · 비움 건수가 없다(요청 안에서 값을 훑지 않았다) — 그 수를 본 적 없는 값 변환을
+    적용하지 않는다."""
+    paths = [importer.retype_job_path(one) for one in prepared.deferred]
+    names = ", ".join(one.name for one in prepared.deferred[:5])
+    why = prepared.deferred_why.get(prepared.deferred[0].name, "")
+    return (
+        f"큰 종류 변경({names})이 들어 있어 제안으로 적용하지 않습니다 — {why}변환할 수 없는 "
+        "값 · 비우는 값을 요청 안에서 세지 못했습니다. 그 속성을 "
+        f"「종류 변경」 작업(POST {paths[0]} — 계획을 본 뒤 적용)으로 먼저 바꾼 뒤 "
+        "「다시 셈」 하세요."
+    )
 
 
 def accept(
@@ -268,7 +291,12 @@ def accept(
     snapshot = importer.take_snapshot(db, user, reason=f"정의 제안 적용 — {row.summary}"[:200])
     try:
         applied = importer.apply(
-            db, row.schema, source=row.source, actor=user, reason="정의 제안 적용"
+            db,
+            row.schema,
+            source=row.source,
+            actor=user,
+            reason="정의 제안 적용",
+            in_request=True,
         )
     except ValueError as caught:
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None

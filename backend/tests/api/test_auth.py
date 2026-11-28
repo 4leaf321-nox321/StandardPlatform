@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -331,7 +332,7 @@ def test_인코딩된_물음표로_범위_판정을_비껴가지_못한다(
 
 
 def test_계정을_만들거나_승인할_때_모르는_역할은_거절한다(
-    client: TestClient, admin: Signed, workspace: Workspace
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
 ) -> None:
     """역할 칸을 안 봐서 `owner` 같은 아무 글자나 부서 역할로 들어갔다 — 그 사람은 관리자도
     멤버도 아닌 채로 남고, 부서 화면 어디에서도 설명되지 않는다(2026-10-08)."""
@@ -349,23 +350,86 @@ def test_계정을_만들거나_승인할_때_모르는_역할은_거절한다(
     assert made.status_code == 201, made.text
     assert [one["role"] for one in made.json()["account"]["workspaces"]] == ["manager"]
 
+    waiting = f"wait-{uuid.uuid4().hex[:8]}@example.local"
     signup = client.post(
         "/api/accounts/signup",
         json={
-            "email": f"wait-{uuid.uuid4().hex[:8]}@example.local",
+            "email": waiting,
             "password": "signup-password",
             "display_name": "대기",
             "workspace_slug": workspace.slug,
         },
     )
-    assert signup.status_code == 201, signup.text
-    approve = f"/api/accounts/{signup.json()['id']}/approve"
+    assert signup.status_code == 202, signup.text
+    pending = db.scalar(select(User).where(User.email == waiting))
+    assert pending is not None
+    approve = f"/api/accounts/{pending.id}/approve"
     wrong = client.post(approve, json={"role": "superuser"}, headers=admin.headers)
     assert wrong.status_code == 400, wrong.text
     assert wrong.json()["error"]["code"] == code("ACCOUNTS", 10)
     # 거절이 대기 상태를 안 바꿨다 — 맞는 역할로 다시 승인된다.
     approved = client.post(approve, json={"role": "member"}, headers=admin.headers)
     assert approved.status_code == 200, approved.text
+
+
+def test_가입_신청은_아이디가_이미_있어도_같은_답이고_아무것도_만들지_않는다(
+    client: TestClient,
+    db: Session,
+    admin: Signed,
+    workspace: Workspace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """로그인 없이 열린 자리다 — 있는 아이디에 409 「이미 있는 아이디입니다」 로 답하던 때는
+    아무나 아이디가 있는지를 물어볼 수 있었다(2026-11-28). 있든 없든 같은 상태 · 같은 말이고,
+    있는 계정은 그대로이며, 응답 시간도 같게 둘 다 비밀번호를 한 번 해시한다."""
+    hashed: list[str] = []
+    real = security.hash_password
+
+    def counting(password: str) -> str:
+        hashed.append(password)
+        return real(password)
+
+    monkeypatch.setattr(security, "hash_password", counting)
+
+    def ask(email: str, **extra: str) -> Any:
+        return client.post(
+            "/api/accounts/signup",
+            json={
+                "email": email,
+                "password": "signup-password",
+                "display_name": "신청자",
+                "workspace_slug": workspace.slug,
+                **extra,
+            },
+        )
+
+    fresh = f"fresh-{uuid.uuid4().hex[:8]}@example.local"
+    first = ask(fresh)
+    assert first.status_code == 202, first.text
+    made = db.scalar(select(User).where(User.email == fresh))
+    assert made is not None and made.status == "pending"
+    before_hash = made.password_hash
+
+    again = ask(f"  {fresh.upper()} ", password="another-password", display_name="가로채기")
+    existing = ask(admin.email, password="another-password")
+    for answer in (again, existing):
+        assert answer.status_code == first.status_code
+        assert answer.json() == first.json()
+        assert "id" not in answer.json() and fresh not in answer.text
+    assert len(hashed) == 3  # 있는 아이디에도 해시 한 번 — 응답 시간이 갈리지 않게
+    db.expire_all()
+    rows = db.scalars(select(User).where(User.email == fresh)).all()
+    assert len(rows) == 1
+    assert rows[0].password_hash == before_hash and rows[0].display_name == "신청자"
+    owner = db.scalar(select(User).where(User.email == admin.email))
+    assert owner is not None and owner.status == "active" and owner.is_system_admin
+    assert security.verify_password(PASSWORD, owner.password_hash)
+
+    # 없는 부서는 있든 없든 같은 거절이다 — 있는 아이디를 먼저 보면 차례로 갈린다.
+    gone = ask(admin.email, workspace_slug="no-such-team")
+    unknown = ask(f"other-{uuid.uuid4().hex[:8]}@example.local", workspace_slug="no-such-team")
+    assert gone.status_code == unknown.status_code == 404
+    assert gone.json()["error"]["code"] == unknown.json()["error"]["code"]
 
 
 def test_관리자가_만든_계정과_그때_준_시스템_관리자_권한이_기록에_남는다(

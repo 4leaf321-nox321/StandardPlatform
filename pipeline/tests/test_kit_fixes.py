@@ -474,11 +474,12 @@ def test_문서_적용은_올린_기록의_문서_올리기_계획만_넣는다(
     with pytest.raises(pipeline.Stop, match="남긴 기록"):
         sp_docpush.apply(folder, stray, server=SERVER, token=TOKEN)
 
-    # 번호 모양이 아니면 아무것도 묻지 않는다.
+    # 번호 모양이 아니면 아무것도 묻지 않는다 — 그 줄은 거절로(적용 전체가 멈추지 않는다).
     bad = _record(folder, ["../../auth/tokens"])
-    with pytest.raises(pipeline.Stop, match="uuid 꼴"):
-        sp_docpush.apply(folder, bad, server=SERVER, token=TOKEN)
-    assert fake.posts() == []
+    out = sp_docpush.apply(folder, bad, server=SERVER, token=TOKEN)
+    assert out["applied"][0]["state"] == "refused", out
+    assert "uuid 꼴" in out["applied"][0]["message"]
+    assert fake.calls == [], "깨진 번호로는 아무 주소에도 묻지 않는다"
 
     # 다른 종류의 계획(묶음 가져오기)을 이 길로 적용하지 않는다.
     bad.unlink()
@@ -488,6 +489,35 @@ def test_문서_적용은_올린_기록의_문서_올리기_계획만_넣는다(
     assert out["applied"][0]["state"] == "refused", out
     assert "문서 올리기의 계획이 아닙니다" in out["applied"][0]["message"]
     assert fake.posts() == []
+
+
+def test_기록의_한_줄_번호가_깨져도_적용_전체가_멈추지_않고_그_줄만_거절한다(
+    fake: FakePlatform, tmp_path: Path
+) -> None:
+    """예전에는 한 줄의 `job_id` 가 uuid 꼴이 아니면 적용 전체가 멈춤으로 끝나, 어느 줄이
+    깨졌고 나머지는 어떻게 됐는지가 답에 안 남았다. 깨진 줄은 묻지도 주소에 넣지도 않고
+    「거절」, 나머지는 「하나라도 틀리면 아무것도 넣지 않는다」 대로 「넣지 않음」 과
+    그 까닭."""
+    folder = _work(tmp_path)
+    good = _doc_plan(fake)
+    record = _record(folder, [good, "../../auth/tokens"])
+    # 적용 번호가 깨진 줄도 — 그 줄만.
+    body = json.loads(record.read_text(encoding="utf-8"))
+    body["jobs"].append({"job_id": _doc_plan(fake), "ok": True, "apply_job_id": "x?y#"})
+    pipeline._write(record, body)
+
+    out = sp_docpush.apply(folder, record, server=SERVER, token=TOKEN)
+    states = [one["state"] for one in out["applied"]]
+    assert states == ["not_applied", "refused", "refused"], out
+    assert "uuid 꼴" in out["applied"][1]["message"]
+    assert "document_push 로 다시" in out["applied"][1]["message"]
+    assert "적용 작업의 번호" in out["applied"][2]["message"]
+    assert "아무것도 넣지" in out["message"] and out["all_applied"] is False, out
+    assert fake.posts() == [], "하나라도 거절이면 아무것도 넣지 않는다"
+    assert not any("auth" in path or "x?y" in path for _method, path in fake.calls)
+    # 기록은 그대로 남는다(깨진 줄을 고쳐 쓰지 않는다).
+    saved = json.loads(record.read_text(encoding="utf-8"))["jobs"]
+    assert saved[1]["job_id"] == "../../auth/tokens"
 
 
 def test_여러_작업은_함께_보고_하나라도_틀리면_아무것도_넣지_않는다(
@@ -788,7 +818,7 @@ class _Page:
 def test_JSON_이_아닌_답은_로그인이_끝났을_수_있다고_말한다(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pipeline.urllib.request, "urlopen", lambda *_a, **_k: _Page())
+    monkeypatch.setattr(pipeline._OPENER, "open", lambda *_a, **_k: _Page())
     with pytest.raises(pipeline.Stop) as stopped:
         pipeline._urllib_send("GET", f"{SERVER}/api/jobs/x?y=1", {}, None)
     said = str(stopped.value)

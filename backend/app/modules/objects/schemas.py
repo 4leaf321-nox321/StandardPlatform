@@ -79,6 +79,11 @@ class ObjectPatchRequest(BaseModel):
     status: str | None = None
     valid_from_year: int | None = None
     valid_to_year: int | None = None
+    base_updated_at: datetime | None = None
+    """**읽은 뒤 그 사이 누가 수정했으면 덮지 않는다** — 마지막으로 읽은 객체의 `updated_at` 을
+    그대로 돌려보낸다. 지금 값과 다르면 409(OBJECTS-0162, `details.updated_at` 이 지금 값). 안
+    보내면 예전처럼 받는다(보낸 칸만 지금 값에 병합). 화면의 수정 폼은 늘 보낸다 — 폼은 칸
+    전부를 실어 보내므로, 안 보내면 그 사이 AI 가 바꾼 칸을 폼을 연 때의 값으로 되돌린다."""
 
 
 class AttachmentBrief(BaseModel):
@@ -788,6 +793,9 @@ class HistoryEntryOut(BaseModel):
 
 class RestoreRequest(BaseModel):
     entry_id: uuid.UUID
+    base_updated_at: datetime | None = None
+    """고치기(`ObjectPatchRequest.base_updated_at`)와 같다 — 그때와 지금을 견준 화면을 연 뒤 그
+    사이 누가 수정했으면 409(OBJECTS-0162). 안 보내면 예전처럼 받는다."""
 
 
 # --- 저장된 뷰 --------------------------------------------------------------

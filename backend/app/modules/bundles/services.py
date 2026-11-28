@@ -42,7 +42,7 @@ from app.modules.objects.models import ObjectDocument, ObjectInstance
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
-from app.modules.ontology import importer, managed, similar
+from app.modules.ontology import importer, managed, planview, similar
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.schemas import ChangeOut
 from app.modules.ontology.schemas import ImportPlanOut as SchemaPlanOut
@@ -618,8 +618,14 @@ def outcome_out(outcome: Outcome) -> BundleOut:
 
 
 def fingerprint(outcome: Outcome) -> str:
-    """미리 본 결과와 적용 직전 결과가 **같은 계획**인지. id · 스냅샷은 뺀다."""
-    body = {
+    """미리 본 결과와 적용 직전 결과가 **같은 계획**인지. id · 스냅샷은 뺀다.
+
+    정의 쪽은 바뀌는 것(종류 · 이름 · 어떻게 · 칸)에 더해 **잃는 값의 수**를 본다
+    (`planview.losses` — 종류 변경의 「N개 비움」 · 시각을 버리는 값 …, 정의 제안과 같은 규칙,
+    ADR 0101). 전에는 바뀌는 것만 봐, 1개를 비우는 계획 작업을 읽고 고른 적용(키트의
+    `run_apply` 포함)이 그 사이 값이 늘어 1만 2천 개를 비우는 적용에도 그대로 통했다. 잃는
+    것이 없는 묶음의 지문은 예전과 같다."""
+    body: dict[str, Any] = {
         "ontology": [
             (c.kind, c.slug, c.action, sorted(c.fields))
             for c in (outcome.ontology.changes if outcome.ontology else [])
@@ -665,6 +671,9 @@ def fingerprint(outcome: Outcome) -> str:
         ],
         "errors": outcome.errors,
     }
+    lost = planview.losses_in(outcome.ontology.warnings) if outcome.ontology else []
+    if lost:
+        body["ontology_losses"] = lost
     raw = json.dumps(body, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

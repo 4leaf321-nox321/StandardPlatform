@@ -46,6 +46,7 @@ from app.modules.ontology import (
     reset,
     retype,
     revision,
+    revived,
     similar,
     views,
 )
@@ -105,6 +106,7 @@ from app.modules.ontology.schemas import (
     PromoteOptionOut,
     PromoteOut,
     PromoteRequest,
+    PropertyCreatedOut,
     PropertyDefOut,
     PropertyDefWriteRequest,
     PropertyUsage,
@@ -944,7 +946,28 @@ def _type_deletion(db: Session, row: ObjectType, *, source: str = "") -> _Deleti
                 f"관계 종류 {kind.slug} 의 끝에 이 타입이 있습니다 — "
                 "지우면 그 끝에서 빠집니다."
             )
+    moved_warning = _moved_warning(db, row)
+    if moved_warning:
+        found.warnings.append(moved_warning)
     return found
+
+
+def _moved_warning(db: Session, row: ObjectType) -> str | None:
+    """공개 중에 객체를 다른 타입으로 옮긴 원 타입 — 지우면 카탈로그의 옮긴 기록(`moved_at` ·
+    `moved_to`, ADR 0102 §4)도 빠진다. 옮긴 뒤 한 번도 받지 않은 연동 키트는 그 기록을 못 보고
+    옛 행을 살려 둔다 — 지우기 전에 안다."""
+    gone = move.public_departure(db, row)
+    if gone is None:
+        return None
+    consumers = _core_consumers(db, row)
+    who = f"({', '.join(consumers)})" if consumers else ""
+    return (
+        f"이 타입의 객체를 {gone.at.astimezone():%Y-%m-%d} 에 {gone.to_slug}(으)로 "
+        "옮겼습니다 — 이 타입에서 옮긴 기록을 수신 시스템이 아직 못 받았을 수 있습니다. "
+        "공개를 해제하거나 삭제하면 카탈로그에서 옮긴 기록(moved_at · moved_to)도 빠져, 그 "
+        "뒤에 처음 받는 연동 키트 · 코어 구독은 옛 행을 살아 있는 채로 둡니다. 수신 시스템"
+        f"{who}이 옮긴 뒤 한 번 받았는지 확인한 뒤 지우십시오."
+    )
 
 
 def _owned_properties(db: Session, owner_kind: str, owner_id: uuid.UUID) -> int:
@@ -2023,13 +2046,16 @@ def _properties_of(db: Session, owner_id: uuid.UUID) -> list[PropertyDef]:
     )
 
 
-@router.post("/types/{slug}/properties", response_model=PropertyDefOut, status_code=201)
+@router.post("/types/{slug}/properties", response_model=PropertyCreatedOut, status_code=201)
 def create_property(
     slug: str,
     payload: PropertyDefWriteRequest,
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
-) -> PropertyDef:
+) -> PropertyCreatedOut:
+    """속성 하나를 만든다. **예전에 지운 같은 키의 속성이 값을 남겼으면** 그 값이 다시 보인다 —
+    새 정의에 안 맞는 값이 있으면 막고(ONTOLOGY-116 — 맞는 종류로 만든 뒤 「종류 변경」, 또는
+    다른 키), 맞으면 만들고 그 수를 `revived` · `warnings` 로 말한다."""
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
     key = require_new_key(payload.key)
@@ -2071,6 +2097,14 @@ def create_property(
         sort_order=payload.sort_order,
     )
     _check_default(row)
+    # **예전에 지운 같은 키의 값** — 넣기 전에 센다(넣은 뒤면 그 행이 세션에 든다).
+    left = revived.leftover(db, owner, row, in_request=True)
+    if left is not None and left.misfits:
+        raise Conflict(
+            code("ONTOLOGY", 116),
+            revived.refusal(f"{slug}.{key}", row, left),
+            details={"revived": left.count, "misfits": left.misfits},
+        )
     db.add(row)
     db.flush()
     _audit(
@@ -2080,10 +2114,20 @@ def create_property(
         table="property_defs",
         row_id=row.id,
         label=f"{slug}.{key}",
+        reason=(
+            f"남은 저장값 {left.count}건이 다시 보임"
+            if left is not None and left.count
+            else None
+        ),
     )
     db.commit()
     db.refresh(row)
-    return row
+    return PropertyCreatedOut.model_validate(row).model_copy(
+        update={
+            "revived": left.count if left is not None else 0,
+            "warnings": [revived.warning(f"{slug}.{key}", left)] if left is not None else [],
+        }
+    )
 
 
 @router.patch("/types/{slug}/properties/{key}", response_model=PropertyDefOut)
@@ -2690,8 +2734,13 @@ def run_retype_job(
 
 
 def _rename_out(
-    plan: rename.Plan, *, applied: bool, snapshot_id: uuid.UUID | None = None
+    plan: rename.Plan,
+    *,
+    applied: bool,
+    snapshot_id: uuid.UUID | None = None,
+    mark: str | None = None,
 ) -> RenameOut:
+    """`mark` — 미리 보기의 지문(경고를 더하기 전에 센 것). 안 주면 지금 계획으로 센다."""
     return RenameOut(
         kind=plan.kind,
         slug=plan.slug,
@@ -2705,8 +2754,18 @@ def _rename_out(
         errors=plan.errors,
         core_consumers=plan.core_consumers,
         snapshot_id=snapshot_id,
-        fingerprint=rename.fingerprint(plan),
+        fingerprint=mark if mark is not None else rename.fingerprint(plan),
     )
+
+
+def _rename_preview(db: Session, plan: rename.Plan, *, large_ref: bool) -> RenameOut:
+    """계획만 — 지문은 「바꾼 뒤에도 깨지는 뷰 · 지표」 흉내(`residual`)를 더하기 **전에**
+    센다. 적용 직전의 계획은 그 흉내를 안 돌리므로, 더한 뒤에 세면 미리 본 지문과 늘 다르다."""
+    mark = rename.fingerprint(plan)
+    if not plan.errors:
+        plan.warnings.extend(rename.residual(db, plan, large_ref=large_ref))
+    db.rollback()
+    return _rename_out(plan, applied=False, mark=mark)
 
 
 def _same_name(old: str, new: str) -> None:
@@ -2751,11 +2810,8 @@ def _rename_property(
         db, owner, prop, to, consumers=_core_consumers(db, owner), skip_job=job_id
     )
     if not payload.apply or plan.errors:
-        if not plan.errors:
-            large = prop.data_type == "object_ref" and plan.objects > rename.INLINE_OBJECTS
-            plan.warnings.extend(rename.residual(db, plan, large_ref=large))
-        db.rollback()
-        return _rename_out(plan, applied=False)
+        large = prop.data_type == "object_ref" and plan.objects > rename.INLINE_OBJECTS
+        return _rename_preview(db, plan, large_ref=large)
     if inline and plan.objects > rename.INLINE_OBJECTS:
         raise Conflict(
             code("ONTOLOGY", 105),
@@ -2763,6 +2819,10 @@ def _rename_property(
             f"돌립니다(POST {path}/job). 계획을 본 뒤 적용합니다.",
             details={"limit": rename.INLINE_OBJECTS, "job_path": f"{path}/job"},
         )
+    if inline:
+        # 화면 · MCP 가 미리 본 지문을 들고 왔으면 그 계획대로만(작업은 제 지문 —
+        # `before_apply`).
+        planview.require_fingerprint(payload.expected_fingerprint, rename.fingerprint(plan))
     if before_apply is not None:
         before_apply(plan)
     _require_core_accepted(db, owner, accepted=payload.accept_core, what="속성 키 변경")
@@ -2801,7 +2861,9 @@ def rename_property_key(
     바꾼 뒤에도 깨지는 뷰 · 지표(`warnings`), 막는 것(`errors` — 문서 · 파일 속성, 공통
     속성, 원천 잠금, 확장이 쓰는 타입, 이미 있는 키 · 남은 저장값 …). 적용 직전 정의를
     스냅샷으로 남긴다. 객체의 `updated_at` 은 그대로이고, 이력은 이 전의 기록을 새 키로 읽는다.
-    값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-105 — `…/rename-key/job` 으로 작업을 만든다."""
+    값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-105 — `…/rename-key/job` 으로 작업을 만든다.
+    적용할 때 미리 본 계획의 `fingerprint` 를 `expected_fingerprint` 로 보내면 그 사이 계획이
+    달라졌을 때 바꾸지 않는다(ONTOLOGY-114 — 다시 미리 본다)."""
     return _rename_property(db, user, slug, key, payload)
 
 
@@ -2825,7 +2887,10 @@ def rename_property_key_job(
         params={
             "slug": slug,
             "key": key,
-            "request": payload.model_dump(mode="json", exclude={"apply"}),
+            # 미리 본 지문은 작업이 제 것(계획 작업의 결과)을 든다 — 요청의 것은 싣지 않는다.
+            "request": payload.model_dump(
+                mode="json", exclude={"apply", "expected_fingerprint"}
+            ),
             "needs_scope": "ontology:write",
         },
         user=user,
@@ -2934,6 +2999,9 @@ def _move_type(
             f"{path}/job). 계획을 본 뒤 적용합니다.",
             details={"limit": move.INLINE_OBJECTS, "job_path": f"{path}/job"},
         )
+    if inline:
+        # 병합할 짝 · 버리는 값의 수가 미리 본 것과 같을 때만 — 둘 다 되돌릴 수 없다.
+        planview.require_fingerprint(payload.expected_fingerprint, move.fingerprint(plan))
     if before_apply is not None:
         before_apply(plan)
     _require_core_accepted(db, source, accepted=payload.accept_core, what="객체 옮기기")
@@ -2951,7 +3019,15 @@ def _move_type(
         target_table="object_types",
         target_id=target.id,
         target_label=f"{source.slug} → {target.slug}",
-        changes={"from": source.slug, "to": target.slug, "keys": plan.keys, **done},
+        # `carried` — 함께 옮긴 정의 없는 옛 값의 키. 대상에 그 키로 속성을 만들 때
+        # 남은 값을 세는 자리가 이것을 본다(`revived`).
+        changes={
+            "from": source.slug,
+            "to": target.slug,
+            "keys": plan.keys,
+            "carried": plan.carried,
+            **done,
+        },
     )
     db.commit()
     return _move_out(plan, applied=True, snapshot_id=snapshot.id, done=done)
@@ -2972,7 +3048,8 @@ def move_type_objects(
     칸(`warnings`), 막는 것(`errors` — 모양이 다른 칸 · 겹치는 식별자(`merge_duplicates` 로
     병합) · 같은 별칭 · 식별자 정책 · 원천 잠금 · 데이터 소스가 넣는 중 …). 원 타입은 빈 채로
     남는다 — 삭제는 삭제 미리 보기로. 옮길 객체가 2만 건을 넘으면 ONTOLOGY-106 —
-    `…/move/job`."""
+    `…/move/job`. 적용할 때 미리 본 계획의 `fingerprint` 를 `expected_fingerprint` 로 보내면
+    병합할 짝 · 버리는 값의 수 · 경고가 그 사이 달라졌을 때 옮기지 않는다(ONTOLOGY-114)."""
     return _move_type(db, user, slug, payload)
 
 
@@ -2992,7 +3069,9 @@ def move_type_objects_job(
         params={
             "slug": slug,
             "type_slug": payload.to,
-            "request": payload.model_dump(mode="json", exclude={"apply"}),
+            "request": payload.model_dump(
+                mode="json", exclude={"apply", "expected_fingerprint"}
+            ),
             "needs_scope": "ontology:write",
         },
         user=user,
@@ -3051,17 +3130,15 @@ def rename_type_slug(
 
     `apply=false`(기본)면 계획(`places` · `warnings` · `errors`). 외부 공개 타입은 주소
     (`/api/core/<slug>`)가 바뀌므로 `accept_core`. 옛 주소(`/o/<옛 slug>`)로 열면 새 slug 를
-    안내한다."""
+    안내한다. `expected_fingerprint` 는 키 변경과 같다(ONTOLOGY-114)."""
     owner = _type(db, slug)
     to = require_slug(payload.to, what="타입 slug")
     _same_name(slug, to)
     _refuse_reserved(to, what="타입")
     plan = rename.plan_type(db, owner, to, consumers=_core_consumers(db, owner))
     if not payload.apply or plan.errors:
-        if not plan.errors:
-            plan.warnings.extend(rename.residual(db, plan, large_ref=False))
-        db.rollback()
-        return _rename_out(plan, applied=False)
+        return _rename_preview(db, plan, large_ref=False)
+    planview.require_fingerprint(payload.expected_fingerprint, rename.fingerprint(plan))
     _require_core_accepted(db, owner, accepted=payload.accept_core, what="타입 slug 변경")
     snapshot = _snapshot(db, user, reason=f"slug 변경 직전: {slug}")
     rename.apply_edits(db, plan)
@@ -3693,6 +3770,12 @@ def import_schema(
         "세우는 타입 · 관계 종류 · 인터페이스가 그 원천의 것으로 잠긴다(묶음 가져오기의 "
         "`source` 와 같다)",
     ),
+    expected_fingerprint: str | None = Query(
+        default=None,
+        max_length=128,
+        description="미리 본 계획의 `fingerprint` — 주면 지금 계획이 그것과 같을 때만 적용한다"
+        "(다르면 ONTOLOGY-114). 안 주면 지금 계획대로",
+    ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> ImportPlanOut:
@@ -3703,6 +3786,11 @@ def import_schema(
 
     **더하고 고치기만 한다.** 「스키마에 없으니 지운다」 로 만들면 부분 스키마를
     한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.
+
+    적용(`dry_run=false`)에 미리 보기의 `fingerprint` 를 `expected_fingerprint` 로 주면 사람이
+    읽은 그 계획대로만 적용한다 — 그 사이 다른 가져오기 · 화면 수정 · 동기화가 계획을 바꿨으면
+    ONTOLOGY-114. 값이 있는 객체가 2만 건을 넘는 종류 변경은 요청 안에서 값을 세지 않고
+    (경고), 적용은 ONTOLOGY-115 — 「종류 변경」 작업이나 묶음 가져오기 작업으로.
     """
     # **적용 직전의 모습을 남긴다.** 감사 로그는 누가 뭘 했는지는 알려 주지만
     # 되돌려 주지는 않는다. 적용은 **한 번만** 한다 — 예전에는 한 번 적용해 오류를 보고
@@ -3711,14 +3799,26 @@ def import_schema(
     snapshot = None if dry_run else _snapshot(db, user, reason="가져오기")
     try:
         prepared = (
-            importer.plan(db, payload, source=source)
+            importer.plan(db, payload, source=source, in_request=True)
             if dry_run
-            else importer.apply(db, payload, source=source, actor=user)
+            else importer.apply(
+                db,
+                payload,
+                source=source,
+                actor=user,
+                in_request=True,
+                before_apply=_fingerprint_guard(expected_fingerprint),
+                hint=importer.BUNDLE_HINT,
+            )
         )
     except ValueError as caught:
         # **모르는 항목은 거절한다.** 조용히 무시하면 보낸 쪽은 적용된 줄 안다.
         db.rollback()
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
+    except AppError:
+        # 미리 본 것과 다르다(114) · 값이 많은 종류 변경(115) — 남긴 스냅샷도 함께 되돌린다.
+        db.rollback()
+        raise
 
     if snapshot is None or prepared.errors:
         # **미리 보기는 비슷한 정의를 함께 말한다**(ADR 0091) — 적용에서는 늦다.
@@ -3747,6 +3847,16 @@ def import_schema(
 
 
 UNLOCKED_WARNING = planview.UNLOCKED_WARNING
+
+
+def _fingerprint_guard(expected: str | None) -> Callable[[importer.Plan], None]:
+    """정의 가져오기 · 스냅샷 복원의 적용 직전 — 미리 본 지문과 지금 계획(`importer.apply` 가
+    쓰기 전에 센 것)이 같아야 한다."""
+
+    def check(prepared: importer.Plan) -> None:
+        planview.require_fingerprint(expected, planview.fingerprint(prepared))
+
+    return check
 
 
 def _unlocked(
@@ -3925,6 +4035,12 @@ def restore_snapshot(
     dry_run: bool = Query(
         default=False, description="되돌리지 않고 계획만 본다 — 무엇이 바뀌고 무엇을 잃는지"
     ),
+    expected_fingerprint: str | None = Query(
+        default=None,
+        max_length=128,
+        description="미리 본 계획(`dry_run=true`)의 `fingerprint` — 주면 지금 계획이 그것과 "
+        "같을 때만 되돌린다(다르면 ONTOLOGY-114)",
+    ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> ImportPlanOut:
@@ -3934,7 +4050,9 @@ def restore_snapshot(
     곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.
 
     `dry_run` 은 가져오기의 미리 보기와 같은 계획이다(기계가 되돌리기 전에 사람에게 보일
-    자리). 기본이 적용인 것은 화면이 확인 창을 거친 뒤에 부르기 때문이다.
+    자리). 기본이 적용인 것은 화면이 확인 창을 거친 뒤에 부르기 때문이다. 미리 본 계획의
+    `fingerprint` 를 `expected_fingerprint` 로 주면 그 계획대로만 되돌린다(ONTOLOGY-114).
+    값이 많은 종류 변경이 들면 ONTOLOGY-115 — 그 속성을 「종류 변경」 작업으로 먼저.
     """
     row = db.get(OntologySnapshot, snapshot_id)
     if row is None:
@@ -3944,24 +4062,35 @@ def restore_snapshot(
     schema, notes = importer.upgrade_snapshot(row.schema or {})
     if dry_run:
         try:
-            planned = importer.plan(db, schema, keep_reserved=True)
+            planned = importer.plan(db, schema, keep_reserved=True, in_request=True)
         except ValueError as caught:
             db.rollback()
             raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
+        # 지문은 옛 모양 알림(`notes`)을 더하기 전에 — 적용 직전의 계획에는 그것이 없다.
+        mark = planview.fingerprint(planned)
         planned.warnings.extend(notes)
         db.rollback()
-        return _plan_out(planned, applied=False, snapshot_id=None)
+        return _plan_out(planned, applied=False, snapshot_id=None, mark=mark)
 
     # 되돌리기 **직전**도 남긴다 — 되돌린 것을 되돌릴 수 있어야 한다.
     before = _snapshot(db, user, reason=f"복원 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
     try:
         # 누가 되돌렸는지가 값 변환의 이력에도 남는다(종류가 바뀐 뒤의 복원은 값도 변환한다).
         prepared = importer.apply(
-            db, schema, actor=user, reason="스냅샷 복원", keep_reserved=True
+            db,
+            schema,
+            actor=user,
+            reason="스냅샷 복원",
+            keep_reserved=True,
+            in_request=True,
+            before_apply=_fingerprint_guard(expected_fingerprint),
         )
     except ValueError as caught:
         db.rollback()
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
+    except AppError:
+        db.rollback()
+        raise
     prepared.warnings.extend(notes)
     if prepared.errors:
         db.rollback()

@@ -33,6 +33,7 @@ import { ObjectDeleteDialog } from '@/modules/objects/ObjectDeleteDialog'
 import { ObjectHistory } from '@/modules/objects/ObjectHistory'
 import { DocumentPanel } from '@/modules/objects/DocumentPanel'
 import { MentionsPanel } from '@/modules/objects/MentionsPanel'
+import { isStaleEdit } from '@/modules/objects/staleEdit'
 import { ApiError } from '@/shared/api/client'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -88,6 +89,13 @@ function ObjectProfile() {
   const [label, setLabel] = useState('')
   const [description, setDescription] = useState('')
   const [values, setValues] = useState<PropertyValues>({})
+  /**
+   * 폼에 담은 값이 **어느 때의 것인가**(그때의 `updated_at`) — 저장할 때 함께 보낸다. 폼은 칸 전부를
+   * 실어 보내므로, 안 보내면 연 뒤 다른 사람(AI 포함)이 수정한 칸을 연 때의 값으로 되돌린다.
+   */
+  const [base, setBase] = useState<string | null>(null)
+  /** 저장이 「그 사이 다른 사람이 수정했습니다」(OBJECTS-0162)로 거절됐다 — 다시 불러오게 한다. */
+  const [stale, setStale] = useState<Error | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [watchBusy, setWatchBusy] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -138,6 +146,7 @@ function ObjectProfile() {
       setLabel(row.label)
       setDescription(row.description)
       setValues(row.properties as PropertyValues)
+      setBase(row.updated_at)
     }
   }, [row, editing])
 
@@ -188,16 +197,30 @@ function ObjectProfile() {
 
   async function save() {
     setError(null)
+    setStale(null)
     setSaving(true)
     try {
-      await objectApi.update(typeSlug, objectId, { label, description, properties: values })
+      await objectApi.update(typeSlug, objectId, {
+        label,
+        description,
+        properties: values,
+        ...(base ? { base_updated_at: base } : {}),
+      })
       setEditing(false)
       profile.reload()
     } catch (caught) {
-      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+      // 그 사이 누가 수정했다 — 덮지 않았다. 내 입력은 그대로 두고, 다시 불러올지 묻는다.
+      if (isStaleEdit(caught)) setStale(caught)
+      else setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setSaving(false)
     }
+  }
+
+  /** 지금 값을 다시 읽는다 — 편집 중이면 폼도 그 값(과 그때)으로 다시 채워진다(위 효과). */
+  function reloadStale() {
+    setStale(null)
+    profile.reload()
   }
 
   return (
@@ -334,8 +357,29 @@ function ObjectProfile() {
                   view={objectType?.form_view}
                 />
 
+                {stale && (
+                  <div className="space-y-2">
+                    <ErrorNotice error={stale} />
+                    <div className="flex flex-wrap items-center justify-end gap-2 text-sm">
+                      <span className="text-muted-foreground">
+                        다시 불러오면 지금 입력한 값은 사라집니다.
+                      </span>
+                      <Button size="sm" variant="outline" onClick={reloadStale}>
+                        다시 불러오기
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setEditing(false)} disabled={saving}>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setEditing(false)
+                      setStale(null)
+                    }}
+                    disabled={saving}
+                  >
                     취소
                   </Button>
                   <Button onClick={save} disabled={saving || !label.trim()}>
@@ -514,6 +558,7 @@ function ObjectProfile() {
               }}
               refLabels={refNames(row)}
               canEdit={profile.data.can_edit}
+              baseUpdatedAt={row.updated_at}
               onRestored={profile.reload}
               reloadKey={profile.data}
             />

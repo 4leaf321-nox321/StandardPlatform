@@ -5,7 +5,7 @@
  * 두고 EXIF 로 「세워 보라」 고 적는데, 브라우저가 그것을 읽어 스스로 세운다.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, Download } from 'lucide-react'
 
 import { attachmentApi, attachmentPaths } from '@/modules/files/api'
@@ -39,6 +39,9 @@ export function ImageViewer({ images, index, onIndex, onClose }: ImageViewerProp
   const one = images[index]
   const original = useBlobUrl(one ? attachmentPaths.content(one.id) : null)
   const many = images.length > 1
+  // 다운로드의 실패(404 · 401 …)를 보일 자리 — 전에는 거절이 처리되지 않아 아무것도 안 떴다.
+  // 사진마다다 — 다음 사진으로 넘기면 앞 사진의 오류는 표시하지 않는다.
+  const [failed, setFailed] = useState<{ id: string; error: Error } | null>(null)
 
   useEffect(() => {
     if (!many) return
@@ -101,11 +104,20 @@ export function ImageViewer({ images, index, onIndex, onClose }: ImageViewerProp
           )}
         </div>
 
+        <ErrorNotice error={failed?.id === one.id ? failed.error : null} />
         <div className="flex justify-end">
           <Button
             variant="outline"
             size="sm"
-            onClick={() => attachmentApi.download(one.id, one.original_name)}
+            onClick={() => {
+              setFailed(null)
+              attachmentApi.download(one.id, one.original_name).catch((caught: unknown) =>
+                setFailed({
+                  id: one.id,
+                  error: caught instanceof Error ? caught : new Error('알 수 없는 오류'),
+                }),
+              )
+            }}
           >
             <Download className="size-4" />
             원본 다운로드

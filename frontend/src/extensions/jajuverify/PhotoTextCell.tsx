@@ -583,22 +583,34 @@ function PhotoButton({
   )
 }
 
-/** 사진이 아닌 첨부(1단계 이전에 붙은 것) — 이름만, 클릭하면 다운로드. */
+/**
+ * 사진이 아닌 첨부(1단계 이전에 붙은 것) — 이름만, 클릭하면 다운로드. 다운로드의 실패(404 · 401 …)는
+ * 그 아래에 표시한다 — 전에는 거절이 처리되지 않아 아무것도 안 떴다.
+ */
 function FileLinks({ files }: { files: Photo[] }) {
+  const [failed, setFailed] = useState<Error | null>(null)
   if (files.length === 0) return null
   return (
-    <ul className="text-muted-foreground space-y-0.5 text-[11px]">
-      {files.map((one) => (
-        <li key={one.id}>
-          <button
-            type="button"
-            className="hover:text-foreground underline underline-offset-2"
-            onClick={() => void attachmentApi.download(one.id, one.name)}
-          >
-            {one.name}
-          </button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="text-muted-foreground space-y-0.5 text-[11px]">
+        {files.map((one) => (
+          <li key={one.id}>
+            <button
+              type="button"
+              className="hover:text-foreground underline underline-offset-2"
+              onClick={() => {
+                setFailed(null)
+                attachmentApi
+                  .download(one.id, one.name)
+                  .catch((caught: unknown) => setFailed(asError(caught)))
+              }}
+            >
+              {one.name}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <ErrorNotice error={failed} className="text-xs print:hidden" />
+    </>
   )
 }

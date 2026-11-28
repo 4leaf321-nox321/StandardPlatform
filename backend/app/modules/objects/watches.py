@@ -66,20 +66,21 @@ WATCHED_ACTIONS = {
 }
 
 #: 이 일이 같은 커밋에 있으면 그 객체의 선 알림은 안 보낸다 — 객체를 지우면 선도 함께
-#: 끊기는데(`lifecycle.delete_detaching`), 「지워졌습니다」 한 통 뒤에 선마다 한 통씩 더 가면
+#: 끊기는데(`lifecycle.delete_detaching`), 「삭제됐습니다」 한 통 뒤에 선마다 한 통씩 더 가면
 #: 그것은 잡음이다.
 _SWALLOWS_RELATIONS = frozenset({"object.delete", "object.merge"})
 
-#: 무엇이 바뀌었는지 한 줄로. 사람이 알림만 보고 열지 말지를 정한다.
+#: 무엇이 바뀌었는지 한 줄로. 사람이 알림만 보고 열지 말지를 정한다. 말은 용어집의 공식
+#: 동사(수정 · 삭제 · 병합 · 추가 · 해제)다 — 「지워졌습니다 · 값이 바뀌었습니다」 는 구어였다.
 LABELS = {
-    "object.update": "값이 바뀌었습니다",
-    "object.delete": "지워졌습니다",
-    "object.merge": "다른 것과 합쳐졌습니다",
+    "object.update": "값이 수정됐습니다",
+    "object.delete": "삭제됐습니다",
+    "object.merge": "다른 객체에 병합됐습니다",
     # 선의 말은 용어집대로(추가 · 수정 · 해제) — 처음으로 화면에 나가는 문구다.
     "object.relation.add": "관계가 추가됐습니다",
     "object.relation.update": "관계가 수정됐습니다",
     "object.relation.remove": "관계가 해제됐습니다",
-    "object.years.set": "연도가 바뀌었습니다",
+    "object.years.set": "연도가 수정됐습니다",
     "object.attachment.add": "첨부가 추가됐습니다",
     "object.attachment.remove": "첨부가 삭제됐습니다",
 }
@@ -436,7 +437,7 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
                         db,
                         user_id=user_id,
                         kind=notifications.OBJECT_CHANGED,
-                        title=f"{name} — {LABELS.get(one.action, '바뀌었습니다')}",
+                        title=f"{name} — {LABELS.get(one.action, '변경됐습니다')}",
                         # 타입 · 누가 · 무엇이. 빈 조각은 뺀다 — 「부품 ·  · 」 는
                         # 정보가 아니라 잡음이다.
                         body=" · ".join(

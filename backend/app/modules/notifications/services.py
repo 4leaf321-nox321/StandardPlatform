@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -38,7 +39,9 @@ JOB_DONE = "job.done"
 JOB_FAILED = "job.failed"
 """내가 시킨 작업이 실패했다. 같은 이유로 짧게 끝난 것은 안 알린다 — 그 오류는 화면에 떴다."""
 WEBHOOK_FAILED = "webhook.failed"
-"""보내기를 세 번 다 실패해 포기했다. 받는 쪽이 조용히 못 받고 있는 상태다."""
+"""보내기를 세 번 다 실패해 포기했다. 받는 쪽이 조용히 못 받고 있는 상태다. 받는 쪽이 죽어
+있으면 밀린 전송이 1분마다 하나씩 포기하므로 **웹훅 하나에 `NOTICE_EVERY` 안에 한 번만** 알린다
+— 건마다 알리던 때는 시스템 관리자마다 1분에 하나씩 쌓였다(2026-11-28 점검)."""
 METRIC_ALERT = "metric.alert"
 """내 경보에 새 결과가 나왔다(ADR 0016). **처음 보는 결론만** — 순차 검정의 「나쁨」 은 한 번
 서면 계속 서 있어서, 그것을 계산마다 알리면 같은 알림이 날마다 온다."""
@@ -51,6 +54,20 @@ FILES_CLEANUP_HALTED = "files.cleanup_halted"
 """첨부 저장소의 자동 정리가 저장소 대부분을 지우려 해 멈췄다(`files/gc.halt`) — 다른 DB 의
 저장소를 보고 있을 수 있다. 사람이 정리할 때까지 차례마다 멈추므로 **하루에 한 번만** 알린다.
 로그에만 남기면 고아가 쌓이는 것도, 저장소가 남의 것인 것도 아무도 모른다."""
+WORKER_STEP_FAILED = "worker.step_failed"
+"""작업 워커의 살림살이 한 가지(멎은 작업 되살리기 · 오래된 기록 정리 · 웹훅 다시 넣기 등)가
+계속 실패한다. 워커는 그 일만 미루고 작업은 계속 돌린다 — 로그에만 남기면 정리가 몇 주째 멎은
+것을 디스크가 찬 날 안다. 같은 일이면 **`NOTICE_EVERY` 안에 한 번만.**"""
+GRAPH_AUTO_PAUSED = "graph.auto_paused"
+"""지식 그래프의 자동 계산(지도 · 밤 그래프 계산)이 지난 작업의 실패로 멈췄다(ADR 0049). 사람이
+다시 누를 때까지 안 돌므로, 알리지 않으면 지도가 몇 주째 그대로인 것을 아무도 모른다. 워커가
+멈추는 사이 끊긴 작업(재시작 · 갱신)은 실패로 안 센다. 종류마다 **`NOTICE_EVERY` 안에 한
+번만.**"""
+
+NOTICE_EVERY = timedelta(hours=20)
+"""같은 일을 되풀이해 알리지 않는 간격 — 멈춘 상태가 사람이 고칠 때까지 차례마다 다시 서므로,
+하루에 한 번쯤이면 잊지 않게 하면서 종을 잡음으로 만들지 않는다(`files/gc.HALT_NOTICE_EVERY` 와
+같은 생각)."""
 
 
 def notify(
@@ -95,6 +112,40 @@ def notify_system_admins(
     for user_id in admins:
         notify(db, user_id=user_id, kind=kind, title=title, body=body, link=link)
     return len(admins)
+
+
+def notify_system_admins_once(
+    db: Session,
+    *,
+    kind: str,
+    title: str,
+    body: str | None = None,
+    link: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """`notify_system_admins` 와 같되 **같은 알림(종류 · 제목 · 링크)이 `NOTICE_EVERY` 안에
+    이미 갔으면 안 보낸다.** 보냈으면 참. 부르는 쪽이 커밋한다.
+
+    멈춘 상태(받는 쪽이 죽은 웹훅 · 계속 실패하는 정리 · 실패로 멈춘 자동 계산)는 사람이 고칠
+    때까지 차례마다 다시 선다 — 그때마다 알리면 1분에 하나씩 쌓이고, 사람은 그 종류를 통째로
+    지운다. 무엇이 「같은 알림」 인지는 부르는 쪽이 제목 · 링크로 정한다(웹훅은 링크에 웹훅 id
+    를 싣는다 — 이름은 겹칠 수 있다). 시각은 DB 에 남은 알림으로 본다 — 워커를 다시 띄워도, 두
+    서버의 워커가 함께 봐도 한 번이다."""
+    since = (now or datetime.now(UTC)) - NOTICE_EVERY
+    recent = db.scalar(
+        select(Notification.id)
+        .where(
+            Notification.kind == kind,
+            Notification.title == title,
+            Notification.link.is_not_distinct_from(link),
+            Notification.created_at >= since,
+        )
+        .limit(1)
+    )
+    if recent is not None:
+        return False
+    notify_system_admins(db, kind=kind, title=title, body=body, link=link)
+    return True
 
 
 def unread_count(db: Session, user_id: uuid.UUID) -> int:

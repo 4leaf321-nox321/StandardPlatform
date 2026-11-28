@@ -1066,7 +1066,16 @@ export default function ReviewPage() {
           }
           onDownload={
             pending.job
-              ? () => void jobsApi.download(pending.job!, '검토함-전부-미리보기.csv')
+              ? () => {
+                  // 실패(404 · 401 …)는 창의 오류 자리에 — 전에는 거절이 처리되지 않아 아무것도
+                  // 안 떴다.
+                  setError(null)
+                  jobsApi
+                    .download(pending.job!, '검토함-전부-미리보기.csv')
+                    .catch((caught: unknown) =>
+                      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+                    )
+                }
               : undefined
           }
           onClose={() => {

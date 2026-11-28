@@ -67,7 +67,7 @@ export function ReviewPlanDialog({
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <Badge>적용 {going.toLocaleString()}건</Badge>
           {plan.rows > 0 && (
-            <span className="text-muted-foreground">손대는 줄 {plan.rows.toLocaleString()}</span>
+            <span className="text-muted-foreground">변경하는 줄 {plan.rows.toLocaleString()}</span>
           )}
           {plan.counts.blocked > 0 && (
             <Badge variant="destructive">막힘 {plan.counts.blocked.toLocaleString()}건</Badge>
@@ -129,7 +129,7 @@ export function ReviewPlanDialog({
               아래는 앞의 {plan.outcomes.length.toLocaleString()}건입니다.
             </span>
             <Button size="xs" variant="outline" onClick={onDownload}>
-              결정 전부 받기(CSV)
+              결정 전부 다운로드(CSV)
             </Button>
           </p>
         )}

@@ -235,6 +235,15 @@ def test_표준_SPARQL_창구는_사본에_묻고_JSON_결과를_준다(
     ):
         refused = client.get("/api/rdf/sparql", params={"query": bad}, headers=admin.headers)
         assert refused.status_code == 409, bad
+    # 차단어가 글자 · IRI 안에 있을 뿐인 읽기는 통과한다(2026-11-28 — 전에는 409).
+    for fine in (
+        "SELECT ?l WHERE { ?x <http://www.w3.org/2000/01/rdf-schema#label> ?l "
+        'FILTER(CONTAINS(STR(?l), "Drop")) }',
+        'ASK { ?x <http://www.w3.org/2000/01/rdf-schema#label> "Load case 1"@ko }',
+        "SELECT ?x WHERE { ?x <http://example.org/load/p> ?o }",
+    ):
+        passed = client.get("/api/rdf/sparql", params={"query": fine}, headers=admin.headers)
+        assert passed.status_code == 200, (fine, passed.text)
     assert client.get("/api/rdf/sparql", params={"query": query}).status_code == 401
     # 일반 사용자도 묻는다(보는 범위가 전부인 설치).
     assert (

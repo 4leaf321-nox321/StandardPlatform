@@ -210,7 +210,7 @@ def test_관계가_생기고_바뀌고_끊기면_두_끝을_지켜보는_사람�
 def test_객체를_지우며_끊은_선은_다른_끝에만_알린다(
     client: TestClient, admin: Signed, manager: Signed
 ) -> None:
-    """지운 객체를 지켜보는 사람은 「지워졌습니다」 한 통이면 된다 — 선마다 한 통씩 더 가면
+    """지운 객체를 지켜보는 사람은 「삭제됐습니다」 한 통이면 된다 — 선마다 한 통씩 더 가면
     잡음이다. 다른 끝을 지켜보는 사람에게는 그 선이 끊어진 일이다."""
     part = _make_type(client, admin, label="부품")
     kind = _make_relation(client, admin, "uses", label="씀")
@@ -228,7 +228,7 @@ def test_객체를_지우며_끊은_선은_다른_끝에만_알린다(
     got = notifications_of(client, manager, "object.changed")
     assert sorted(one["title"] for one in got[: len(got) - before]) == [
         "남는 부품 — 관계가 해제됐습니다",
-        "옛 부품 — 지워졌습니다",
+        "옛 부품 — 삭제됐습니다",
     ]
 
 

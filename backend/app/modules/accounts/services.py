@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import USER_STATUSES, User
@@ -144,24 +145,45 @@ def list_accounts(db: Session, *, status: str | None, limit: int, offset: int) -
     )
 
 
+#: 가입 신청의 답 — 새로 만들었든, 아이디가 이미 있어 아무것도 안 했든 **같은 말**이다.
+SIGNUP_RECEIVED = (
+    "가입 신청을 받았습니다 — 시스템 관리자가 승인하면 로그인할 수 있습니다. "
+    "이미 있는 아이디로는 새 계정을 만들지 않습니다(비밀번호를 잊었으면 시스템 "
+    "관리자에게 비밀번호 초기화를 요청하세요)."
+)
+
+
 def signup(
     db: Session, *, email: str, password: str, display_name: str, workspace_slug: str
-) -> User:
-    """가입 신청. 승인 전까지는 로그인할 수 없다(status=pending)."""
-    normalized = auth_services.normalize_login_id(email)
-    if db.scalar(select(User).where(User.email == normalized)) is not None:
-        raise Conflict(code("ACCOUNTS", 2), "이미 있는 아이디입니다.")
+) -> User | None:
+    """가입 신청. 승인 전까지는 로그인할 수 없다(status=pending). 만든 계정, 아이디가 이미
+    있으면 None — **부르는 쪽은 둘을 같은 답으로 낸다**(`SIGNUP_RECEIVED`).
 
+    로그인 없이 열린 자리다 — 예전에는 있는 아이디에 409 「이미 있는 아이디입니다」 로 답해
+    아무나 아이디가 있는지를 물어볼 수 있었다(2026-11-28). 그래서 있든 없든 **같은 일을 같은
+    차례로** 한다: 부서를 먼저 확인하고(없는 부서는 둘 다 같은 404 — 있는 아이디를 먼저
+    보면 차례로 갈린다), 비밀번호를 해시한다(bcrypt 한 번 — 응답 시간의 대부분이다. 로그인의
+    `authenticate` 가 없는 계정에 해시를 견주는 것과 같은 까닭). 있는 아이디면 그 해시를
+    버린다."""
+    normalized = auth_services.normalize_login_id(email)
     workspace = workspace_by_slug(db, workspace_slug)
+    password_hash = security.hash_password(password)
+    if db.scalar(select(User.id).where(User.email == normalized)) is not None:
+        return None
     user = User(
         email=normalized,
-        password_hash=security.hash_password(password),
+        password_hash=password_hash,
         display_name=clean(display_name),
         status="pending",
         requested_workspace_id=workspace.id,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 같은 아이디의 신청이 같은 때 둘 — 먼저 들어간 것이 있다. 있는 아이디와 같은 답.
+        db.rollback()
+        return None
     db.refresh(user)
     return user
 

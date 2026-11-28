@@ -427,6 +427,48 @@ def test_SPARQL_은_표기를_바꿔도_바깥을_부르지_않는다(
     assert called == []
 
 
+def test_SPARQL_차단어는_글자_IRI_주석_안에서는_막지_않는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """차단어(`drop` · `load` …)를 질의 전체에서 찾던 때는 `CONTAINS(STR(?l), "Drop")` ·
+    이름 `"Load case 1"@ko` · IRI 마디 `/load/` 같은 **읽기**가 409 로 막혔다(2026-11-28).
+    글자 · IRI · 주석을 지운 뒤에 찾는다 — 쓰기 · 바깥 호출은 그대로 막힌다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    _make_object(client, admin, part, key="L-1", label="Load case 1")
+    _make_object(client, admin, part, key="D-1", label="Drop 시험")
+
+    def ask(text: str) -> Any:
+        got = client.post(
+            "/api/rdf/query", json={"query": text, "types": [part]}, headers=admin.headers
+        )
+        return got.status_code, got.json()
+
+    status, body = ask(
+        f"SELECT ?k WHERE {{ ?x a sp:{part} ; rdfs:label ?l ; dcterms:identifier ?k "
+        'FILTER(CONTAINS(STR(?l), "Drop")) }'
+    )
+    assert status == 200, body
+    assert [row["k"] for row in body["rows"]] == ["D-1"]
+    status, body = ask(
+        f'SELECT ?k WHERE {{ ?x a sp:{part} ; rdfs:label "Load case 1"@ko ; '
+        "dcterms:identifier ?k }  # with a comment: delete"
+    )
+    assert status == 200, body
+    assert [row["k"] for row in body["rows"]] == ["L-1"]
+    status, body = ask("SELECT ?x WHERE { ?x <http://example.org/load/drop> ?o }")
+    assert status == 200, body
+    assert body["rows"] == []
+
+    for refused in (
+        "SELECT * WHERE { SERVICE <http://example.org/load/> { ?s ?p ?o } }",
+        "INSERT { ?s ?p 1 } WHERE { SELECT ?s ?p WHERE { ?s ?p ?o } }",
+        'SELECT * WHERE { ?s ?p "load" } LOAD <http://example.org/x>',
+    ):
+        status, body = ask(refused)
+        assert status == 409, refused
+        assert body["error"]["code"] == code("RDF", 2), refused
+
+
 def test_SPARQL_그래프는_범위_밖_기록이_늘어도_다시_세우지_않고_범위_안이_바뀌면_다시_세운다(
     client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:

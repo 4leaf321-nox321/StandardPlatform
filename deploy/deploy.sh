@@ -653,9 +653,19 @@ run_migrations() {
 #      트랜잭션이라 실패했으면 DB 는 그대로다.
 #   3) 내리기 **전에** — 이번 갱신의 마이그레이션을 **지금 DB 부터** 세어 보이고(서버는 판을 건너뛰어 온다),
 #      데이터를 지우는 것이 있으면 최근 백업을 보이고 묻는다(`update_migration_notice`).
-UPDATE_DOWN=0          # 서비스를 내렸고 아직 다시 켜지 않았다
+#   4) 내리기 **전에** — 이 설치의 타이머(동기화 · 지표 · 백업 · 그래프 사본 · SPARQL 사본)를 멈추고, 도는 것이
+#      있으면 끝나기를 기다린다(`update_pause_timers` · `update_wait_jobs`). 03:00 백업의 pg_dump 가 표마다
+#      AccessShareLock 을 쥔 채 돌면 마이그레이션의 ALTER TABLE 이 그 뒤에서 서비스를 내린 채 기다렸다(2026-11-28
+#      점검). 마이그레이션도 잠금을 60초까지만 기다린다(`migrations/env.py` 의 lock_timeout) — 넘으면 실패해 2) 로.
+#      멈춘 타이머는 **끝나는 모든 길에서** 되살린다(`update_on_exit` — 성공 · 실패 · Ctrl-C · SIGTERM · ssh 끊김).
+#   5) 다시 켠 뒤 **준비됨(/api/health/ready)이 설 때까지** 되돌리기를 쥔다. 예전에는 켜자마자 덫을 풀고
+#      `health_check || true` 라, 기동하다 죽는 판 · 503 인 판도 「[OK] 갱신 완료」 를 찍고 내려간 채 남았다.
+UPDATE_DOWN=0          # 서비스를 내렸고 아직 준비됨을 못 봤다
 UPDATE_FROM=""         # 지금 깔린 판(update_preflight 가 읽는다)
 UPDATE_PREV_MOVED=0    # 직전 SIF 를 app.sif.prev 로 옮겼다
+UPDATE_MIGRATIONS=""   # 이번 갱신의 마이그레이션 수(update_migration_notice) — 모르면 빈 값
+UPDATE_MIGRATED=0      # 마이그레이션을 적용했다(되돌려도 DB 는 새 구조)
+UPDATE_PAUSED_TIMERS=()  # update 가 멈춘 타이머(다시 켤 것)
 
 # 지금 깔린 판 — 깔린 SIF 가 들고 있는 BUILD_INFO(`/api/health` 의 version 과 같다). 앱이 꺼져 있어도 읽는다.
 installed_version() {
@@ -723,6 +733,7 @@ update_migration_notice() {
     fi
     count="${BASH_REMATCH[1]}"
     drops="${BASH_REMATCH[2]}"
+    UPDATE_MIGRATIONS="$count"
     if (( count == 0 )); then
         info "DB 마이그레이션: 없음 — 이번 갱신은 DB 구조를 안 바꿉니다(지금 $current)"
         return 0
@@ -745,6 +756,63 @@ update_migration_notice() {
     err "갱신을 멈췄습니다 — 서비스는 그대로 돌고 있습니다. 백업을 확인한 뒤 다시 치세요. 묻지 않고 가려면: sudo CONFIRM_DROPS=1 APP_SLUG=$APP_SLUG ./deploy.sh update"
 }
 
+# 이 설치의 주기 일 — 타이머로 도는 oneshot 서비스(이름 = <이름>.service · <이름>.timer).
+update_timer_names() {
+    printf '%s\n' "$SYNC_SERVICE_NAME" "$METRICS_SERVICE_NAME" "$BACKUP_SERVICE_NAME" \
+        "$GRAPHCOPY_SERVICE_NAME" "$RDFCOPY_SERVICE_NAME"
+}
+
+# 켜져 있는 타이머를 멈추고 기억한다 — 다시 켠 뒤(되돌린 뒤에도) `update_resume_timers` 가 되살린다.
+update_pause_timers() {
+    local one
+    UPDATE_PAUSED_TIMERS=()
+    while read -r one; do
+        [[ -n "$one" ]] || continue
+        [[ "$(systemctl is-active "$one.timer" 2>/dev/null || true)" == "active" ]] || continue
+        systemctl stop "$one.timer" && UPDATE_PAUSED_TIMERS+=("$one")
+    done < <(update_timer_names)
+    if (( ${#UPDATE_PAUSED_TIMERS[@]} )); then
+        info "타이머를 잠시 멈춤(다시 켠 뒤 되살린다): ${UPDATE_PAUSED_TIMERS[*]}"
+    fi
+    return 0
+}
+
+# 멈춘 타이머를 되살린다 — **그사이 끈(disable) 것은 켜지 않는다**(setup_* 가 설정을 따라 끈 것이다).
+update_resume_timers() {
+    local one
+    for one in ${UPDATE_PAUSED_TIMERS[@]+"${UPDATE_PAUSED_TIMERS[@]}"}; do
+        [[ "$(systemctl is-enabled "$one.timer" 2>/dev/null || true)" == "enabled" ]] || continue
+        systemctl start "$one.timer" 2>/dev/null \
+            || warn "$one.timer 를 다시 켜지 못했습니다 — sudo systemctl start $one.timer"
+    done
+    UPDATE_PAUSED_TIMERS=()
+    return 0
+}
+
+# 주기 일이 **지금 돌고 있으면** 끝나기를 기다린다(UPDATE_WAIT_SECONDS, 기본 300초) — 마이그레이션이 없으면
+# 안 기다린다(잠그는 문장이 없다). 끝나지 않으면 타이머를 되살리고 **내리기 전에** 멈춘다(서비스는 그대로).
+update_wait_jobs() {
+    [[ "$UPDATE_MIGRATIONS" == "0" ]] && return 0
+    local limit="${UPDATE_WAIT_SECONDS:-300}" waited=0 one state busy=()
+    while :; do
+        busy=()
+        while read -r one; do
+            [[ -n "$one" ]] || continue
+            state="$(systemctl is-active "$one.service" 2>/dev/null || true)"
+            [[ "$state" == "active" || "$state" == "activating" || "$state" == "reloading" ]] && busy+=("$one")
+        done < <(update_timer_names)
+        (( ${#busy[@]} )) || return 0
+        if (( waited >= limit )); then
+            update_resume_timers
+            rm -f "$INSTALL_DIR/app.sif.new"
+            err "지금 ${busy[*]} 이(가) 돌고 있습니다(${limit}초 기다림) — DB 를 쥔 채로는 마이그레이션이 잠금을 기다리다 멈춥니다. 서비스는 그대로 돌고 있습니다. 끝난 뒤 다시 치거나, 멈춘 뒤 치세요: sudo systemctl stop ${busy[*]/%/.service}  (더 기다리려면 sudo UPDATE_WAIT_SECONDS=<초> ./deploy.sh update)"
+        fi
+        (( waited == 0 )) && info "도는 일이 끝나기를 기다립니다(최대 ${limit}초): ${busy[*]}"
+        sleep 5
+        waited=$((waited + 5))
+    done
+}
+
 # 직전 SIF 를 남기고 새 SIF 로 간다. **같은 판을 다시 까는 것이면 app.sif.prev 를 덮지 않는다** —
 # 연달아 두 번 쳐도 그 앞 판으로 되돌릴 자리가 남는다.
 swap_sif() {
@@ -758,7 +826,7 @@ swap_sif() {
 
 # 서비스를 내린 뒤 실패하면(EXIT 덫) — 직전 SIF 로 되돌리고 다시 켠다. 성공한 뒤에는 아무것도 안 한다.
 update_rollback() {
-    local code=$?
+    local code="${1:-$?}"  # update_on_exit 가 넘긴다 — 덫으로 바로 불리면 $?
     [[ $UPDATE_DOWN -eq 1 && $code -ne 0 ]] || return 0
     UPDATE_DOWN=0
     warn "갱신이 서비스를 내린 뒤 실패했습니다 — 직전 판${UPDATE_FROM:+($UPDATE_FROM)}으로 되돌리고 다시 켭니다"
@@ -766,11 +834,39 @@ update_rollback() {
         mv -f "$INSTALL_DIR/app.sif.prev" "$INSTALL_DIR/app.sif"
     fi
     rm -f "$INSTALL_DIR/app.sif.new"
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true  # 새 판이 떠 있었으면(준비됨을 못 봤다) 내린다
     systemctl start "$SERVICE_NAME" || warn "$SERVICE_NAME 을 다시 켜지 못했습니다 — journalctl -u $SERVICE_NAME -n 50"
     systemctl start "$WORKER_SERVICE_NAME" 2>/dev/null || true
-    health_check >/dev/null || true
-    warn "되돌렸습니다. 마이그레이션은 한 트랜잭션이라 실패했으면 DB 는 그대로입니다 — 위의 오류를 고친 뒤 다시 update 하세요."
+    update_resume_timers
+    health_check >/dev/null || warn "되돌린 판도 아직 준비되지 않았습니다 — sudo ./deploy.sh status · journalctl -u $SERVICE_NAME -n 50"
+    if (( UPDATE_MIGRATED )); then
+        warn "되돌렸습니다. **마이그레이션은 적용된 채입니다** — 옛 판이 새 DB 구조 위에서 돕니다(칸 · 표를 더한 것은 대개 괜찮다). 위의 오류를 고친 뒤 다시 update 하세요. 데이터를 지우는 마이그레이션이 있었으면 README 3절(되돌리기)을 보세요."
+    else
+        warn "되돌렸습니다. 마이그레이션은 한 트랜잭션이라 실패했으면 DB 는 그대로입니다 — 위의 오류를 고친 뒤 다시 update 하세요. 「lock timeout」 으로 멈췄으면 다른 접속(백업의 pg_dump · 긴 작업 · 이중화의 상대 서버)이 표를 쥐고 있던 것입니다 — 그것이 끝난 뒤 다시 치세요."
+    fi
     exit "$code"
+}
+
+# update 가 끝나는 **모든 길**(성공 · 실패 · Ctrl-C · SIGTERM · ssh 끊김)에서 — 서비스를 내린 뒤 실패했으면
+# 되돌리고(update_rollback), 어느 길이든 멈춘 타이머를 되살린다. 예전에는 타이머를 멈춘 뒤 되돌리기 덫을 걸기
+# 전에(도는 백업을 기다리는 300초 · 워커가 하던 작업을 끝내는 2분) 끊기거나, 덫을 푼 뒤 setup_* 에서 실패하면
+# 타이머가 멈춘 채(켜 둠은 그대로) 남아 밤 백업이 다음 update · 재부팅까지 안 돌았다(2026-11-28 검토).
+# 덫 안에서는 멈추지 않는다(set +e) — ssh 가 끊겨 글을 못 찍어도 되살리기는 끝까지 간다.
+update_on_exit() {
+    local code=$?
+    set +e
+    trap - INT TERM HUP
+    update_rollback "$code"
+    update_resume_timers
+    exit "$code"
+}
+
+# 덫을 건다 — 타이머를 멈추기 **전에.** 신호는 exit 로 바꿔 EXIT 덫이 돌게 한다(130 · 143 · 129).
+update_arm_exit() {
+    trap update_on_exit EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
 }
 
 # **임시 파일 상한을 앱이 요청마다 걸 수 있게 한다**(ADR 0048). 정렬 · 해시가 디스크로 넘어간 임시 파일에
@@ -1576,8 +1672,9 @@ health_check() {
     # 마이그레이션이 덜 올라가도 200 이라, 여기가 「응답함」 이라 말하고 사람은 화면의 500 으로 먼저
     # 알았다. 503 이면 본문(무엇이 아닌지)을 보인다. 준비됨이 없는 옛 판(되돌린 SIF — 404)이면
     # 살아 있음으로 본다.
-    local base="http://127.0.0.1:$APP_PORT/api/health" got code body last=""
-    for _ in $(seq 1 10); do
+    # $1 = 몇 번 물을까(대략 초, 기본 10) — update 는 되돌리기를 걸고 더 오래 기다린다.
+    local base="http://127.0.0.1:$APP_PORT/api/health" got code body last="" tries="${1:-10}"
+    for _ in $(seq 1 "$tries"); do
         got="$(curl -sS --max-time 4 -w $'\n%{http_code}' "$base/ready" 2>/dev/null)" || got=""
         code="${got##*$'\n'}"
         body="${got%$'\n'*}"
@@ -1725,29 +1822,39 @@ cmd_update() {
     # **내리기 전에** — 판이 내려가지 않나 · 새 SIF 를 옆에 놓고 · 그 이미지가 지금 DB 를 아나. 여기서
     # 멈추면 서비스는 그대로 돈다(위의 「update 의 안전장치」).
     update_preflight
+    # 여기부터 끝나는 모든 길에서 멈춘 타이머를 되살리고, 서비스를 내린 뒤면 되돌린다(update_on_exit).
+    update_arm_exit
+    # **내리기 전에** — 타이머를 멈추고 도는 주기 일(백업의 pg_dump 등)이 끝나기를 기다린다(위의 4).
+    update_pause_timers
+    update_wait_jobs
 
+    # 여기부터 준비됨을 볼 때까지 실패하면(끊겨도) 직전 SIF 로 되돌리고 다시 켠다 — **내리기 전에** 세운다.
+    # 앱을 내리고 워커가 하던 작업을 끝내기를 기다리는 동안(최대 2분) 끊기면 앱이 내려간 채 남았다.
+    UPDATE_DOWN=1
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
     # 워커도 함께 — 옛 코드가 새 마이그레이션 위에서 작업을 집으면 안 된다. 하던 작업은
     # 끝까지 기다린다(TimeoutStopSec). 못 끝낸 것은 다른 워커가 되살린다.
     systemctl stop "$WORKER_SERVICE_NAME" 2>/dev/null || true
-    # 여기부터 다시 켜기 전까지 실패하면 직전 SIF 로 되돌리고 다시 켠다.
-    UPDATE_DOWN=1
-    trap update_rollback EXIT
 
     # **직전 이미지를 남긴다.** 롤백은 이 파일을 되돌리는 것뿐이다. 새 SIF 는 이미 옆에 있어 옮기기만
     # 한다 — 서비스가 내려가 있는 동안 1~3GB 를 복사하지 않는다.
     swap_sif
     run_migrations
+    UPDATE_MIGRATED=1
     # 앱이 뜨기 전에 — 앱은 기동 뒤 처음 읽을 때 한 번 걸어 보고 그 답을 기억한다.
     grant_temp_limit
     # 템플릿(경로·하드닝)이 바뀌었을 수 있으므로 다시 렌더한다.
     render_service_unit
 
     systemctl start "$SERVICE_NAME"
+    # **준비됨이 설 때까지 되돌리기를 쥔다**(위의 5) — 기동하다 죽거나 503 이면 직전 판으로 되돌리고 0 이 아닌
+    # 값으로 끝난다. 기다리는 시간은 UPDATE_READY_SECONDS(기본 120 — 큰 설치는 처음 기동이 느리다).
+    info "준비됨(/api/health/ready)을 기다립니다 — 최대 약 ${UPDATE_READY_SECONDS:-120}초"
+    health_check "${UPDATE_READY_SECONDS:-120}" \
+        || err "새 판($VERSION)이 준비되지 않았습니다 — 직전 판으로 되돌립니다. 원인: journalctl -u $SERVICE_NAME -n 80"
+    # 되돌리기는 여기까지 — 덫은 끝까지 둔다(뒤의 setup_* 가 실패해도 · 끊겨도 타이머는 되살린다).
     UPDATE_DOWN=0
-    trap - EXIT
-    health_check || true
 
     setup_worker
     # MCP 도 함께 갱신(소스 교체 + 유닛 재렌더 + 재기동). 비치명적.
@@ -1757,6 +1864,8 @@ cmd_update() {
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
     setup_graphdb || warn "그래프 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
     setup_rdfstore || warn "SPARQL 사본 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh update"
+    # 위의 setup_* 가 다시 건 것 말고도 — update 가 멈춘 타이머를 되살린다(끈 것은 그대로).
+    update_resume_timers
     # 앱이 뜬 **뒤에** — 처음이면 1~3GB 를 받는다. 이미 있으면 확인만.
     setup_embedding || warn "임베딩 모델 설정 건너뜀(비치명적) — 고친 뒤: sudo ./deploy.sh ollama"
     setup_rerank || warn "리랭커 설정 건너뜀(비치명적 — 검색은 거리로만 고른다) — 고친 뒤: sudo ./deploy.sh rerank"
@@ -1881,7 +1990,11 @@ cmd_status() {
         echo
         echo "== 백업 타이머 ($BACKUP_SERVICE_NAME.timer → $BACKUP_HOST_DIR) =="
         systemctl --no-pager list-timers "${BACKUP_SERVICE_NAME}.timer" || true
-        [[ -f "$BACKUP_HOST_DIR/LAST_BACKUP.txt" ]] && head -n1 "$BACKUP_HOST_DIR/LAST_BACKUP.txt"
+        if [[ -f "$BACKUP_HOST_DIR/LAST_BACKUP.txt" ]]; then
+            head -n1 "$BACKUP_HOST_DIR/LAST_BACKUP.txt"
+            # 첨부 미러의 경고(삭제를 건너뜀 등 — backup.sh)도 함께.
+            grep -E '^경고' "$BACKUP_HOST_DIR/LAST_BACKUP.txt" || true
+        fi
     fi
     echo
     ha_status

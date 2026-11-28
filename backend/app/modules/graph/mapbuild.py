@@ -1129,7 +1129,7 @@ def _last_finished(db: Session) -> Any:
     from app.modules.jobs.models import Job
 
     return db.execute(
-        select(Job.kind, Job.status, Job.finished_at, Job.created_at)
+        select(Job.kind, Job.status, Job.error, Job.finished_at, Job.created_at)
         .where(Job.kind.in_(KINDS), Job.status.in_(("done", "failed", "cancelled")))
         .order_by(Job.created_at.desc())
         .limit(1)
@@ -1154,6 +1154,45 @@ def _last_laid(db: Session, layout: MapLayout) -> datetime:
     return max(layout.created_at, finished) if finished is not None else layout.created_at
 
 
+def _stopped_by(last: Any) -> bool:
+    """이 끝남이 자동 계산을 멈추나 — 전체 배치 · 덧붙임의 실패 · 취소. **워커가 멈추는 사이
+    끊긴 것**(재시작 · 갱신, `jobs.services.INTERRUPTED`)은 멈추지 않는다: 계산의 실패가 아니라
+    「돌리라」 는 마지막 결정이 끊긴 것이다. 진짜 실패 뒤에 사람이 「전체 다시 배치」 를
+    눌렀는데 재시작이 그것을 끊었으면 그 누름이 마지막 결정이다 — 끊긴 것을 건너뛰고 앞의
+    실패를 다시 보면 사람이 다시 누른 일이 재시작 한 번에 지워진다(2026-11-28 검토). 집계의
+    실패는 멈추지 않는다."""
+    from app.modules.jobs import services as job_services
+
+    return (
+        last is not None
+        and last.status != "done"
+        and last.kind != "graph_map_count"
+        and not job_services.interrupted(last.error)
+    )
+
+
+def _notice_paused(db: Session, reason: str) -> None:
+    """**실패로 멈췄으면 시스템 관리자에게 알린다** — `NOTICE_EVERY` 안에 한 번. 꺼 둔 것 ·
+    사람이 취소한 것은 안 알린다(사람이 한 일이다). 알렸으면 커밋한다.
+
+    멈춘 까닭은 지도 화면에만 적혀, 그 화면을 안 여는 동안 지도는 몇 주째 그대로였다."""
+    from app.modules.notifications import services as notifications
+
+    last = _last_finished(db)
+    if not get_settings().graph_map_auto or not _stopped_by(last) or last.status != "failed":
+        return
+    error = (last.error or "").strip()
+    sent = notifications.notify_system_admins_once(
+        db,
+        kind=notifications.GRAPH_AUTO_PAUSED,
+        title="지식 그래프 지도의 자동 계산을 멈췄습니다",
+        body=reason + (f" 오류: {error[:300]}" if error else ""),
+        link="/graph",
+    )
+    if sent:
+        db.commit()
+
+
 def paused(db: Session) -> str | None:
     """타이머가 지도 작업을 **넣지 않는** 까닭(ADR 0049) — 넣으면 None.
 
@@ -1162,14 +1201,16 @@ def paused(db: Session) -> str | None:
       설치에서 서버를 끝없이 버겁게 한다(운영의 고장 추적 DB: 강제 종료 → 판이 없음 → 다시
       넣음). 사람이 「전체 다시 배치」 를 눌러 끝나면 다시 돈다.
 
-    집계의 실패는 멈추지 않는다 — `COUNT_RETRY` 뒤에 다시 본다(`schedule`)."""
+    집계의 실패는 멈추지 않는다 — `COUNT_RETRY` 뒤에 다시 본다(`schedule`). **워커가 멈추는
+    사이 끊긴 작업**(재시작 · 갱신 — `jobs.services.INTERRUPTED`)도 안 센다: 그것을 실패로 세던
+    때는 `deploy.sh update` 한 번이 사람이 다시 누를 때까지 지도를 세웠다(2026-11-28 점검)."""
     if not get_settings().graph_map_auto:
         return (
             "자동 계산이 비활성입니다(GRAPH_MAP_AUTO=false) — 시스템 관리자의 「전체 다시 "
             "배치」 만 돕니다."
         )
     last = _last_finished(db)
-    if last is not None and last.status != "done" and last.kind != "graph_map_count":
+    if _stopped_by(last):
         what = "실패했습니다" if last.status == "failed" else "취소됐습니다"
         label = _KIND_LABEL.get(last.kind, last.kind)
         return (
@@ -1195,7 +1236,9 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
         select(Job.id).where(Job.kind.in_(KINDS), Job.status.in_(("queued", "running")))
     ):
         return None
-    if paused(db) is not None:
+    reason = paused(db)
+    if reason is not None:
+        _notice_paused(db, reason)
         return None
     now = now or datetime.now(UTC)
     layout = current(db)
@@ -1222,6 +1265,7 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
                 last is not None
                 and last.kind == "graph_map_count"
                 and last.status != "done"
+                and not job_services.interrupted(last.error)  # 재시작에 끊긴 집계는 곧 다시
                 and now - (last.finished_at or last.created_at) < COUNT_RETRY
             ):
                 kind = None

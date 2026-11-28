@@ -8,6 +8,10 @@
  * 값이 많은 키(2만 건 넘음)는 적용이 ONTOLOGY-0105 로 돌아온다 — 그때 작업으로 계획을 다시 세우고,
  * 다음 「변경」 은 그 작업을 적용한다(지문이 「미리 본 것과 같은가」 를 지킨다). 종류 변경과 같은
  * 무늬다(`RetypeDialog`).
+ *
+ * 요청 안에서 적용할 때도 **미리 본 계획의 지문**(`fingerprint`)을 싣는다 — 계획을 본 뒤 다른
+ * 사람 · 동기화가 정의 · 객체를 바꿨으면 서버가 ONTOLOGY-0114 로 막고(아무것도 안 바꿈), 이 창은
+ * 계획을 비워 다시 보게 한다. 안 실으면 사람이 읽지 않은 계획이 그대로 적용됐다.
  */
 
 import { useState } from 'react'
@@ -70,7 +74,9 @@ export function RenameDialog({
   }
 
   function body(apply: boolean): RenameRequest {
-    return { to: to.trim(), apply, accept_core: acceptCore }
+    const base = { to: to.trim(), apply, accept_core: acceptCore }
+    // 적용은 미리 본 그 계획대로만 — 계획 보기에는 싣지 않는다.
+    return apply && plan?.fingerprint ? { ...base, expected_fingerprint: plan.fingerprint } : base
   }
 
   async function follow(started: Job): Promise<RenameOut> {
@@ -106,6 +112,8 @@ export function RenameDialog({
       if (result.applied) onDone(result.to)
     } catch (caught) {
       setProgress(null)
+      // 미리 본 뒤 바뀌었다 — 옛 계획으로는 다시 적용하지 않게 비우고 「계획 보기」 로 돌린다.
+      if (caught instanceof ApiError && caught.code.endsWith('ONTOLOGY-0114')) stale()
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setBusy(false)

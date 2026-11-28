@@ -20,17 +20,27 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Float, Integer, String, func, select
+from sqlalchemy import Boolean, Float, Integer, String, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import edges as edge_rule
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import interfaces, managed, quantity, retype, revision, views
+from app.modules.ontology import (
+    bounded,
+    interfaces,
+    managed,
+    quantity,
+    retype,
+    revision,
+    revived,
+    views,
+)
 from app.modules.ontology.models import (
     ACCEPTS,
     CARDINALITIES,
@@ -62,7 +72,7 @@ from app.modules.ontology.services import (
     system_source_error,
 )
 from app.shared import audit
-from app.shared.errors import code
+from app.shared.errors import Conflict, code
 
 #: 스키마가 담을 수 있는 것. **모르는 것이 오면 거절한다** — 조용히 무시하면
 #: 보낸 쪽은 적용된 줄 안다.
@@ -217,6 +227,15 @@ class Plan:
     """플랫폼 칸과 같은 키(`status` …)의 새 속성을 **경고로만** 둔다 — 옛 스냅샷 복원 ·
     허브에서
     받는 정의(코어 구독)는 그 키를 이미 쓰던 정의라 막으면 복원 · 수신이 통째로 멈춘다."""
+    in_request: bool = False
+    """요청 안에서 센다 — 값이 많은 종류 변경은 값을 훑지 않고(`deferred`), 남은 값 · 경고의
+    수는 상한까지만 센다(`bounded`). 작업(묶음 · 코어 구독)은 거짓 — 끝까지 센다."""
+    deferred: list[retype.Target] = field(default_factory=list)
+    """**값을 훑지 않은** 종류 변경 — 값이 많거나 타입이 커서 요청 안에서 변환하기에 크다
+    (`retype.deferral`). 요청 안의 적용은 막고 작업으로 보낸다(`deferred_refusal`)."""
+    deferred_why: dict[str, str] = field(default_factory=dict)
+    """속성 이름 → 미룬 까닭(「값이 있는 객체가 …건을 넘어 」 · 「객체가 …건인 큰 타입이라
+    」)."""
 
 
 def _reject_unknown(payload: dict[str, Any], allowed: set[str], *, what: str) -> None:
@@ -388,9 +407,19 @@ def _lifted(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def plan(
-    db: Session, payload: dict[str, Any], *, source: str = "", keep_reserved: bool = False
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    source: str = "",
+    keep_reserved: bool = False,
+    in_request: bool = False,
 ) -> Plan:
     """적용하면 무엇이 바뀌는지 — **적용하지 않고** 돌려준다.
+
+    `in_request` — 요청 안에서 센다(가져오기 · 정의 제안 · 스냅샷 복원 · 검토함). 값이 많은
+    종류 변경의 저장값을 훑지 않고 경고로 말하며(`Plan.deferred`), 경고의 수는 상한까지만
+    센다. 그 계획의 적용은 요청 안에서 막는다 — 2,000만 건 타입의 종류 변경이 요청 안에서 분
+    단위로 돌았고, 검토함은 고를 때마다 같은 일을 다시 했다(2026-11-28 점검).
 
     `source` 는 허브에서 받는 묶음만 적는다 — 그 허브가 관리하는 정의를 고칠 수 있고,
     새로 들이거나 고친 타입 · 관계 종류는 그 허브의 관리가 된다.
@@ -404,7 +433,7 @@ def plan(
     _require_shape(payload)
     payload = _lifted(payload)
     _reject_unknown(payload, TOP_KEYS, what="스키마")
-    out = Plan(keep_reserved=keep_reserved)
+    out = Plan(keep_reserved=keep_reserved, in_request=in_request)
 
     groups = {row.slug: row for row in db.scalars(select(NavGroup))}
     types = {row.slug: row for row in db.scalars(select(ObjectType))}
@@ -646,6 +675,11 @@ def plan(
                 via=todo.interface,
             )
         )
+        owner = types.get(todo.type_slug)
+        if todo.action == "create" and owner is not None and todo.shape is not None:
+            # 인터페이스를 따라 새로 생기는 칸도 — 예전에 지운 같은 키의 값이 살아난다.
+            label = (todo.defaults.label if todo.defaults is not None else "") or todo.key
+            _plan_revived(db, owner, todo.key, todo.shape.written(), label, out)
     out.warnings.extend(interfaces.risks(db, out.bindings))
 
     # **종류가 바뀌는 속성의 저장값** — 파일이 바꾼 것과 인터페이스를 따라 바뀌는 것을 함께
@@ -780,6 +814,18 @@ def _plan_retypes(db: Session, payload: dict[str, Any], out: Plan) -> None:
     다시)."""
     if not out.retypes:
         return
+    why = retype.deferral(db, out.retypes) if out.in_request else {}
+    if why:
+        # **요청 안에서 값을 훑지 않는다** — 까닭만 말하고, 적용은 작업으로
+        # (`deferred_refusal`).
+        out.deferred = list(out.retypes)
+        out.deferred_why = why
+        out.warnings.extend(
+            _deferred_warning(target, why[target.name]) for target in out.retypes
+        )
+        out.warnings.extend(retype.downstream(db, out.retypes))
+        _check_numeric_rollups(payload, out)
+        return
     planned = retype.plan(db, out.retypes)
     for count in planned.counts:
         target = next(
@@ -800,7 +846,53 @@ def _plan_retypes(db: Session, payload: dict[str, Any], out: Plan) -> None:
     out.errors.extend(one for one in planned.errors if "변환할 수 없는 값" not in one)
     out.warnings.extend(planned.warnings)
     out.warnings.extend(retype.downstream(db, out.retypes))
+    _check_numeric_rollups(payload, out)
 
+
+def retype_job_path(target: retype.Target) -> str:
+    """그 속성의 「종류 변경」 작업 — 인터페이스를 따라 바뀌면 그 공통 속성의 것."""
+    if target.via:
+        return f"/api/ontology/interfaces/{target.via}/properties/{target.key}/retype/job"
+    return f"/api/ontology/types/{target.type_slug}/properties/{target.key}/retype/job"
+
+
+def _deferred_warning(target: retype.Target, why: str) -> str:
+    return (
+        f"속성 {target.name}: 종류를 {retype.kind_label(target.before)} → "
+        f"{retype.kind_label(target.after.data_type)}(으)로 바꿉니다 — {why}요청 안에서 "
+        "저장값을 검사하지 않았습니다(변환 · 비움 · 변환할 수 없는 값을 세지 않음). 적용 "
+        "작업에서 검사합니다 — "
+        f"「종류 변경」 작업(POST {retype_job_path(target)})으로 먼저 바꾸거나, 정의 "
+        "가져오기는 같은 정의를 묶음 가져오기 작업(POST /api/bundles/import)으로 보냅니다"
+        + (f"(인터페이스 {target.via} 를 따라)" if target.via else "")
+        + "."
+    )
+
+
+#: 정의 가져오기가 요청 안에서 막힐 때 덧붙이는 길 — 같은 정의를 묶음 작업으로.
+BUNDLE_HINT = (
+    " 정의 가져오기는 같은 정의를 묶음 가져오기 작업(POST /api/bundles/import 에 "
+    '{"ontology": <이 정의>})으로 보내면 작업이 값을 세어 계획을 보인 뒤 적용합니다.'
+)
+
+
+def deferred_refusal(prepared: Plan, *, hint: str = "") -> Conflict:
+    """값이 많은 종류 변경이 든 계획을 요청 안에서 적용하지 않는다는 오류(ONTOLOGY-115)."""
+    names = [one.name for one in prepared.deferred]
+    paths = [retype_job_path(one) for one in prepared.deferred]
+    shown = ", ".join(names[:5]) + (f" 외 {len(names) - 5}개" if len(names) > 5 else "")
+    why = prepared.deferred_why.get(names[0], "")
+    return Conflict(
+        code("ONTOLOGY", 115),
+        f"큰 종류 변경({shown})이 들어 있어 요청 안에서 적용하지 않습니다 — {why}변환할 수 "
+        "없는 값 · 비우는 값을 요청 안에서 세지 못합니다. 그 속성을 「종류 변경」 작업"
+        f"(POST {paths[0]})으로 먼저 바꾼 뒤 다시 하세요(계획을 본 뒤 적용).{hint} 아무것도 "
+        "바꾸지 않았습니다.",
+        details={"limit": retype.RETYPE_INLINE, "properties": names, "job_paths": paths},
+    )
+
+
+def _check_numeric_rollups(payload: dict[str, Any], out: Plan) -> None:
     # 파일이 **명시한** 롤업이 숫자가 아니게 되는 칸을 모으면 오류 — 조용히 걷으면 보낸 것이
     # 사라진다.
     numeric_gone = {
@@ -1085,6 +1177,10 @@ def _plan_properties(
                 else:
                     out.errors.append(f"속성 {name}: {reserved_key_message(key)}")
             out.changes.append(Change(kind_name, name, "create", owner_kind=owner_kind))
+            if isinstance(owner, ObjectType) and owner_kind == "type":
+                # **예전에 지운 같은 키의 값이 살아난다** — 세고, 새 정의에 맞는지 본다.
+                written = interfaces.shape_of(one).written()
+                _plan_revived(db, owner, key, written, str(one.get("label") or key), out)
             continue
 
         retyping = bool(one.get("data_type")) and one["data_type"] != found.data_type
@@ -1124,18 +1220,38 @@ def _plan_properties(
             _warn_property_risks(db, owner, found, one, out)
 
 
+def _plan_revived(
+    db: Session,
+    owner: ObjectType,
+    key: str,
+    shape: dict[str, Any],
+    label: str,
+    out: Plan,
+) -> None:
+    """새로 만드는 타입 속성의 키에 **남은 저장값** — 있으면 경고, 새 정의에 안 맞으면 오류
+    (`revived`)."""
+    definition = PropertyDef(
+        owner_kind="type", owner_id=owner.id, key=key, label=label, **shape
+    )
+    found = revived.leftover(db, owner, definition, in_request=out.in_request)
+    if found is None:
+        return
+    name = f"{owner.slug}.{key}"
+    if found.misfits:
+        out.errors.append(revived.refusal(name, definition, found))
+    else:
+        out.warnings.append(revived.warning(name, found))
+
+
 def _count_with_value(db: Session, type_id: uuid.UUID, key: str) -> int:
-    return int(
-        db.scalar(
-            select(func.count())
-            .select_from(ObjectInstance)
-            .where(
-                ObjectInstance.type_id == type_id,
-                ObjectInstance.deleted_at.is_(None),
-                ObjectInstance.properties.has_key(key),
-            )
-        )
-        or 0
+    """값이 있는 살아 있는 객체 — 상한까지만(`bounded`, 넘으면 상한 + 1)."""
+    return bounded.count(
+        db,
+        select(ObjectInstance.id).where(
+            ObjectInstance.type_id == type_id,
+            ObjectInstance.deleted_at.is_(None),
+            ObjectInstance.properties.has_key(key),
+        ),
     )
 
 
@@ -1162,8 +1278,9 @@ def _warn_property_risks(
     if one.get("required") and not found.required:
         count = _count_with_value(db, owner.id, found.key)
         out.warnings.append(
-            f"속성 {name}: 필수로 바꿉니다. 지금 값이 있는 객체는 {count}개입니다 — "
-            "없는 객체는 그대로 두지만, 그 객체의 속성을 고칠 때 걸립니다."
+            f"속성 {name}: 필수로 바꿉니다. 지금 값이 있는 객체는 "
+            f"{bounded.shown(count, unit='개')}입니다 — 없는 객체는 그대로 두지만, 그 객체의 "
+            "속성을 고칠 때 걸립니다."
         )
 
     if one.get("multi") is not None and one["multi"] != found.multi:
@@ -1179,35 +1296,32 @@ def _warn_property_risks(
         )
 
 
+def _live_objects(db: Session, found: ObjectType) -> int:
+    """살아 있는 객체 — 상한까지만(`bounded`)."""
+    return bounded.count(
+        db,
+        select(ObjectInstance.id).where(
+            ObjectInstance.type_id == found.id, ObjectInstance.deleted_at.is_(None)
+        ),
+    )
+
+
 def _warn_type_risks(db: Session, found: ObjectType, one: dict[str, Any], out: Plan) -> None:
     if one.get("kind_class") == "system" and found.kind_class != "system":
-        count = int(
-            db.scalar(
-                select(func.count())
-                .select_from(ObjectInstance)
-                .where(ObjectInstance.type_id == found.id, ObjectInstance.deleted_at.is_(None))
-            )
-            or 0
-        )
+        count = _live_objects(db, found)
         if count:
             # 행이 있는 타입을 투영으로 돌리면 그 행이 화면에서 사라진다 — 경고가
             # 아니라 오류다. 승격은 절차가 따로 있다.
             out.errors.append(
-                f"타입 {found.slug}: 객체가 {count}개 있어 투영(system)으로 바꿀 수 없습니다. "
-                "전용 표로 옮기는 절차(docs/승격-경로.md)를 따르세요."
+                f"타입 {found.slug}: 객체가 {bounded.shown(count, unit='개')} 있어 "
+                "투영(system)으로 바꿀 수 없습니다. 전용 표로 옮기는 절차"
+                "(docs/승격-경로.md)를 따르세요."
             )
     if one.get("is_active") is False and found.is_active:
-        count = int(
-            db.scalar(
-                select(func.count())
-                .select_from(ObjectInstance)
-                .where(ObjectInstance.type_id == found.id, ObjectInstance.deleted_at.is_(None))
-            )
-            or 0
-        )
+        count = _live_objects(db, found)
         out.warnings.append(
-            f"타입 {found.slug}: 비활성으로 바꿉니다. 객체 {count}개는 남지만 "
-            "메뉴와 만들기에서 빠집니다."
+            f"타입 {found.slug}: 비활성으로 바꿉니다. "
+            f"객체({bounded.shown(count, unit='개')})는 남지만 메뉴와 만들기에서 빠집니다."
         )
     if one.get("key_policy") == "required" and found.key_policy != "required":
         out.warnings.append(
@@ -1330,18 +1444,13 @@ def _warn_relation_risks(
     }
     new = one.get("cardinality")
     if new and tightening.get(new, 0) > tightening.get(found.cardinality, 0):
-        count = int(
-            db.scalar(
-                select(func.count())
-                .select_from(ObjectRelation)
-                .where(ObjectRelation.relation == found.slug)
-            )
-            or 0
+        count = bounded.count(
+            db, select(ObjectRelation.id).where(ObjectRelation.relation == found.slug)
         )
         out.warnings.append(
             f"관계 {found.slug}: 개수 제약을 조입니다({found.cardinality} -> {new}). "
-            f"이미 맺힌 {count}개는 **그대로 남고, 새로 맺을 때만** 걸립니다 — "
-            "이미 어긴 것이 있는지 먼저 보세요."
+            f"이미 맺힌 관계({bounded.shown(count, unit='개')})는 **그대로 남고, 새로 맺을 "
+            "때만** 걸립니다 — 이미 어긴 것이 있는지 먼저 보세요."
         )
 
 
@@ -1509,8 +1618,15 @@ def apply(
     actor: User | None = None,
     reason: str = "정의 가져오기",
     keep_reserved: bool = False,
+    in_request: bool = False,
+    before_apply: Callable[[Plan], None] | None = None,
+    hint: str = "",
 ) -> Plan:
     """**한 트랜잭션으로** 적용한다. 부르는 쪽이 커밋한다.
+
+    `before_apply` 는 계획을 세운 뒤 · 쓰기 전에 그 계획을 본다 — 미리 본 지문과 견준다
+    (`planview.require_fingerprint`). `in_request` 면 값이 많은 종류 변경이 든 계획을 쓰지 않고
+    ONTOLOGY-115 를 낸다(`deferred_refusal` — `hint` 를 덧붙인다).
 
     중간에 실패하면 반쯤 만들어진 온톨로지가 남지 않는다 — 그것이 이 함수가
     존재하는 이유다.
@@ -1518,9 +1634,15 @@ def apply(
     순서: 묶음 → 인터페이스 → 타입(과 파일에 적힌 속성) → **인터페이스를 따라 바뀌는 속성** →
     타입의 화면 모양 검증 → 관계 종류. 화면 모양은 구현으로 생긴 속성을 가리킬 수 있어 그 뒤다.
     """
-    prepared = plan(db, payload, source=source, keep_reserved=keep_reserved)
+    prepared = plan(
+        db, payload, source=source, keep_reserved=keep_reserved, in_request=in_request
+    )
     if prepared.errors:
         return prepared
+    if before_apply is not None:
+        before_apply(prepared)
+    if prepared.deferred:
+        raise deferred_refusal(prepared, hint=hint)
     payload = _lifted(payload)
 
     for index, one in enumerate(payload.get("groups") or []):

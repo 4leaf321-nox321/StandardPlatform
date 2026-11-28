@@ -21,6 +21,13 @@ class SignupRequest(BaseModel):
     """희망 부서. 승인 시 이 부서의 멤버가 된다."""
 
 
+class SignupOut(BaseModel):
+    """가입 신청의 답 — **아이디가 이미 있어도 같은 답이다**(같은 상태 · 같은 말). 로그인 없이
+    부르는 자리라, 다르게 답하면 아무나 아이디가 있는지를 알아낸다. 만든 계정을 싣지 않는다."""
+
+    message: str
+
+
 class AccountSummaryOut(BaseModel):
     """활성 시스템 관리자 수.
 

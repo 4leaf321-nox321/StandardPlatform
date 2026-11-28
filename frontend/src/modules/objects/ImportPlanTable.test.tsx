@@ -40,7 +40,7 @@ describe('계획 표', () => {
     render(<ImportPlanTable plan={plan(RENDER_MAX + 20, 1000)} onDownloadRows={download} />)
     expect(screen.getAllByRole('row')).toHaveLength(1 + RENDER_MAX) // 머리 한 줄 + 그린 줄
     expect(screen.getByText(/나머지 1,020줄/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '모든 줄 받기(CSV)' }))
+    await userEvent.click(screen.getByRole('button', { name: '모든 줄 다운로드(CSV)' }))
     expect(download).toHaveBeenCalled()
   })
 

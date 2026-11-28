@@ -35,7 +35,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import bulk, rewrite
+from app.modules.objects import bulk, rewrite, typecounts
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology import conversion, interfaces, views
 from app.modules.ontology.models import ObjectType, PropertyDef
@@ -394,6 +394,45 @@ def count_rows(db: Session, targets: Iterable[Target], *, cap: int | None = None
         if cap is not None and total > cap:
             break
     return total
+
+
+#: 이보다 큰 타입은 값을 세지 않고 곧장 「많다」 — 드문 키는 상한까지 세는 데도 타입을 통째로
+#: 훑는다(속성에 통째 색인이 없다, ADR 0010). 키 변경 · 옮기기가 계획도 작업으로 보내는 문턱
+#: (`rename.PLAN_INLINE_OBJECTS`)과 같다.
+COUNT_WITHOUT_SCAN = 1_000_000
+
+
+def deferral(db: Session, targets: list[Target]) -> dict[str, str]:
+    """요청 안에서 변환하기에 큰 종류 변경 — 속성 이름(`Target.name`) → 까닭(문장 앞부분, 「…
+    어」 로 끝난다). 비었으면 요청 안에서 해도 된다.
+
+    타입별 수의 요약(`typecounts` — 객체를 안 센다)을 먼저 본다. 속성마다 그 타입의 객체 전부에
+    값이 있다고 쳐도 `RETYPE_INLINE` 을 넘지 않으면 세지 않는다. **100만 건이 넘는 타입**은
+    값이 몇 건이든 미룬다 — 값이 10건뿐이어도 그 10건을 찾는 데(또 계획이 값을 읽는 데)
+    타입을 통째로 훑는다(속성에 통째 색인이 없다). 그때 까닭은 「값이 많아」 가 아니라 「타입이
+    커서」 다. 그 사이만 값이 있는 객체를 상한까지 센다(종류 변경 경로의 `_refuse_large` 와
+    같은 문턱)."""
+    if not targets:
+        return {}
+    sizes = typecounts.counts(db)
+    if sum(sizes.get(one.type_id, 0) for one in targets) <= RETYPE_INLINE:
+        return {}
+    big = {
+        one.name: (
+            f"객체가 {sizes[one.type_id]:,}건인 큰 타입이라(값을 찾는 데도 타입 전체를 훑어) "
+        )
+        for one in targets
+        if sizes.get(one.type_id, 0) > COUNT_WITHOUT_SCAN
+    }
+    if big:
+        return {
+            one.name: big.get(one.name, "함께 바꾸는 속성에 큰 타입의 것이 있어 ")
+            for one in targets
+        }
+    if count_rows(db, targets, cap=RETYPE_INLINE) <= RETYPE_INLINE:
+        return {}
+    many = f"값이 있는 객체가 {RETYPE_INLINE:,}건을 넘어 "
+    return {one.name: many for one in targets}
 
 
 def fingerprint(planned: RetypePlan) -> str:

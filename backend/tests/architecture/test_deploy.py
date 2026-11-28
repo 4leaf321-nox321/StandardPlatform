@@ -1459,11 +1459,15 @@ def _update_world(
     tail: str = "update_preflight\necho PREFLIGHT_OK\n",
     pending: str = "pending=0 drops=0",
     extra_env: dict[str, str] | None = None,
+    systemctl: str | None = None,
+    curl: str | None = None,
+    sleep: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
-    """deploy.sh 의 update 조각을 가짜 apptainer · systemctl 로 돌린다. SIF 는 `version=` 한
-    줄을 든 글 파일이다 — 가짜 apptainer 가 그 줄을 BUILD_INFO 로 읽고, `unknown_db` 가 든
-    이미지는 `alembic current` 에서 「Can't locate revision」 으로 실패한다. 새 이미지 안의
-    `release_notes.py pending` 은 `pending` 을 그대로 답한다(이번 갱신의 마이그레이션)."""
+    """deploy.sh 의 update 조각을 가짜 apptainer · systemctl 로 돌린다(`systemctl` · `curl` ·
+    `sleep` 을 주면 그 몸통으로). SIF 는 `version=` 한 줄을 든 글 파일이다 — 가짜 apptainer 가
+    그 줄을 BUILD_INFO 로 읽고, `unknown_db` 가 든 이미지는 `alembic current` 에서 「Can't
+    locate revision」 으로 실패한다. 새 이미지 안의 `release_notes.py pending` 은 `pending` 을
+    그대로 답한다(이번 갱신의 마이그레이션)."""
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     constants = [line for line in text.splitlines() if re.match(r"^UPDATE_[A-Z_]+=", line)]
     names = (
@@ -1479,6 +1483,12 @@ def _update_world(
         "swap_sif",
         "update_rollback",
         "health_check",
+        "update_timer_names",
+        "update_pause_timers",
+        "update_resume_timers",
+        "update_wait_jobs",
+        "update_on_exit",
+        "update_arm_exit",
     )
     pieces = [_piece(text, name) for name in names]
     bin_dir, tools, install_dir, here = (
@@ -1520,9 +1530,9 @@ case "$*" in
 esac
 """,
     )
-    _stub(bin_dir / "systemctl", f'echo "systemctl $*" >> "{log}"\n')
-    _stub(bin_dir / "curl", 'echo \'{"status":"ok"}\'\n')
-    _stub(bin_dir / "sleep", "exit 0\n")
+    _stub(bin_dir / "systemctl", systemctl or f'echo "systemctl $*" >> "{log}"\n')
+    _stub(bin_dir / "curl", curl or 'echo \'{"status":"ok"}\'\n')
+    _stub(bin_dir / "sleep", sleep or "exit 0\n")
     (install_dir / "app.sif").write_text(f"version={installed}\n", encoding="utf-8")
     if prev is not None:
         (install_dir / "app.sif.prev").write_text(f"version={prev}\n", encoding="utf-8")
@@ -1735,13 +1745,277 @@ def test_릴리스_본문은_번들의_판_기록이고_게시된_마지막_릴�
     assert '"$STAGE/CHANGES.md"' in builder
 
 
+#: `cmd_update` 를 통째로 돌릴 때 비워 두는 단계 — 각자 따로 시험한다(root · SIF · 네트워크가
+#: 든다).
+_UPDATE_NOOPS = (
+    "ensure_dirs",
+    "sync_env_identity",
+    "sync_env_portal",
+    "sync_env_graphdb",
+    "sync_env_rdfstore",
+    "ensure_rdfstore_dir",
+    "require_vector",
+    "grant_temp_limit",
+    "render_service_unit",
+    "setup_worker",
+    "setup_mcp",
+    "setup_sync_timer",
+    "setup_metrics_timer",
+    "setup_backup_timer",
+    "setup_graphdb",
+    "setup_rdfstore",
+    "setup_embedding",
+    "setup_rerank",
+    "setup_lb",
+)
+
+
+def _full_update(
+    tmp_path: Path,
+    *,
+    ready: str = "200",
+    pending: str = "pending=1 drops=0\n  0108_add_note — 메모 칸",
+    timers: tuple[str, ...] = (),
+    busy: dict[str, int] | None = None,
+    extra_env: dict[str, str] | None = None,
+    kill_on: tuple[str, ...] = (),
+    failing: tuple[str, ...] = (),
+) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
+    """`cmd_update` 를 **통째로** 가짜 systemctl · curl · apptainer 로 돌린다.
+
+    - `kill_on` — 그 명령이 처음 불릴 때 update 에 SIGTERM 을 보낸다(`sleep` · `stop-<유닛>`).
+      Ctrl-C · ssh 끊김 · `systemctl stop` 이 update 를 끊는 자리를 흉내 낸다.
+    - `failing` — 실패하는 단계(`_UPDATE_NOOPS` 가운데 — 예: `setup_worker`).
+
+    - `ready` — 준비됨(/api/health/ready)이 답할 상태 코드(503 · 기동하다 죽는 판을 흉내).
+    - `timers` — 켜져 있는 타이머의 이름 꼬리(`backup` → `plmhub-backup.timer`). 가짜
+      systemctl 이 멈추고 켜는 것을 파일로 든다.
+    - `busy` — 지금 도는 oneshot 서비스(꼬리 → 「activating」 으로 답할 횟수, -1 이면 끝없이).
+    """
+    state = tmp_path / "state"
+    state.mkdir()
+    for one in timers:
+        (state / f"timer-plmhub-{one}").write_text("", encoding="utf-8")
+        (state / f"enabled-plmhub-{one}").write_text("", encoding="utf-8")
+    for one, times in (busy or {}).items():
+        (state / f"busy-plmhub-{one}").write_text(str(times), encoding="utf-8")
+    (state / "ready").write_text(ready, encoding="utf-8")
+    for one in kill_on:
+        (state / f"kill-on-{one}").write_text("", encoding="utf-8")
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    noops = "\n".join(
+        f"{name}() {{ {'return 1' if name in failing else ':'}; }}" for name in _UPDATE_NOOPS
+    )
+    tail = (
+        f"{_piece(text, 'derive_unit_names')}\nderive_unit_names\n"
+        f"{noops}\n"
+        'run_migrations() { echo "MIGRATE" >> "$CALLS"; }\n'
+        f"{_piece(text, 'cmd_update')}\ncmd_update\n"
+    )
+    (tmp_path / ".env").write_text("APP_SLUG=plmhub\n", encoding="utf-8")
+    done, calls, inst = _update_world(
+        tmp_path,
+        installed="v0.4.108",
+        bundle="v0.4.109",
+        tail=tail,
+        pending=pending,
+        extra_env={
+            "APP_NAME": "PLM 허브",
+            "CALLS": str(tmp_path / "calls.log"),
+            "STATE": str(state),
+            **(extra_env or {}),
+        },
+        systemctl=_STATEFUL_SYSTEMCTL,
+        curl=_READY_CURL,
+        sleep=_KILLING_SLEEP,
+    )
+    return done, calls, inst
+
+
+_STATEFUL_SYSTEMCTL = r"""echo "systemctl $*" >> "$CALLS"
+unit="${2:-}"; base="${unit%.*}"
+timer="$STATE/timer-$base"; busy="$STATE/busy-$base"
+case "$1" in
+  is-active)
+    case "$unit" in
+      *.timer)
+        if [ -f "$timer" ]; then echo active; else echo inactive; exit 3; fi ;;
+      *.service)
+        if [ -f "$busy" ]; then
+          n=$(cat "$busy")
+          if [ "$n" = "0" ]; then rm -f "$busy"; echo inactive; exit 3; fi
+          [ "$n" -gt 0 ] && echo $((n - 1)) > "$busy"
+          echo activating; exit 0
+        fi
+        echo inactive; exit 3 ;;
+    esac ;;
+  is-enabled)
+    if [ -f "$STATE/enabled-$base" ]; then echo enabled; else echo disabled; exit 1; fi ;;
+  stop) case "$unit" in *.timer) rm -f "$timer" ;; esac ;;
+  start) case "$unit" in *.timer) : > "$timer" ;; esac ;;
+esac
+if [ -f "$STATE/kill-on-$1-$unit" ]; then
+  rm -f "$STATE/kill-on-$1-$unit"; kill -TERM "$PPID"
+fi
+exit 0
+"""
+
+#: 가짜 sleep — `kill-on-sleep` 이 있으면 처음 한 번 update 에 SIGTERM 을 보낸다(기다리는 중에
+#: 끊김).
+_KILLING_SLEEP = r"""if [ -f "$STATE/kill-on-sleep" ]; then
+  rm -f "$STATE/kill-on-sleep"; kill -TERM "$PPID"
+fi
+exit 0
+"""
+
+_READY_CURL = r"""code="$(cat "$STATE/ready")"
+printf '{"status":"x"}\n%s' "$code"
+"""
+
+
+@_no_bash
+def test_update_는_준비되지_않은_새_판을_되돌리고_실패로_끝난다(tmp_path: Path) -> None:
+    """예전에는 켜자마자 덫을 풀고 `health_check || true` 라 — 503 · 기동하다 죽는 판도 「[OK]
+    갱신 완료」 를 찍고 그대로 남았다."""
+    done, calls, inst = _full_update(tmp_path, ready="503")
+    assert done.returncode != 0
+    assert "[OK] 갱신 완료" not in done.stdout
+    assert "새 판(v0.4.109)이 준비되지 않았습니다" in done.stderr
+    assert "직전 판(v0.4.108)으로 되돌리고 다시 켭니다" in done.stderr
+    assert "마이그레이션은 적용된 채입니다" in done.stderr  # 이미 적용한 뒤에 되돌렸다
+    assert _version_of(inst / "app.sif") == "v0.4.108"
+    # 새 판을 내리고 옛 판을 다시 켠다(켜 있는 유닛의 start 는 아무것도 안 한다).
+    restarted = calls[calls.index("MIGRATE") :]
+    down = restarted.index("systemctl stop plmhub")
+    assert "systemctl start plmhub" in restarted[down:]
+
+
+@_no_bash
+def test_update_는_준비됨을_본_뒤에야_끝났다고_말한다(tmp_path: Path) -> None:
+    done, calls, inst = _full_update(tmp_path, ready="200")
+    assert done.returncode == 0, done.stderr
+    assert "[OK] 갱신 완료" in done.stdout
+    assert _version_of(inst / "app.sif") == "v0.4.109"
+    assert "준비됨(/api/health/ready)을 기다립니다" in done.stdout
+    assert "되돌리고" not in done.stderr and "MIGRATE" in calls
+
+
+@_no_bash
+def test_update_는_타이머를_멈추고_도는_백업이_끝나기를_기다린_뒤_내린다(
+    tmp_path: Path,
+) -> None:
+    """03:00 백업의 pg_dump 가 표마다 AccessShareLock 을 쥔 채 돌면 마이그레이션의 ALTER TABLE
+    이 그 뒤에서 서비스를 내린 채 기다렸다. 타이머를 멈추고(새로 안 돌게), 도는 것은 끝나기를
+    기다린 뒤 내리고, 다 켠 뒤 멈췄던 타이머를 되살린다."""
+    done, calls, _ = _full_update(tmp_path, timers=("backup", "sync"), busy={"backup": 2})
+    assert done.returncode == 0, done.stderr
+    stop_backup = calls.index("systemctl stop plmhub-backup.timer")
+    stop_sync = calls.index("systemctl stop plmhub-sync.timer")
+    down = calls.index("systemctl stop plmhub")
+    assert stop_backup < down and stop_sync < down
+    # 백업이 끝날 때까지 물었다 — 「activating」 두 번 뒤 「inactive」.
+    asked = [
+        i for i, one in enumerate(calls) if one == "systemctl is-active plmhub-backup.service"
+    ]
+    assert len(asked) >= 3 and asked[-1] < down
+    assert calls.index("MIGRATE") > down
+    assert calls.index("systemctl start plmhub-backup.timer") > calls.index("MIGRATE")
+    assert calls.index("systemctl start plmhub-sync.timer") > calls.index("MIGRATE")
+    # 켜 있지 않던 타이머는 건드리지 않는다.
+    assert "systemctl start plmhub-metrics.timer" not in calls
+
+
+@_no_bash
+def test_update_는_도는_일이_안_끝나면_내리기_전에_멈추고_타이머를_되살린다(
+    tmp_path: Path,
+) -> None:
+    done, calls, inst = _full_update(
+        tmp_path,
+        timers=("graphcopy",),
+        busy={"graphcopy": -1},
+        extra_env={"UPDATE_WAIT_SECONDS": "10"},
+    )
+    assert done.returncode != 0
+    assert "지금 plmhub-graphcopy 이(가) 돌고 있습니다" in done.stderr
+    assert "서비스는 그대로 돌고 있습니다" in done.stderr
+    assert "systemctl stop plmhub" not in calls and "MIGRATE" not in calls
+    assert "systemctl start plmhub-graphcopy.timer" in calls  # 멈췄던 타이머를 되살렸다
+    assert not (inst / "app.sif.new").exists() and _version_of(inst / "app.sif") == "v0.4.108"
+
+
+@_no_bash
+def test_update_는_마이그레이션이_없으면_도는_일을_기다리지_않는다(tmp_path: Path) -> None:
+    """잠그는 문장이 없으면 백업이 돌아도 겹치지 않는다 — 몇십 분짜리 사본 싣기를 기다리지
+    않는다."""
+    done, calls, _ = _full_update(
+        tmp_path, pending="pending=0 drops=0", timers=("graphcopy",), busy={"graphcopy": -1}
+    )
+    assert done.returncode == 0, done.stderr
+    assert "systemctl is-active plmhub-graphcopy.service" not in calls
+    assert "systemctl stop plmhub-graphcopy.timer" in calls
+    assert "systemctl start plmhub-graphcopy.timer" in calls
+
+
 def test_update_는_내리기_전에_보고_내린_뒤에만_되돌리기를_건다() -> None:
+    """덫(`update_on_exit`)은 타이머를 멈추기 **전에** 걸고 끝까지 둔다 — 되돌리기는
+    `UPDATE_DOWN` 이 정한다(내리기 직전에 세우고 준비됨을 보면 내린다)."""
     body = _piece((DEPLOY / "deploy.sh").read_text(encoding="utf-8"), "cmd_update")
+    arm = body.index("update_arm_exit")
+    down = body.index("UPDATE_DOWN=1")
     stop = body.index('systemctl stop "$SERVICE_NAME"')
-    assert body.index("update_preflight") < stop < body.index("trap update_rollback EXIT")
-    assert body.index("trap update_rollback EXIT") < body.index("swap_sif")
-    assert body.index("trap - EXIT") > body.index('systemctl start "$SERVICE_NAME"')
+    assert (
+        body.index("update_preflight") < arm < body.index("update_pause_timers") < down < stop
+    )
+    assert stop < body.index("swap_sif")
+    gate = body.index('health_check "${UPDATE_READY_SECONDS:-120}"')
+    assert body.index('systemctl start "$SERVICE_NAME"') < gate < body.index("UPDATE_DOWN=0")
+    assert "trap - EXIT" not in body  # 뒤의 setup_* 가 실패해도 타이머는 되살린다
     assert "place_sif" not in body  # 새 SIF 는 내리기 전에 옆에 놓는다
+
+
+@_no_bash
+def test_update_가_기다리는_중에_끊겨도_타이머를_되살린다(tmp_path: Path) -> None:
+    """도는 백업을 기다리는 동안(최대 300초) Ctrl-C · SIGTERM · ssh 끊김 — 예전에는 덫을 걸기
+    전이라 타이머가 멈춘 채(켜 둠은 그대로) 남아, 밤 백업이 다음 update · 재부팅까지 안
+    돌았다(2026-11-28 검토). 서비스는 내리지 않았으므로 되돌리지 않는다."""
+    done, calls, inst = _full_update(
+        tmp_path, timers=("backup", "sync"), busy={"backup": -1}, kill_on=("sleep",)
+    )
+    assert done.returncode == 143, done.stderr
+    assert "systemctl stop plmhub" not in calls and "MIGRATE" not in calls
+    assert "systemctl start plmhub-backup.timer" in calls
+    assert "systemctl start plmhub-sync.timer" in calls
+    assert _version_of(inst / "app.sif") == "v0.4.108"
+
+
+@_no_bash
+def test_update_가_워커를_멈추는_중에_끊기면_되돌리고_타이머를_되살린다(
+    tmp_path: Path,
+) -> None:
+    """앱을 내리고 워커가 하던 작업을 끝내기를 기다리는 동안(최대 2분) 끊긴 자리 — 예전에는
+    되돌리기를 그 뒤에 세워 앱이 내려간 채 남았다."""
+    done, calls, inst = _full_update(
+        tmp_path, timers=("metrics",), kill_on=("stop-plmhub-worker",)
+    )
+    assert done.returncode == 143, done.stderr
+    assert "MIGRATE" not in calls
+    after = calls[calls.index("systemctl stop plmhub-worker") :]
+    assert "systemctl start plmhub" in after and "systemctl start plmhub-worker" in after
+    assert "systemctl start plmhub-metrics.timer" in after
+    assert _version_of(inst / "app.sif") == "v0.4.108"  # 바꾸기 전이었다 — 그대로
+
+
+@_no_bash
+def test_update_가_다시_켠_뒤의_단계에서_실패해도_타이머를_되살린다(tmp_path: Path) -> None:
+    """준비됨을 본 뒤(되돌리기는 끝)의 실패 — 예전에는 덫을 풀어 `update_resume_timers` 를
+    건너뛰었다. 새 판은 그대로 두고 0 이 아닌 값으로 끝난다."""
+    done, calls, inst = _full_update(
+        tmp_path, timers=("graphcopy",), failing=("setup_worker",)
+    )
+    assert done.returncode != 0
+    assert "[OK] 갱신 완료" not in done.stdout and "되돌리고" not in done.stderr
+    assert calls.index("systemctl start plmhub-graphcopy.timer") > calls.index("MIGRATE")
+    assert _version_of(inst / "app.sif") == "v0.4.109"
 
 
 # --- GPU 판 번들(ADR 0067) -----------------------------------------------------------------

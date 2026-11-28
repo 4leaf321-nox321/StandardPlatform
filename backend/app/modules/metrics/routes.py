@@ -228,6 +228,20 @@ def metric_values(
     """표 — 요청한 기준(과 기간 · 코호트)별 셀. 기준 값으로 거르기는 `d.<기준>=<값>`(빈 값은
     「(비어 있음)」). 셀마다 비율 · 닫힘 · **건 보기 조건**(`drill`)이 붙는다. `composition` 을
     주면 셀마다 구성비(`composition`, % — 나머지 칸이 같은 셀끼리 합이 100)."""
+    params.refuse_unused(
+        request,
+        "표(values)",
+        (
+            "dims",
+            "by",
+            "filters",
+            "period_from",
+            "period_to",
+            "cohort_from",
+            "cohort_to",
+            "composition",
+        ),
+    )
     row = services.get(db, slug)
     built = _built(db, row)
     ask = params.ask_from_request(
@@ -258,6 +272,11 @@ def metric_series(
 ) -> SeriesOut:
     """추이 — 기간순, 빈 기간은 0, 전기 · 전년 동기 · 닫힘. `composition=true` 면 점마다 그
     기간의 구성비(%, 선을 나눈 기준의 값들 사이 — 기간마다 합이 100)."""
+    params.refuse_unused(
+        request,
+        "추이(series)",
+        ("split", "filters", "period_from", "period_to", "composition"),
+    )
     row = services.get(db, slug)
     built = _built(db, row)
     ask = params.ask_from_request(
@@ -284,6 +303,9 @@ def metric_cohort(
     db: Session = Depends(get_db),
 ) -> CohortOut:
     """코호트 x 경과 행렬 — 음수 경과와 못 읽은 날짜는 빼고 그 수를 말한다."""
+    params.refuse_unused(
+        request, "코호트(cohort)", ("cumulative", "filters", "cohort_from", "cohort_to")
+    )
     row = services.get(db, slug)
     built = _built(db, row)
     ask = params.ask_from_request(
@@ -302,12 +324,15 @@ def metric_cohort(
 @router.get("/{slug}/dims", response_model=DimValuesOut)
 def metric_dim_values(
     slug: str,
+    request: Request,
     name: str = Query(description="기준 이름"),
     q: str | None = Query(default=None, description="이름에 들어간 글자"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DimValuesOut:
     """기준 하나의 값과 이름 — 화면 고르개."""
+    # 거르기(`d.<기준>`) · 범위는 받지 않는다 — 주면 422(`refuse_unused`).
+    params.refuse_unused(request, "기준 값(dims)", ("name", "q"))
     row = services.get(db, slug)
     built = _built(db, row)
     return query.dim_values(db, user, row, built, name, q=q)

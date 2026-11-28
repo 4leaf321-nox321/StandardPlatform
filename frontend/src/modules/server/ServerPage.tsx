@@ -185,7 +185,7 @@ function ServerStatusTab() {
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
           <span className="font-mono">{one.extensions_unknown.join(', ')}</span> 은 이 설치의{' '}
           <span className="font-mono">EXTENSIONS</span> 에 적혀 있지만 번들에 없는 확장입니다. 아래
-          「확장 모듈」 목록에 있는 것만 켤 수 있습니다.
+          「확장 모듈」 목록에 있는 것만 활성화할 수 있습니다.
         </div>
       )}
 
@@ -365,10 +365,10 @@ function OrphanFiles() {
     <section className="space-y-2">
       <h2 className="text-base font-semibold">첨부 저장소</h2>
       <p className="text-muted-foreground text-sm">
-        첨부를 지우면 기록만 지우고 파일은 남깁니다(같은 파일을 다른 첨부가 쓸 수 있다). 아무 첨부도
-        안 쓰는 파일은 워커가 하루 한 번 지웁니다 — 올린 지 하루가 안 된 것은 남깁니다. 저장소
-        파일 대부분을 이 DB 가 모르면 다른 DB 의 저장소일 수 있어 자동 정리를 멈추고 관리자에게
-        알립니다.
+        첨부를 삭제하면 기록만 삭제하고 파일은 남깁니다(같은 파일을 다른 첨부가 사용할 수
+        있습니다). 아무 첨부도 사용하지 않는 파일은 워커가 하루 한 번 삭제합니다 — 업로드한 지
+        하루가 안 된 것은 남깁니다. 저장소 파일 대부분을 이 DB 가 모르면 다른 DB 의 저장소일 수
+        있어 자동 정리를 멈추고 시스템 관리자에게 알립니다.
       </p>
       <Button type="button" variant="outline" size="sm" disabled={busy} onClick={count}>
         고아 파일 지금 세어 보기

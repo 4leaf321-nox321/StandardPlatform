@@ -306,7 +306,7 @@ function Runs({ source, version }: { source: DataSource; version: number }) {
         </Button>
       </div>
       {runs.data && rows.length === 0 && (
-        <p className="text-muted-foreground">아직 돌린 적이 없습니다.</p>
+        <p className="text-muted-foreground">아직 실행한 적이 없습니다.</p>
       )}
       {rows.map((run) => (
         <div key={run.id} className="flex flex-wrap items-center gap-2">
@@ -371,15 +371,15 @@ const COUNT_LABEL: Record<string, string> = {
   revived: '다시 사용',
   tags_as_text: '글로 남긴 태그',
   // 선(관계) — 형제 코어 · 한 행이 선 하나인 소스.
-  relations_create: '선 새로',
-  relations_update: '선 고침',
-  relations_unchanged: '선 그대로',
-  relations_error: '선 오류',
-  relations_unlink: '선 끊음',
+  relations_create: '관계 새로',
+  relations_update: '관계 수정',
+  relations_unchanged: '관계 그대로',
+  relations_error: '관계 오류',
+  relations_unlink: '관계 해제',
   // 끝점이 아직 없어 다음 동기화에서 다시 넣을 선.
-  relations_waiting: '선 기다림',
+  relations_waiting: '관계 대기',
   // 미리 보기 — 이 동기화에 함께 들어오는 객체를 이어 적용하면 설 선(ADR 0089).
-  relations_same_sync: '함께 들어오는 선',
+  relations_same_sync: '함께 들어오는 관계',
   // 참조 칸(ADR 0089) — 같은 동기화에서 함께 온 행으로 푼 것 · 기다리던 것을 푼 것 · 대기 · 오류.
   refs_same_sync: '같은 동기화에서 푼 참조',
   refs_resolved: '대기에서 푼 참조',
@@ -424,7 +424,7 @@ function SyncDialog({
   // RA 는 깨진 보고서(번호 · 제목이 빈 것)를 건너뛰고 나머지를 넣는다 — 한 건 때문에 조직
   // 전체가 멈추지 않게. 그래서 넣을 수 있는가는 서버의 판단(`planned`)을 따른다.
   // 넣을 수 있는가는 **서버의 판단**(`planned`)을 따른다 — 기록의 말(`errors`)에는 오류가 아닌
-  // 안내(선 기다림 · 처음부터 다시 받음 · 이어 받을 끊김)도 실려, 그것만으로 적용을 막았다
+  // 안내(관계 대기 · 처음부터 다시 받음 · 이어 받을 끊김)도 실려, 그것만으로 적용을 막았다
   // (2026-10-08). RA 는 깨진 보고서(오류 줄)를 건너뛰고 넣되, 끊기면 넣지 않는다(전량 대조라
   // 일부로는 「내려감」 을 틀리게 적는다).
   const ok =

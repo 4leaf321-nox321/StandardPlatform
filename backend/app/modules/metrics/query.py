@@ -1321,6 +1321,28 @@ def series(
     )
     periods = dense(start, stop, grain) if start is not None and stop is not None else []
 
+    # **범위 앞을 한 해 더 읽는다** — 전기 · 전년 동기는 범위 앞의 기간을 본다. 요청한
+    # 범위만 읽던 때는 `period_from=2026-01-01` 이면 2026 의 점 전부의 전년 동기와 첫 점의
+    # 전기가 비었다(2026-11-28). 내보내는 점은 요청한 범위뿐이고 선의 차례 · 구성비도 범위
+    # 안에서만 센다. 앞을 읽다 상한에 닿으면 그 앞은 쓰지 않는다(빠진 칸을 0 으로 읽지
+    # 않게 — 예전처럼 빈다).
+    behind: dict[str | None, dict[date, Cell]] = {}
+    lookback: list[date] = []
+    if ask.period_from is not None:
+        early = replace(
+            ask, period_from=year_before(ask.period_from, grain), period_to=ask.period_from
+        )
+        early_cells, early_cut = read(db, user, metric, early)
+        if not early_cut and early.period_from is not None:
+            for cell in early_cells:
+                if cell.period is not None:
+                    key = cell.dims.get(split) if split else None
+                    behind.setdefault(key, {})[cell.period] = cell
+            lookback = dense(early.period_from, ask.period_from, grain)
+
+    def empty(key: str | None, when: date) -> Cell:
+        return Cell({split: key} if split else {}, when, None, None, 0, 0, None, None, None)
+
     totals: dict[date, float] = {}
     if composition:
         for found_cells in by_line.values():
@@ -1337,10 +1359,12 @@ def series(
         values: dict[date, float | None] = {}
         points: list[schemas.PointOut] = []
         previous: float | None = None
+        earlier = behind.get(key, {})
+        for when in lookback:
+            previous = (earlier.get(when) or empty(key, when)).measure(measure)
+            values[when] = previous
         for when in periods:
-            cell = found.get(when) or Cell(
-                {split: key} if split else {}, when, None, None, 0, 0, None, None, None
-            )
+            cell = found.get(when) or empty(key, when)
             value = cell.measure(measure)
             values[when] = value
             points.append(

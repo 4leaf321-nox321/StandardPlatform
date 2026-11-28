@@ -47,6 +47,68 @@ def filters_of(request: Request) -> dict[str, str | None]:
     return filters_from(request.query_params.multi_items())
 
 
+#: 지표 읽기(표 · 추이 · 코호트 · 기준 값)가 받는 쿼리 이름 전부 — 모양마다 그중 일부만 쓴다.
+#: `filters` 는 `d.<기준>` 거르기를 가리킨다.
+READ_PARAMS = (
+    "dims",
+    "by",
+    "filters",
+    "period_from",
+    "period_to",
+    "cohort_from",
+    "cohort_to",
+    "split",
+    "cumulative",
+    "composition",
+    "name",
+    "q",
+)
+
+#: 켜고 끄는 인자 — 끈 값(`false`)은 준 것으로 보지 않는다(쓰든 안 쓰든 답이 같다).
+_SWITCHES = ("cumulative", "composition")
+
+
+def _given(request: Request) -> list[str]:
+    """요청에 **값을 준** 읽기 인자의 이름 — 빈 값 · 끈 스위치는 뺀다. `d.<기준>` 은 빈 값도
+    거르기(「(비어 있음)」)라 준 것이다."""
+    out: list[str] = []
+    for key, value in request.query_params.multi_items():
+        if key.startswith(FILTER_PREFIX):
+            name = "filters"
+        elif key in READ_PARAMS:
+            text = value.strip().lower()
+            if not text or (key in _SWITCHES and text in ("false", "0")):
+                continue
+            name = key
+        else:
+            continue
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def refuse_unused(request: Request, shape: str, used: Iterable[str]) -> None:
+    """이 모양이 **쓰지 않는 인자**가 오면 422 — 조용히 버리면 거르기 · 범위가 안 걸린 수를
+    읽는 쪽(사람이든 AI 든)이 「걸렀다」 고 믿는다. 추이에 `cohort_from` 을, 기준 값에
+    `d.<기준>` 을 주던 MCP `metric_query` 가 그렇게 안 걸러진 수를 받았다(2026-11-28)."""
+    allowed = set(used)
+    unused = [name for name in _given(request) if name not in allowed]
+    if not unused:
+        return
+    shown = ["d.<기준>" if name == "filters" else name for name in unused]
+    accepted = [
+        "d.<기준>" if name == "filters" else name for name in READ_PARAMS if name in allowed
+    ]
+    raise AppError(
+        code("METRICS", 13),
+        f"{shape} 읽기에는 사용하지 않는 인자입니다: {', '.join(shown)} — 무시하면 걸러지지 "
+        "않은 수가 걸러진 수로 읽히므로 거절합니다. 이 인자를 제외하고 다시 요청합니다(이 "
+        f"읽기가 사용하는 인자: {', '.join(accepted) or '(없음)'}).",
+        status=422,
+        details={"shape": shape, "unused": shown, "accepted": accepted},
+    )
+
+
 def ask_from_request(
     request: Request,
     *,

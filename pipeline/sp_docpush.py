@@ -430,7 +430,7 @@ def _submit(server: str, token: str, data: bytes, filename: str) -> dict[str, An
         "X-Client": pipeline.CLIENT,
     }
     status, answer = pipeline._send(
-        server, "POST", f"{server.rstrip('/')}/api/jobs", headers, body, who="플랫폼"
+        server, "POST", pipeline.api_url(server, "/api/jobs"), headers, body, who="플랫폼"
     )
     if status != 202:
         pipeline._refused("플랫폼", status, answer)
@@ -600,12 +600,31 @@ def apply(folder: Path, record_path: Path, *, server: str, token: str) -> dict[s
     jobs: list[dict[str, Any]] = [one for one in record["jobs"] if isinstance(one, dict)]
     if len(jobs) != len(record["jobs"]):
         raise Stop(f"올린 기록을 읽을 수 없습니다: {record_path}")
-    # **번호는 uuid 꼴만** — 아무 플랫폼에도 묻기 전에.
+    # **번호는 uuid 꼴만** — 아무 플랫폼에도 묻기 전에, 주소에 넣기 전에. 틀린 줄은 **그 줄만**
+    # 「거절」 로 두고 묻지 않는다. 예전에는 한 줄 때문에 적용 전체가 멈춤(Stop)으로 끝나 어느
+    # 줄이 깨졌는지 · 나머지는 어떻게 됐는지가 답에 안 남았다. 거절이 하나라도 있으면 아래(2)의
+    # 규칙대로 **아무것도 넣지 않는다**(나머지는 「넣지 않음」 과 그 까닭).
+    lines: list[dict[str, Any]] = []
+    blocked = 0
     for job in jobs:
-        job["job_id"] = pipeline.job_uuid(job.get("job_id"), "계획 작업의 번호")
-        if job.get("apply_job_id"):
-            job["apply_job_id"] = pipeline.job_uuid(job["apply_job_id"], "적용 작업의 번호")
-    lines: list[dict[str, Any]] = [{"job_id": job["job_id"]} for job in jobs]
+        try:
+            job["job_id"] = pipeline.job_uuid(job.get("job_id"), "계획 작업의 번호")
+            if job.get("apply_job_id"):
+                job["apply_job_id"] = pipeline.job_uuid(
+                    job["apply_job_id"], "적용 작업의 번호"
+                )
+        except Stop as failure:
+            lines.append(
+                {
+                    "job_id": str(job.get("job_id") or "")[:80],
+                    "state": "refused",
+                    "message": f"올린 기록의 이 줄이 깨졌습니다 — {failure}. 이 줄의 문서들은 "
+                    "document_push 로 다시 올린다",
+                }
+            )
+            blocked += 1
+            continue
+        lines.append({"job_id": job["job_id"]})
 
     def finish(message: str) -> dict[str, Any]:
         for line in lines:
@@ -622,7 +641,7 @@ def apply(folder: Path, record_path: Path, *, server: str, token: str) -> dict[s
     # 1. 앞서 넣은 적용 — 끝났나 다시 묻는다(대기 중이던 것은 「적용함」 으로 적지 않았다).
     stuck = ""
     for job, line in zip(jobs, lines, strict=True):
-        if not job.get("apply_job_id"):
+        if "state" in line or not job.get("apply_job_id"):
             continue
         if job.get("apply_state") == "applied":
             line.update(state="already", apply_job_id=job["apply_job_id"])
@@ -652,11 +671,12 @@ def apply(folder: Path, record_path: Path, *, server: str, token: str) -> dict[s
 
     # 2. 넣을 작업 **전부를 먼저 본다** — 하나라도 틀리면 아무것도 넣지 않는다.
     todo: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    blocked = 0
     for job, line in zip(jobs, lines, strict=True):
         if "state" in line:
             continue
-        plan = pipeline._get_json(server, token, f"/api/jobs/{job['job_id']}", who="플랫폼")
+        plan = pipeline._get_json(
+            server, token, pipeline.api_path("api", "jobs", job["job_id"]), who="플랫폼"
+        )
         reason = _not_pushable(plan)
         if reason:
             line.update(state="refused", message=reason)
@@ -782,16 +802,23 @@ def check(folder: Path, record_path: Path, *, server: str, token: str) -> dict[s
         }
         rows.append(row)
         try:
-            # 기록의 칸을 주소에 그대로 잇지 않는다 — 한 칸씩 감싸서.
+            # 기록의 칸을 주소에 그대로 잇지 않는다 — 꼴을 보고(uuid · slug · 키), 한 마디씩
+            # 감싸고, 질의는 params 로. `..` 인 slug · 키는 감싸도 그대로라 다른 길이 됐다.
             object_id = pipeline.job_uuid(one.get("object_id"), "객체 id")
-            slug = quote(str(one.get("type_slug") or ""), safe="")
-            key = quote(str(one.get("key") or ""), safe="")
-            base = f"/api/objects/{slug}/{object_id}/documents/{key}"
-            meta = pipeline._get_json(server, token, f"{base}?body=false", who="플랫폼")
+            slug = pipeline.require_slug(one.get("type_slug"), "기록의 타입")
+            key = pipeline.require_key(one.get("key"), "기록의 문서 속성")
+            meta = pipeline._get_json(
+                server,
+                token,
+                pipeline.api_path("api", "objects", slug, object_id, "documents", key),
+                params={"body": "false"},
+                who="플랫폼",
+            )
             attached_rows = pipeline._get_json(
                 server,
                 token,
-                f"/api/attachments?owner_table=objects&owner_id={object_id}&owner_field={key}",
+                "/api/attachments",
+                params={"owner_table": "objects", "owner_id": object_id, "owner_field": key},
                 who="플랫폼",
             )
         except Stop as failure:

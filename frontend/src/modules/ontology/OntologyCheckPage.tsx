@@ -35,7 +35,7 @@ const KIND_NOTE: Record<CheckItem['kind'], string> = {
   empty_type: '만든 지 30일이 넘었는데 객체가 하나도 없는 타입입니다.',
   unused_relation: '만든 지 30일이 넘었는데 맺어진 관계가 하나도 없는 관계 종류입니다.',
   undescribed_core:
-    '외부에 공개 중인데 설명이 없는 타입입니다. 받는 시스템은 이름만으로 뜻을 짐작합니다.',
+    '외부에 공개 중인데 설명이 없는 타입입니다. 수신 시스템은 이름만으로 뜻을 짐작합니다.',
 }
 
 export default function OntologyCheckPage() {

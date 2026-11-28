@@ -707,6 +707,10 @@ class Mapping:
             slug = str(one.get("type_slug") or "")
             if not slug or "key" not in one:
                 raise Stop(f"대응 파일: types[{index}] 에 type_slug · key 가 있어야 합니다")
+            # slug 가 실행 폴더의 **파일 이름**이 된다(`objects/<slug>.json`) — 꼴을 본다.
+            pipeline.require_slug(
+                one.get("type_slug"), f"대응 파일: types[{index}] 의 type_slug"
+            )
             if slug in self.by_slug:
                 raise Stop(f"대응 파일: 타입 {slug} 이(가) 두 번 나옵니다")
             self.by_slug[slug] = one
@@ -731,7 +735,9 @@ class Mapping:
                     f"대응 파일: {where} 의 type_slug {one['type_slug']!r} 가 "
                     "types 에 없습니다"
                 )
-            slug = str(one["relation"])
+            pipeline.require_slug(one["type_slug"], f"대응 파일: {where} 의 type_slug")
+            # 관계 종류의 slug 도 파일 이름이 된다(`relations/<relation>.json`).
+            slug = pipeline.require_slug(one["relation"], f"대응 파일: {where} 의 relation")
             for name in ("src", "dst"):
                 self._check(one[name], where=f"{where}.{name}")
             if "evidence_note" in one:
@@ -1222,7 +1228,7 @@ def convert(
         for index, chunk in enumerate(chunks, start=1):
             name = result.slug if len(chunks) == 1 else f"{result.slug}-{index:03d}"
             pipeline._write(
-                run / pipeline.OBJECTS_DIR / f"{name}.json",
+                sp_work.inside(run, f"{pipeline.OBJECTS_DIR}/{name}.json"),
                 {
                     "type_slug": result.slug,
                     "workspace_slug": result.workspace_slug,
@@ -1230,19 +1236,10 @@ def convert(
                 },
             )
         unresolved.extend(result.unresolved)
-    for result_edges in edges:
-        chunks = [
-            result_edges.rows[at : at + pipeline.MAX_ROWS]
-            for at in range(0, len(result_edges.rows), pipeline.MAX_ROWS)
-        ]
-        for index, chunk in enumerate(chunks, start=1):
-            name = (
-                result_edges.relation
-                if len(chunks) == 1
-                else f"{result_edges.relation}-{index:03d}"
-            )
+    for result_edges, names, chunks in _edge_files(edges):
+        for name, chunk in zip(names, chunks, strict=True):
             pipeline._write(
-                run / pipeline.RELATIONS_DIR / f"{name}.json",
+                sp_work.inside(run, f"{pipeline.RELATIONS_DIR}/{name}.json"),
                 {"type_slug": result_edges.type_slug, "rows": chunk},
             )
         unresolved.extend(result_edges.unresolved)
@@ -1267,6 +1264,45 @@ def convert(
     text = _report(mapping, mapping_path, results, run, len(unresolved), edges, gaps=gaps)
     (run / REPORT).write_text(text + "\n", encoding="utf-8")
     return not unresolved, text
+
+
+def _edge_files(
+    edges: list[EdgeResult],
+) -> list[tuple[EdgeResult, list[str], list[list[dict[str, Any]]]]]:
+    """관계 절마다 (결과, 파일 이름들, 나눈 행들) — **이름이 겹치지 않게.**
+
+    파일 이름은 `relations/<관계 종류>.json`(크면 `-001` …)이다. 같은 관계 종류를 출발 타입만
+    달리 두 번 적으면(과제 → 시험장 · 모델 → 시험장) 두 절이 같은 파일에 써서 **나중 것이 앞의
+    것을 말없이 덮었다** — 선이 통째로 사라지고 보고서는 두 절의 선 수를 다 셌다. 한 파일은
+    출발 타입 하나(묶음의 `type_slug`)라 합칠 수 없으므로, 그 관계 종류가 둘 이상이면 이름에
+    출발 타입을 붙인다(`tested_at--plm_task.json`). 하나뿐이면 예전 이름 그대로다. 출발
+    타입까지 같은 절이 또 있으면 `-2` 를 붙인다(slug 에는 `-` 가 없어 다른 이름과 안 겹친다).
+    """
+    shared = Counter(one.relation for one in edges)
+    taken: set[str] = set()
+    out: list[tuple[EdgeResult, list[str], list[list[dict[str, Any]]]]] = []
+    for one in edges:
+        chunks = [
+            one.rows[at : at + pipeline.MAX_ROWS]
+            for at in range(0, len(one.rows), pipeline.MAX_ROWS)
+        ]
+        base = (
+            one.relation if shared[one.relation] == 1 else f"{one.relation}--{one.type_slug}"
+        )
+        stem, again = base, 1
+        while True:
+            names = (
+                [stem]
+                if len(chunks) == 1
+                else [f"{stem}-{index:03d}" for index in range(1, len(chunks) + 1)]
+            )
+            if taken.isdisjoint(names):
+                break
+            again += 1
+            stem = f"{base}-{again}"
+        taken.update(names)
+        out.append((one, names, chunks))
+    return out
 
 
 def _ask_platform(mapping: Mapping, server: str, token: str) -> None:
@@ -1383,10 +1419,19 @@ KIND_WORDS = {
 _REWRITTEN = frozenset({"map", "parser", "key_of", "value", "collect", "join"})
 
 
+def survey_stem(source: Path, sheet: str) -> str:
+    """조사 결과(`01-조사/<이것>.profile.json` · `.draft.json`)의 이름 — 원천 이름, 시트를
+    골랐으면 `<원천 이름>-<시트>`. 시트 이름은 바깥 값이라 경로 글자를 지운다
+    (`sp_work.name_part`) — `sheet="/../../../X"` 가 `01-조사/` 밖에 썼다(Windows)."""
+    return f"{source.stem}-{sp_work.name_part(sheet, '시트')}" if sheet else source.stem
+
+
 def _draft_for(mapping_path: Path, source_path: Path, sheet: str) -> dict[str, Any] | None:
     """그 원천의 정의 초안(`01-조사/<이름>.draft.json`) — 작업 폴더의 차례(대응은 `03-대응/`)
     대로 찾는다. 없으면 None."""
-    stems = [f"{source_path.stem}-{sheet}", source_path.stem] if sheet else [source_path.stem]
+    stems = (
+        [survey_stem(source_path, sheet), source_path.stem] if sheet else [source_path.stem]
+    )
     for folder in (mapping_path.parent.parent / sp_work.SURVEY, mapping_path.parent):
         for stem in stems:
             path = folder / f"{stem}.draft.json"

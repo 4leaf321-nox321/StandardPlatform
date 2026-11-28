@@ -2,7 +2,8 @@
  * 키 · slug 변경 창(ADR 0093) — **계획을 먼저 보이고, 막는 것이 있으면 변경하지 않는다.**
  *
  * 지키는 것: 바뀌는 자리 · 알아 둘 것 · 막는 것을 보이는가, 막는 것이 있으면 변경 단추가 서지
- * 않는가, 공개 타입은 통보 확인을 받는가, 값이 많은 키는 작업으로 계획하고 그 작업을 적용하는가.
+ * 않는가, 공개 타입은 통보 확인을 받는가, 값이 많은 키는 작업으로 계획하고 그 작업을 적용하는가,
+ * 적용이 미리 본 계획의 지문을 싣고 「미리 본 뒤 바뀜」(ONTOLOGY-0114)이면 계획을 비우는가.
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -128,5 +129,50 @@ describe('키 · slug 변경', () => {
     await userEvent.click(await screen.findByRole('button', { name: '키 변경' }))
     await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('j1'))
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('weight'))
+  })
+
+  it('적용은 미리 본 계획의 지문을 싣는다 — 계획 보기에는 싣지 않는다', async () => {
+    ontologyApi.renameKey
+      .mockResolvedValueOnce(plan({ fingerprint: 'fp-1' }))
+      .mockResolvedValueOnce(plan({ applied: true, fingerprint: 'fp-1' }))
+    const onDone = open()
+    await userEvent.type(screen.getByLabelText('새 키'), 'weight')
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await userEvent.click(await screen.findByRole('button', { name: '키 변경' }))
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('weight'))
+    expect(ontologyApi.renameKey.mock.calls[0][2]).not.toHaveProperty('expected_fingerprint')
+    expect(ontologyApi.renameKey.mock.calls[1][2]).toEqual({
+      to: 'weight',
+      apply: true,
+      accept_core: false,
+      expected_fingerprint: 'fp-1',
+    })
+  })
+
+  it('미리 본 뒤 바뀌었으면(ONTOLOGY-0114) 그 말을 보이고 계획을 비워 다시 보게 한다', async () => {
+    ontologyApi.renameKey
+      .mockResolvedValueOnce(plan({ fingerprint: 'fp-1' }))
+      .mockRejectedValueOnce(
+        new ApiError(409, {
+          error: {
+            code: 'APP-ONTOLOGY-0114',
+            message: '미리 본 뒤 바뀌었습니다 — 다시 미리 보세요.',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(plan({ objects: 5, fingerprint: 'fp-2' }))
+    const onDone = open()
+    await userEvent.type(screen.getByLabelText('새 키'), 'weight')
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await userEvent.click(await screen.findByRole('button', { name: '키 변경' }))
+    expect(await screen.findByText(/미리 본 뒤 바뀌었습니다/)).toBeInTheDocument()
+    // 옛 계획은 비운다 — 「키 변경」 이 아니라 「계획 보기」 가 선다.
+    expect(screen.queryByText('객체 값 3')).toBeNull()
+    expect(screen.queryByRole('button', { name: '키 변경' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await waitFor(() => expect(ontologyApi.renameKey).toHaveBeenCalledTimes(3))
+    expect(ontologyApi.renameKey.mock.calls[2][2].apply).toBe(false)
+    expect(await screen.findByRole('button', { name: '키 변경' })).toBeInTheDocument()
+    expect(onDone).not.toHaveBeenCalled()
   })
 })

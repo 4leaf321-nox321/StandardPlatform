@@ -860,13 +860,27 @@ def _like(value: str) -> str:
 
 
 def fingerprint(plan: Plan) -> str:
-    """미리 본 계획과 적용 직전 계획이 같은가 — 작업의 적용이 본다."""
+    """미리 본 계획과 적용 직전 계획이 같은가 — 작업의 적용 · 요청의 `expected_fingerprint` 가
+    본다.
+
+    **수의 흔들림은 보지 않는다** — 값을 옮길 객체 · 자리마다의 건수를 넣었더니 동기화가 잦은
+    타입에서는 계획 작업과 적용 작업 사이에 늘 몇 건이 늘어 적용이 영영 JOBS-20 이었다. 사람이
+    읽고 고른 것은 본다: 무엇을 무엇으로 · 경고(수는 지운다) · 오류. 바뀌는 자리(`places`)는
+    넣지 않는다 — 키 · slug 를 바꿀 뿐 잃는 것이 없고, 뷰 하나가 새로 생겨도 함께 바뀐다.
+    「바꾼 뒤에도 깨지는 뷰 · 지표」 흉내(`residual`)는 미리 보기에서만 돌아 넣지 않는다 —
+    부르는 쪽이 그 전에 센다."""
     import hashlib
     import json
 
-    body: list[Any] = [plan.kind, plan.slug, plan.key, plan.to, plan.objects, plan.errors]
-    body.append([(one.what, one.count) for one in plan.places])
-    return hashlib.sha256(json.dumps(body, ensure_ascii=False).encode()).hexdigest()
+    from app.modules.ontology import bounded
+
+    body: dict[str, Any] = {
+        "what": [plan.kind, plan.slug, plan.key, plan.to],
+        "warnings": [bounded.without_counts(one) for one in plan.warnings],
+        "errors": [bounded.without_counts(one) for one in plan.errors],
+    }
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def current_slug(db: Session, slug: str) -> str | None:

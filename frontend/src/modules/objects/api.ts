@@ -1479,10 +1479,14 @@ export const objectApi = {
   /** 이 객체의 이력 — 최근 것이 앞. 볼 수 있는 사람이면 누구나. */
   history: (typeSlug: string, id: string) =>
     api.get<HistoryEntry[]>(`/objects/${typeSlug}/${id}/history`),
-  /** 그 시점 값으로 고친다 — 저장과 같은 검증을 거쳐서. */
-  restore: (typeSlug: string, id: string, entryId: string) =>
+  /**
+   * 그 시점 값으로 고친다 — 저장과 같은 검증을 거쳐서. `baseUpdatedAt` 은 견준 화면을 그린 객체의
+   * `updated_at` — 그 사이 누가 수정했으면 409(OBJECTS-0162, `isStaleEdit`).
+   */
+  restore: (typeSlug: string, id: string, entryId: string, baseUpdatedAt?: string) =>
     api.post<ObjectRow>(`/objects/${typeSlug}/${id}/restore`, {
       entry_id: entryId,
+      ...(baseUpdatedAt ? { base_updated_at: baseUpdatedAt } : {}),
     }),
   /** 삭제 전에 — 이 객체를 가리키는 것. */
   references: (typeSlug: string, id: string) =>

@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, BinaryIO
 
-from sqlalchemy import and_, event, exists, func, or_, select, text, update
+from sqlalchemy import and_, case, event, exists, func, literal, or_, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, aliased, defer
 
 from app.config import get_settings
@@ -448,20 +449,104 @@ def report_progress(
     진행을 덮어쓰지 않고, **커밋 전에** 멈춰 같은 일이 두 번 안 든다(끝에서만 보면 스스로
     커밋하는 종류 — 일괄 입력 · 묶음 — 는 이미 넣은 뒤다).
     """
+    shown: dict[str, Any] = {"stage": stage, "done": done, "total": total}
+    if _stopping_since is not None:
+        # 멈추라는 신호 뒤의 진행 — 표시를 지우지 않게 함께 적는다(`mark_stopping`).
+        shown[STOPPING_KEY] = _stopping_since
+    fresh = literal(shown, type_=JSONB)
+    # **행에 이미 있는 멈춤 표시는 DB 안에서 잇는다.** 위의 확인과 이 UPDATE 사이에 신호가 오면
+    # 표시 스레드(`_note_stopping`)가 먼저 적은 표시를 이 진행이 덮어 지웠다 — 그 작업은 옛
+    # 말(「메모리를 다 써…」)로 거둬졌다(2026-11-28 검토). 같은 행을 고치는 둘은 행 잠금으로
+    # 줄을 서고, 늦은 쪽이 앞의 것을 읽고 쓴다.
+    kept = case(
+        (
+            Job.progress.has_key(STOPPING_KEY),
+            fresh.op("||")(func.jsonb_build_object(STOPPING_KEY, Job.progress[STOPPING_KEY])),
+        ),
+        else_=fresh,
+    )
     with SessionLocal() as db:
         row = db.execute(
             update(Job)
             .where(_owned(job_id, worker_id))
-            .values(
-                progress={"stage": stage, "done": done, "total": total},
-                heartbeat_at=datetime.now(UTC),
-            )
+            .values(progress=kept, heartbeat_at=datetime.now(UTC))
             .returning(Job.cancel_requested)
         ).first()
         db.commit()
     if row is None:
         raise Lost()
     return bool(row[0])
+
+
+# --- 워커가 멈출 때 — 재시작 · 갱신은 작업의 실패가 아니다 ------------------------------
+
+STOPPING_KEY = "stopping"
+"""도는 작업의 진행(`progress`)에 남기는 열쇠 — 그 워커가 멈추라는 신호(SIGTERM)를 받은 시각.
+
+systemd 는 멈추라고 한 뒤 `TimeoutStopSec`(120초) 안에 못 끝내면 죽인다. 그러면 작업은
+`running` 으로 남고 다른 워커가 `recover_stale` 로 거둔다 — 그때 이 표시가 있으면 **메모리를 다
+써 죽은 것이 아니라 재시작 · 갱신에 끊긴 것**이다. 예전에는 둘을 가르지 못해, 다시 안 돌리는
+종류(지도 · 밤 그래프 계산)는 「메모리를 다 써 강제 종료됐을 수 있습니다」 로 실패가 되고 그
+실패가 자동 계산을 멈췄다 — `deploy.sh update` 한 번이 사람이 다시 누를 때까지 지도를
+세웠다(2026-11-28 점검)."""
+
+INTERRUPTED = code("JOBS", 32)
+"""워커가 멈추는 사이 끊긴 작업의 오류 머리(`[<코드>] …`). 실패로 적되 **작업 자체의 실패로
+세지 않는다** — 자동 계산의 멈춤(`graph/mapbuild.paused` · `graph/calc.paused`)이 이것을
+실패로 안 본다. 칸을 새로 두지 않고 오류 글의 머리로 가르는 까닭: 다른 실패도 `[<코드>] 말` 로
+적히고(`_run`), 마이그레이션 없이 옛 행과 함께 읽힌다."""
+
+STOPPING = threading.Event()
+"""이 프로세스(워커)가 멈추라는 신호를 받았다 — 서면 새 작업을 안 집는다(`process_one`)."""
+_stopping_since: str | None = None
+
+
+def mark_stopping(worker_id: str) -> threading.Thread:
+    """멈추라는 신호를 받았다 — **새 작업을 안 집고**, 쥔 작업의 진행에 그 시각을 적는다.
+
+    적는 것은 따로 스레드에서 한다 — 신호 처리기는 본 스레드가 어디서 멈췄든(DB 를 기다리는
+    중일 수 있다) 그 자리에서 불린다. 하던 작업이 그 안에 끝나면 표시는 뜻이 없다(끝난 작업은
+    안 거둔다). 돌려주는 스레드는 시험이 기다리는 용도다."""
+    global _stopping_since
+    STOPPING.set()
+    if _stopping_since is None:
+        _stopping_since = datetime.now(UTC).isoformat()
+    since = _stopping_since
+    thread = threading.Thread(
+        target=_note_stopping, args=(worker_id, since), name="job-stopping", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def _note_stopping(worker_id: str, since: str) -> None:
+    try:
+        with SessionLocal() as db:
+            db.execute(
+                update(Job)
+                .where(Job.status == "running", Job.worker_id == worker_id)
+                .values(
+                    progress=Job.progress.op("||")(
+                        func.jsonb_build_object(STOPPING_KEY, since)
+                    )
+                )
+                .execution_options(synchronize_session=False)
+            )
+            db.commit()
+    except Exception:  # 못 적으면 예전처럼 「멎은 작업」 으로 거둬질 뿐이다
+        log.warning("멈추는 중이라는 표시를 작업에 남기지 못했습니다", exc_info=True)
+
+
+def forget_stopping() -> None:
+    """멈춤 신호를 거둔다 — 시험 · 같은 프로세스에서 워커를 다시 세울 때."""
+    global _stopping_since
+    STOPPING.clear()
+    _stopping_since = None
+
+
+def interrupted(error: str | None) -> bool:
+    """워커가 멈추는 사이 끊긴 작업의 오류인가(`INTERRUPTED`)."""
+    return bool(error) and str(error).startswith(f"[{INTERRUPTED}]")
 
 
 #: 다른 작업이 없을 때 집는 종류 — 「눈여겨볼 것」 훑기(`metrics/insights.py`).
@@ -540,7 +625,20 @@ def recover_stale(db: Session) -> int:
     stale = [job for job in stale if job.id not in busy]
     for job in stale:
         spec = kinds.get(job.kind)
-        if spec is not None and not spec.retries:
+        stopped = (job.progress or {}).get(STOPPING_KEY)
+        if spec is not None and not spec.retries and stopped:
+            # 워커가 멈추라는 신호를 받은 뒤 못 끝낸 것이다(재시작 · 갱신, `mark_stopping`) —
+            # 작업이 워커를 죽인 것이 아니다. 실패로 적되 자동 계산을 멈추지
+            # 않는다(`INTERRUPTED`).
+            job.status = "failed"
+            job.error = (
+                f"[{INTERRUPTED}] 워커가 멈추는(재시작 · 갱신) 사이 이 작업이 끝나지 "
+                f"못했습니다(마지막 워커 {job.worker_id}, 멈춤 신호 {stopped}) — 작업 자체의 "
+                "실패가 아닙니다. 이 종류는 자동으로 다시 실행하지 않습니다: 자동 계산의 것은 "
+                "다음 차례에 다시 실행되고, 직접 실행한 것은 다시 실행하세요."
+            )
+            job.finished_at = datetime.now(UTC)
+        elif spec is not None and not spec.retries:
             # 워커를 죽인 것이 이 작업 자체일 수 있다 — 다시 돌리면 또 죽는다(ADR 0049).
             job.status = "failed"
             job.error = (
@@ -977,7 +1075,10 @@ class _Beating:
 
 
 def process_one(worker_id: str) -> bool:
-    """집어서 돌리고 적는다. 집은 것이 없으면 False."""
+    """집어서 돌리고 적는다. 집은 것이 없으면 False. **멈추라는 신호 뒤에는 안 집는다**
+    (`STOPPING`) — 집은 뒤 바로 죽임을 당하면 그 작업은 5분 뒤에야 거둬진다."""
+    if STOPPING.is_set():
+        return False
     with SessionLocal() as db:
         job = claim(db, worker_id)
         if job is None:

@@ -239,7 +239,7 @@ describe('작업 화면', () => {
     expect(await screen.findByText('볼트')).toBeInTheDocument()
     expect(jobsApi.get).toHaveBeenCalledWith('j1')
     expect(screen.getByText(/나머지 49,999줄/)).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '모든 줄 받기(CSV)' }))
+    await userEvent.click(screen.getByRole('button', { name: '모든 줄 다운로드(CSV)' }))
     await waitFor(() => expect(jobsApi.rowsCsv).toHaveBeenCalledWith('j1'))
   })
 
@@ -446,7 +446,7 @@ describe('작업 화면', () => {
     await mount([job({ result: broken })])
     await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
     expect(screen.queryByRole('button', { name: '적용' })).not.toBeInTheDocument()
-    expect(screen.getByText(/고쳐서 다시 올리세요/)).toBeInTheDocument()
+    expect(screen.getByText(/파일을 수정해 다시 업로드하세요/)).toBeInTheDocument()
     expect(screen.getByText('무게: 숫자여야 합니다')).toBeInTheDocument()
   })
 
@@ -508,7 +508,7 @@ describe('작업 화면', () => {
       }),
     ])
     await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
-    await userEvent.click(screen.getByRole('button', { name: /파일 받기/ }))
+    await userEvent.click(screen.getByRole('button', { name: /파일 다운로드/ }))
     await waitFor(() => expect(jobsApi.download).toHaveBeenCalled())
   })
 
@@ -552,7 +552,7 @@ describe('작업 화면 · 고른 것을 한 번에', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: '이 쪽 전부 선택' }))
     expect(screen.getByText('2건 선택')).toBeInTheDocument()
     // **고른 것과 갈 것이 다르면 그 차이를 말한다.**
-    expect(screen.getByText(/1건은 빠집니다/)).toBeInTheDocument()
+    expect(screen.getByText(/1건은 제외됩니다/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /선택 적용/ }))
     // 확인 전에는 아무 일도 없다.
@@ -599,7 +599,7 @@ describe('작업 화면 · 모르는 모양 · 다른 모양의 결과', () => {
     await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
     expect(screen.getByText('3,400')).toBeInTheDocument()
     expect(screen.getByText('objects')).toBeInTheDocument()
-    expect(screen.getByText('만든 파일을 받으세요.')).toBeInTheDocument()
+    expect(screen.getByText('만든 파일을 다운로드하세요.')).toBeInTheDocument()
   })
 
   it('검토함 일괄 확인의 결과를 펼쳐 결정마다 읽는다 — 목록 줄은 처리한 수', async () => {

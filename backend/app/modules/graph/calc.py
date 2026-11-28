@@ -327,27 +327,62 @@ def _write_clusters(
 # ── 넣기 ────────────────────────────────────────────────────────────────────────────────
 
 
-def _last_finished(db: Session) -> Any:
+def _last_settled(db: Session) -> Any:
+    """`paused` 가 보는 마지막으로 끝난 계산(끝남 · 실패 · 취소)."""
     from app.modules.jobs.models import Job
 
     return db.execute(
-        select(Job.status, Job.finished_at, Job.created_at)
+        select(Job.status, Job.error, Job.finished_at, Job.created_at)
         .where(Job.kind == KIND, Job.status.in_(("done", "failed", "cancelled")))
         .order_by(Job.created_at.desc())
         .limit(1)
     ).first()
 
 
+def _stopped_by(last: Any) -> bool:
+    """이 끝남이 자동 계산을 멈추나 — 실패 · 취소. **워커가 멈추는 사이 끊긴 것**(재시작 ·
+    갱신, `jobs.services.INTERRUPTED`)은 멈추지 않는다: 계산의 실패가 아니라 「돌리라」 는
+    마지막 결정이 끊긴 것이다. 진짜 실패 뒤에 사람이 「지금 계산」 을 눌렀는데 재시작이 그것을
+    끊었으면, 그 누름이 마지막 결정이다 — 끊긴 것을 건너뛰고 앞의 실패를 다시 보면 사람이 다시
+    누른 일이 재시작 한 번에 지워진다(2026-11-28 검토)."""
+    from app.modules.jobs import services as job_services
+
+    return (
+        last is not None and last.status != "done" and not job_services.interrupted(last.error)
+    )
+
+
+def _notice_paused(db: Session, reason: str) -> None:
+    """**실패로 멈췄으면 시스템 관리자에게 알린다** — `NOTICE_EVERY` 안에 한 번. 꺼 둔 것 ·
+    사람이 취소한 것은 안 알린다. 알렸으면 커밋한다(`mapbuild._notice_paused` 와 같다)."""
+    from app.modules.notifications import services as notifications
+
+    last = _last_settled(db)
+    if not get_settings().graph_calc_auto or not _stopped_by(last) or last.status != "failed":
+        return
+    error = (last.error or "").strip()
+    sent = notifications.notify_system_admins_once(
+        db,
+        kind=notifications.GRAPH_AUTO_PAUSED,
+        title="밤 그래프 계산의 자동 계산을 멈췄습니다",
+        body=reason + (f" 오류: {error[:300]}" if error else ""),
+        link="/graph",
+    )
+    if sent:
+        db.commit()
+
+
 def paused(db: Session) -> str | None:
     """타이머가 넣지 **않는** 까닭 — 넣으면 None. 껐거나, 지난 계산이 실패 · 취소됐다(같은 일을
-    밤마다 다시 넣지 않는다 — 사람이 「지금 계산」 을 눌러 끝나면 다시 돈다, ADR 0049)."""
+    밤마다 다시 넣지 않는다 — 사람이 「지금 계산」 을 눌러 끝나면 다시 돈다, ADR 0049).
+    **워커가 멈추는 사이 끊긴 계산**(재시작 · 갱신 — `jobs.services.INTERRUPTED`)은 안 센다."""
     if not get_settings().graph_calc_auto:
         return (
             "자동 계산이 비활성입니다(GRAPH_CALC_AUTO=false) — 시스템 관리자의 "
             "「지금 계산」 만 돕니다."
         )
-    last = _last_finished(db)
-    if last is not None and last.status != "done":
+    last = _last_settled(db)
+    if _stopped_by(last):
         what = "실패했습니다" if last.status == "failed" else "취소됐습니다"
         return (
             f"지난 그래프 계산이 {what} — 같은 일을 다시 넣지 않게 자동 계산을 멈췄습니다. "
@@ -370,7 +405,9 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
         select(Job.id).where(Job.kind == KIND, Job.status.in_(("queued", "running")))
     ):
         return None
-    if paused(db) is not None:
+    reason = paused(db)
+    if reason is not None:
+        _notice_paused(db, reason)
         return None
     now = now or datetime.now(UTC)
     last = current(db)

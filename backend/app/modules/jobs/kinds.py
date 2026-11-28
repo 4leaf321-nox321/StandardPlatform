@@ -215,7 +215,7 @@ def _fingerprint_guard(work: Work) -> Callable[[bulk.Plan], None]:
         if wanted and fingerprint(plan) != wanted:
             raise Conflict(
                 code("JOBS", 20),
-                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 바꿨습니다. 아무것도 넣지 "
+                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 변경했습니다. 아무것도 적용하지 "
                 "않았으니 다시 미리 보고 적용하세요.",
             )
 
@@ -313,7 +313,7 @@ def bundle_import(work: Work) -> dict[str, Any]:
         if wanted and bundle_services.fingerprint(outcome) != wanted:
             raise Conflict(
                 code("JOBS", 20),
-                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 바꿨습니다. 아무것도 넣지 "
+                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 변경했습니다. 아무것도 적용하지 "
                 "않았으니 다시 미리 보고 적용하세요.",
             )
 
@@ -924,7 +924,7 @@ def _sync_in_order(
             source = work.db.get(DataSource, planned.id, populate_existing=True)
             if source is None:  # 차례가 도는 사이 지워졌다
                 done.append(
-                    {"slug": planned.slug, "status": "skipped", "error": "지워졌습니다"}
+                    {"slug": planned.slug, "status": "skipped", "error": "삭제됐습니다"}
                 )
                 continue
             if not source.is_active:
@@ -1163,12 +1163,14 @@ def webhook_dispatch(work: Work) -> dict[str, Any]:
     """밀린 웹훅을 보낸다 — `webhooks/services.deliver_pending` 이 제 연결로 한 건씩 커밋한다.
 
     남은 수(다시 보낼 것)를 결과에 적는다. 워커가 `RETRY_AFTER_SECONDS` 뒤에 남은 것을 보고
-    작업을 다시 넣는다 — 전에는 프로세스 안의 타이머였고, 그래서 재시작하면 사라졌다.
+    작업을 다시 넣는다 — 전에는 프로세스 안의 타이머였고, 그래서 재시작하면 사라졌다. 보낸 수를
+    진행으로 적는다 — 받는 쪽이 느리면 한 바퀴가 2분까지 가고(`RUN_BUDGET_SECONDS`), 그동안
+    「보내기 0/0」 만 보이면 멎은 것과 구별되지 않는다.
     """
     from app.modules.webhooks import services as webhook_services
 
     work.progress("보내기", 0, 0)
-    left = webhook_services.dispatcher.deliver_pending()
+    left = webhook_services.dispatcher.deliver_pending(progress=work.progress)
     return {"left": left}
 
 

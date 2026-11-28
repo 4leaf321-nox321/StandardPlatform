@@ -27,7 +27,9 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -59,6 +61,21 @@ TIMEOUT_SECONDS = 10.0
 RETRY_AFTER_SECONDS = 60.0
 #: 화면에 보여 주는 최근 기록 수.
 RECENT = 50
+#: **한 바퀴에서 같은 웹훅이 잇달아 이만큼 실패하면 그 웹훅의 나머지는 이번 바퀴에 안 보낸다**
+#: (pending 그대로 — 시도 횟수도 안 쓴다). 받는 쪽이 죽어 있으면(주소가 막혀 응답이 없으면) 한
+#: 건이 `TIMEOUT_SECONDS` 를 다 쓰고, 하루 1,000건이면 워커 하나가 몇 시간을 그 기다림에 썼다 —
+#: 그동안 다른 작업은 줄을 섰다(2026-11-28 점검). 바퀴를 시작할 때 이미 실패하던 웹훅은 **한
+#: 건만 떠 본다**(`PROBE_FAILURES`) — 1분마다 도는 바퀴가 그때마다 세 건씩 기다리지 않게.
+BREAKER_FAILURES = 3
+PROBE_FAILURES = 1
+#: 보내기 한 바퀴의 시간 상한(초). 넘으면 남은 것은 pending 그대로 두고 끝낸다 — 다음
+#: 바퀴(워커가 `RETRY_AFTER_SECONDS` 마다 다시 넣는다)가 이어 보낸다. 웹훅이 여럿 느려도 워커를
+#: 이 이상 안 쥔다.
+RUN_BUDGET_SECONDS = 120.0
+#: 진행을 적는 간격(초) — 건마다 적으면 빠른 받는 쪽 1,000건이 진행 쓰기 1,000번이다.
+PROGRESS_EVERY = 2.0
+
+Progress = Callable[[str, int, int], None]
 
 
 def wants(
@@ -235,6 +252,8 @@ class Dispatcher:
     def __init__(self) -> None:
         self.sync = False
         self.transport: httpx.BaseTransport | None = None
+        self.clock: Callable[[], float] = time.monotonic
+        """시간 상한(`RUN_BUDGET_SECONDS`)을 재는 시계 — 시험이 바꿔 끼운다."""
 
     def kick(self) -> None:
         """보낼 것이 생겼다 — **작업을 넣기만 한다.** 보내는 것은 워커다.
@@ -270,29 +289,36 @@ class Dispatcher:
             ok=False, code=response.status_code, error=response.text[:500] or None
         )
 
-    def deliver_pending(self) -> int:
-        """pending 을 전부 한 번씩. **아직 남은(실패해서 다시 보낼) 수**를 돌려준다."""
+    def deliver_pending(self, progress: Progress | None = None) -> int:
+        """pending 을 전부 한 번씩. **아직 남은(실패해서 다시 보낼 · 이번에 미룬) 수**를
+        돌려준다.
+
+        `progress` 가 있으면 보낸 수를 적는다(작업 화면 — `webhook_dispatch`). 그것이 취소를
+        알리면 (`Cancelled`) 거기서 멈춘다 — 보낸 것은 건마다 이미 커밋됐다."""
         left = 0
-        gave_up: set[uuid.UUID] = set()
         # **두 서버가 같은 pending 을 집지 않게** — 발송은 한 연결만 한다. 작업이 한 줄뿐이라
         # 워커 둘이 동시에 집는 일은 없지만, 손으로 부르는 길(시험 · sync)이 있어 잠금은
         # 남긴다. 못 잡은 쪽은 물러나되 남은 것이 있다고 보고한다.
         with singleton.held("webhook-dispatch") as db:
             if db is None:
                 return 1
-            left = self._deliver(db, gave_up)
+            left = self._deliver(db, progress)
         return left
 
-    def _deliver(self, db: Session, gave_up: set[uuid.UUID]) -> int:
-        """pending 을 한 번씩 — 단, 둘은 이번 바퀴에 안 보낸다(pending 그대로).
+    def _deliver(self, db: Session, progress: Progress | None = None) -> int:
+        """pending 을 한 번씩 — 단, 넷은 이번 바퀴에 안 보낸다(pending 그대로, 시도도 안 쓴다).
 
         - **꺼 둔 웹훅의 것.** 끄면 새 이벤트를 안 쌓는데(`wants`), 이미 쌓인 것은 그대로
           나갔다 — 「사용 안 함」 이 반만 듣는 셈이었다(2026-10-08). 지우지도 실패로 두지도
           않는다: 켜 있을 때 생긴 이벤트이고, 다시 켜면 나간다.
         - **식는 중인 웹훅의 재시도**(`_cooling`). 첫 시도 · 사람이 누른 「다시 보내기」 는
           곧장 간다.
+        - **이번 바퀴에 잇달아 실패한 웹훅의 나머지**(`BREAKER_FAILURES`, 이미 실패하던 웹훅은
+          `PROBE_FAILURES`). 받는 쪽이 죽었으면 나머지도 다 기다리다 실패한다.
+        - **시간 상한을 넘긴 뒤의 것**(`RUN_BUDGET_SECONDS`).
         """
         left = 0
+        gave_up: set[uuid.UUID] = set()
         off = select(Webhook.id).where(Webhook.is_active.is_(False))
         rows = list(
             db.scalars(
@@ -314,49 +340,111 @@ class Dispatcher:
         # 바퀴를 시작할 때 한 번 본다 — 한 바퀴 안에서는 예전처럼 다 보낸다.
         started = datetime.now(UTC)
         cooling = {hook.id for hook in hooks.values() if _cooling(hook, started)}
-        for delivery in rows:
-            hook = hooks.get(delivery.webhook_id)
-            if hook is None:
-                delivery.status = "failed"
-                delivery.last_error = "웹훅이 지워졌습니다"
-                continue
-            if delivery.attempts > 0 and hook.id in cooling:
-                left += 1
-                continue
-            result = self.send(hook, delivery)
-            now = datetime.now(UTC)
-            delivery.attempts += 1
-            delivery.response_code = result.code
-            delivery.last_error = result.error
-            if result.ok:
-                delivery.status = "ok"
-                delivery.delivered_at = now
-            elif delivery.attempts >= MAX_ATTEMPTS:
-                delivery.status = "failed"
-                gave_up.add(hook.id)
-            else:
-                left += 1
-            hook.last_status = "ok" if result.ok else "failed"
-            hook.last_at = now
-            db.commit()
-        # **웹훅 하나에 한 번만 알린다.** 받는 쪽이 죽으면 밀린 전송이 한꺼번에
-        # 포기하는데, 그때 건마다 알리면 종에 같은 말이 수십 개 쌓이고 사람은
-        # 그것을 통째로 지운다 — 정작 다른 웹훅의 알림도 함께 지워진다.
-        for hook_id in gave_up:
-            hook = hooks.get(hook_id)
-            if hook is None:
-                continue
-            notifications.notify_system_admins(
-                db,
-                kind=notifications.WEBHOOK_FAILED,
-                title=f"웹훅 「{hook.name}」 보내기를 포기했습니다",
-                body=f"{MAX_ATTEMPTS}번 다 실패했습니다. 받는 쪽이 지금 못 받고 "
-                "있습니다 — 수정한 뒤 웹훅 화면에서 「재발송」 을 클릭하세요.",
-                link="/admin/webhooks",
+        # 바퀴를 시작할 때 이미 실패하던 웹훅 — 한 건만 떠 본다.
+        failing = {hook.id for hook in hooks.values() if hook.last_status == "failed"}
+        streak: dict[uuid.UUID, int] = {}
+        tripped: set[uuid.UUID] = set()
+        began = self.clock()
+        reported = began
+        sent = 0
+        over_budget = False
+        try:
+            for delivery in rows:
+                hook = hooks.get(delivery.webhook_id)
+                if hook is None:
+                    delivery.status = "failed"
+                    delivery.last_error = "웹훅이 지워졌습니다"
+                    continue
+                if over_budget or hook.id in tripped:
+                    left += 1
+                    continue
+                if delivery.attempts > 0 and hook.id in cooling:
+                    left += 1
+                    continue
+                if self.clock() - began >= RUN_BUDGET_SECONDS:
+                    over_budget = True
+                    left += 1
+                    continue
+                result = self.send(hook, delivery)
+                sent += 1
+                gave = False
+                now = datetime.now(UTC)
+                delivery.attempts += 1
+                delivery.response_code = result.code
+                delivery.last_error = result.error
+                if result.ok:
+                    delivery.status = "ok"
+                    delivery.delivered_at = now
+                    streak.pop(hook.id, None)
+                    # 떠 본 것이 됐다 — 받는 쪽이 살아났으니 이 바퀴의 나머지는 보통의
+                    # 끊개(3번)로 본다. 계속 1번으로 두면 한 번의 실패로 바퀴를 접었다.
+                    failing.discard(hook.id)
+                else:
+                    streak[hook.id] = streak.get(hook.id, 0) + 1
+                    limit = PROBE_FAILURES if hook.id in failing else BREAKER_FAILURES
+                    if streak[hook.id] >= limit:
+                        tripped.add(hook.id)
+                    if delivery.attempts >= MAX_ATTEMPTS:
+                        delivery.status = "failed"
+                        gave = True
+                    else:
+                        left += 1
+                hook.last_status = "ok" if result.ok else "failed"
+                hook.last_at = now
+                db.commit()
+                if gave:  # 커밋된 포기만 알린다
+                    gave_up.add(hook.id)
+                if progress is not None and self.clock() - reported >= PROGRESS_EVERY:
+                    reported = self.clock()
+                    progress("보내기", sent, len(rows))
+        except BaseException:
+            # 도중에 멈췄다(취소 · DB 오류) — 그래도 **이미 포기로 적힌 것은 알린다.** 예전에는
+            # 알리기가 바퀴 끝에만 있어, 취소된 바퀴에서 「failed」 가 된 전송은 아무도 몰랐다
+            # (2026-11-28 검토). 지금 건의 쓰다 만 것만 무른다 — 앞의 것은 건마다 커밋됐다.
+            db.rollback()
+            self._notify_gave_up(db, hooks, gave_up)
+            raise
+        if tripped or over_budget:
+            logger.warning(
+                "웹훅 보내기를 이번 바퀴에서 미룸 — 잇달아 실패한 웹훅 %d개%s, 남은 %d건은 "
+                "다음 바퀴에",
+                len(tripped),
+                f" · 시간 상한 {RUN_BUDGET_SECONDS:.0f}초를 넘김" if over_budget else "",
+                left,
             )
-        if gave_up:
-            db.commit()
+        self._notify_gave_up(db, hooks, gave_up)
+        if progress is not None:
+            progress("보내기", sent, len(rows))
         return left
+
+    def _notify_gave_up(
+        self, db: Session, hooks: dict[uuid.UUID, Webhook], gave_up: set[uuid.UUID]
+    ) -> None:
+        """포기한 웹훅을 알린다 — **웹훅 하나에 한 번만**, 이 바퀴 안에서도 바퀴를 건너서도
+        (`NOTICE_EVERY`). 받는 쪽이 죽으면 밀린 전송이 1분마다 하나씩 포기하는데, 그때마다
+        알리면 시스템 관리자마다 1분에 하나씩 쌓이고 사람은 그것을 통째로 지운다 — 정작 다른
+        웹훅의 알림도 함께 지워진다. 알리기가 실패해도 보내기는 실패로 만들지 않는다."""
+        if not gave_up:
+            return
+        try:
+            for hook_id in gave_up:
+                hook = hooks.get(hook_id)
+                if hook is None:
+                    continue
+                notifications.notify_system_admins_once(
+                    db,
+                    kind=notifications.WEBHOOK_FAILED,
+                    title=f"웹훅 「{hook.name}」 보내기를 포기했습니다",
+                    body=f"{MAX_ATTEMPTS}번 다 실패했습니다. 받는 쪽이 지금 받지 못하고 "
+                    "있습니다 — 수정한 뒤 웹훅 화면에서 「재발송」 을 클릭하세요. 받는 쪽이 "
+                    "계속 받지 못하면 이 알림은 하루에 한 번만 갑니다(실패한 전송 수는 홈의 "
+                    "「남은 일」).",
+                    link=f"/admin/webhooks?hook={hook.id}",
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("웹훅 포기 알림을 남기지 못했습니다")
 
 
 dispatcher = Dispatcher()

@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-11-27b
+GUIDE_VERSION: 2026-11-28
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -18,15 +18,15 @@ GUIDE_VERSION: 2026-11-27b
 | 이 플랫폼의 자기소개 적기 | `platform_profile` → `platform_profile_update(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** 로그인 없이 읽힌다 — 비밀을 적지 않는다 |
 | **어느 타입에 있는지 모른다** | `search(q)` | `types[]` 가 타입별 건수. 타입을 알면 `objects_list` · `object_resolve` |
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
-| 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
+| 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true, expected_fingerprint=<미리 보기의 fingerprint>` | 미리 보기를 건너뛰지 않는다. 그 사이 계획이 바뀌면 ONTOLOGY-0114 — 다시 미리 보고 사람에게 |
 | **정의를 제안하기**(시스템 관리자가 아니다 · 문서에서 뽑은 정의를 관리자가 확인해야 한다) | `ontology_propose(schema, note=, origin_ref=)` → 나중에 `ontology_proposals` | 아무것도 안 바꾼다. 관리자가 검토함에서 계획을 읽고 적용 · 거절한다. `note` 에 근거(어느 문서의 무엇)를 꼭 |
 | **표(엑셀 · CSV)로 기록 타입을 만들고 축에 잇기** | `table_infer(rows)` → 사람 확인 → `table_build` → `ontology_import` → `objects_import` | **시스템 관리자만.** 참조 후보를 스스로 확정하지 않는다 — `one` · `many` · `none` 과 못 찾은 견본을 보인다 |
 | 정의 정리 — 안 쓰는 속성 · 빈 타입 · 따로 있는 같은 속성 찾기 | `ontology_check()` → 줄마다 `next` 의 미리 보기 → 사람 확인 | **시스템 관리자만.** 후보일 뿐 — 목록을 사람에게 보이고 하나씩. 한꺼번에 지우지 않는다 |
 | 정의 지우기(묶음 · 타입 · 인터페이스 · 관계 종류 · 속성) | `ontology_delete(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** `blocking` 은 우회하지 않는다 — 먼저 할 일을 사람에게. 원천이 잠근 정의(`managed_by`)는 그 원천이 제 것을 치울 때만 `source=<그 이름>` |
-| 속성 키 · 타입 slug 바꾸기(`w` → `weight`, `part2` → `part`) | `ontology_rename(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** 보이는 이름은 `ontology_import` 의 label — 이것은 주소 · 인자에 박히는 이름이다. `warnings` 의 바깥 자리(키트 · 레시피 · 수신 시스템)를 사람에게 함께 |
-| 같은 개념의 두 타입 합치기(`협력사` 300건 → `공급사`) | `ontology_move(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** 칸 대응(`fields`)과 버림 · 겹치는 객체 병합은 **사람이 정한 것만** |
+| 속성 키 · 타입 slug 바꾸기(`w` → `weight`, `part2` → `part`) | `ontology_rename(apply=false)` → 사람 확인 → `apply=true, expected_fingerprint=<계획의 fingerprint>` | **시스템 관리자만.** 보이는 이름은 `ontology_import` 의 label — 이것은 주소 · 인자에 박히는 이름이다. `warnings` 의 바깥 자리(키트 · 레시피 · 수신 시스템)를 사람에게 함께 |
+| 같은 개념의 두 타입 합치기(`협력사` 300건 → `공급사`) | `ontology_move(apply=false)` → 사람 확인 → `apply=true, expected_fingerprint=<계획의 fingerprint>` | **시스템 관리자만.** 칸 대응(`fields`)과 버림 · 겹치는 객체 병합은 **사람이 정한 것만** |
 | 속성 종류 변경 · 고를 값 이름 변경 · 코드표 승격 | `ontology_retype` · `ontology_rename_option` · `ontology_promote` — 모두 `apply=false` 먼저 | 저장값도 함께 바뀐다. 대체 값은 **사람이 정한 것만** |
-| 정의를 그때로 되돌리기 | `ontology_restore()` → 스냅샷 고르기 → `ontology_restore(id)` → 사람 확인 → `apply=true` | 그 뒤에 새로 만든 정의는 안 지운다 |
+| 정의를 그때로 되돌리기 | `ontology_restore()` → 스냅샷 고르기 → `ontology_restore(id)` → 사람 확인 → `apply=true, expected_fingerprint=<계획의 fingerprint>` | 그 뒤에 새로 만든 정의는 안 지운다 |
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
 | 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
@@ -462,6 +462,8 @@ AI 가 처음 만든 키(`w`) · slug(`part2`)가 굳으면 화면 주소 · MCP
   404 에 `details.moved_to`(새 타입) · `object_id` 가 온다 — 그 이름으로 다시 부른다.
 - 옮길 객체가 2만 건을 넘으면 작업이 된다 — `result` 가 계획, 확인 뒤 `job_apply`. 100만 건을 넘으면 계획도 작업으로
   센다. 적용하는 동안(200만 건에 17분쯤) 그 타입의 객체 수정은 기다린다.
+- 적용(`apply=true`)에는 사람이 본 계획의 `fingerprint` 를 `expected_fingerprint` 로 넘긴다 — 그 사이 병합할 짝 ·
+  버리는 값의 수 · 경고가 달라졌으면 ONTOLOGY-0114 로 막힌다(병합 3건을 확인받았는데 2만 건을 병합하지 않게).
 
 ### 지우기 — `ontology_delete(kind, slug, key=)`
 

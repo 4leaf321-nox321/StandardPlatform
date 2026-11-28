@@ -19,11 +19,12 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.objects.models import ObjectInstance
 from app.modules.workspaces.models import Workspace
+from app.shared.errors import code
 from tests.api.conftest import Signed, notifications_of
 from tests.api.test_ontology import (
     _link,
@@ -483,3 +484,191 @@ def test_내보내기는_못_보는_객체를_가리키는_칸을_비운다(
     assert "툴1" in mine
     assert "비밀사" not in mine and secret["id"] not in mine
     assert "비밀사" in exported(admin)
+
+
+# --- 별칭 겹침 · 지우기 · 합치기의 까닭 (2026-11-28 점검) ---------------------------------
+
+
+def _set_aliases(
+    client: TestClient, who: Signed, slug: str, object_id: str, values: list[str]
+) -> Any:
+    return client.put(
+        f"/api/objects/{slug}/{object_id}/aliases",
+        json={"aliases": values},
+        headers=who.headers,
+    )
+
+
+def test_별칭이_겹치면_거절하되_못_보는_임자의_이름은_말하지_않는다(
+    client: TestClient, admin: Signed, manager: Signed, db: Session
+) -> None:
+    """겹침은 타입 전체에서 본다(못 보는 객체의 별칭이어도 막는다) — 그 오류 말이 임자의 이름을
+    그대로 적어, 남의 부서 객체 이름이 샜다."""
+    other = _other(db)
+    tool = _make_type(client, admin, label="툴")
+    secret = _hidden(client, admin, tool, other, label="비밀 해석기")
+    assert _set_aliases(client, admin, tool, secret["id"], ["다이나"]).status_code == 200
+    mine = _make_object(client, manager, tool, label="LS-DYNA")
+
+    refused = _set_aliases(client, manager, tool, mine["id"], ["다이나"])
+    assert refused.status_code == 422, refused.text
+    error = refused.json()["error"]
+    assert error["code"] == code("OBJECTS", 80)
+    assert "비밀 해석기" not in refused.text
+    assert "볼 수 없는 객체의 별칭" in error["message"]
+    # 그 객체를 보는 사람에게는 이름으로 말한다.
+    seen = _set_aliases(client, admin, tool, mine["id"], ["다이나"])
+    assert seen.status_code == 422 and "비밀 해석기의 별칭" in seen.json()["error"]["message"]
+
+
+def test_별칭_후보를_붙이는_계획도_못_보는_객체의_이름을_말하지_않는다(
+    client: TestClient, admin: Signed, manager: Signed, db: Session
+) -> None:
+    from tests.api.test_alias_candidates import _candidates, _resolve
+
+    other = _other(db)
+    tool = _make_type(client, admin, label="툴", key_policy="optional")
+    mine = _make_object(client, manager, tool, label="LS-DYNA")
+    assert _resolve(client, manager, tool, "다이나") == "none"
+    (row,) = _candidates(client, manager, type=tool)
+    # 못 찾은 말이 남은 **뒤에** 남의 부서 객체가 그 말을 별칭으로 가졌다(있는 말은 후보로 안
+    # 남는다).
+    holder = _hidden(client, admin, tool, other, label="비밀 해석기")
+    assert _set_aliases(client, admin, tool, holder["id"], ["다이나"]).status_code == 200
+    # 식별자가 그 말과 같은 남의 객체 — 「이름(식별자)과 같습니다」 경고가 이름을 적었다.
+    _hidden(client, admin, tool, other, label="비밀 툴", key="다이나")
+
+    def planned(who: Signed) -> dict[str, Any]:
+        got = client.post(
+            f"/api/objects/alias-candidates/{row['id']}/attach",
+            json={"object_id": mine["id"]},
+            headers=who.headers,
+        )
+        assert got.status_code == 200, got.text
+        return dict(got.json())
+
+    plan = planned(manager)
+    text = json.dumps(plan, ensure_ascii=False)
+    assert "비밀 해석기" not in text and "비밀 툴" not in text
+    assert "볼 수 없는 객체의 별칭" in plan["blocking"][0]
+    assert any("「볼 수 없는 객체」 의 이름" in one for one in plan["warnings"])
+    shown = json.dumps(planned(admin), ensure_ascii=False)
+    assert "비밀 해석기의 별칭" in shown and "「비밀 툴」" in shown
+
+
+def _reasons(client: TestClient, who: Signed, slug: str, object_id: str) -> list[str]:
+    got = client.get(f"/api/objects/{slug}/{object_id}/history", headers=who.headers)
+    assert got.status_code == 200, got.text
+    return [str(one["reason"] or "") for one in got.json()]
+
+
+def _supplied(client: TestClient, admin: Signed) -> tuple[str, str, str]:
+    """공급사 · 부품(공급사를 가리키는 칸) · 둘을 잇는 관계 종류."""
+    vendor = _make_type(client, admin, label="공급사")
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="vendor",
+        label="공급사",
+        data_type="object_ref",
+        ref_type_slug=vendor,
+    )
+    kind = _make_relation(
+        client,
+        admin,
+        "supplied",
+        label="공급받음",
+        src_type_slugs=[part],
+        dst_type_slugs=[vendor],
+    )
+    return vendor, part, kind
+
+
+def test_못_보는_객체를_지우며_비운_칸_끊은_선의_까닭에_그_이름이_없다(
+    client: TestClient, admin: Signed, member: Signed, db: Session
+) -> None:
+    """참조를 비우고 지우면 가리키던 객체(남의 부서 것일 수 있다)마다 기록이 남는데, 그 까닭에
+    지운 객체의 이름을 박았다(「비밀 공급사 을 삭제하면서 참조를 비움」). 이력은 관계의 끝
+    이름만 가려 까닭으로 이름이 샜다."""
+    from app.modules.audit.models import AuditEntry
+    from app.modules.objects import lifecycle
+
+    other = _other(db)
+    vendor, part, kind = _supplied(client, admin)
+    secret = _hidden(client, admin, vendor, other, label="비밀 공급사")
+    bolt = _make_object(client, admin, part, label="볼트", properties={"vendor": secret["id"]})
+    nut = _make_object(client, admin, part, label="너트")
+    assert _link(client, admin, part, nut["id"], kind, secret["id"]).status_code == 201
+    gone = client.delete(
+        f"/api/objects/{vendor}/{secret['id']}",
+        params={"mode": "detach"},
+        headers=admin.headers,
+    )
+    assert gone.status_code == 204, gone.text
+
+    told = f"{HIDDEN} 을 삭제하면서 참조를 비움"
+    for target in (bolt, nut):
+        mine = _reasons(client, member, part, target["id"])
+        assert "비밀 공급사" not in "".join(mine)
+        assert told in mine
+        assert "비밀 공급사 을 삭제하면서 참조를 비움" in _reasons(
+            client, admin, part, target["id"]
+        )
+    # 저장된 까닭에도 이름이 없다 — 그 부서의 변경 이력에 그대로 선다.
+    stored = db.scalars(
+        select(AuditEntry.reason).where(AuditEntry.target_id == uuid.UUID(bolt["id"]))
+    ).all()
+    assert lifecycle.DETACHED in stored and not any("비밀" in (one or "") for one in stored)
+
+    # **옛 기록**(이름을 박던 때) — 걸린 객체를 못 보면 이름 없는 까닭으로 바꾼다.
+    entry = db.scalar(
+        select(AuditEntry).where(
+            AuditEntry.target_id == uuid.UUID(bolt["id"]),
+            AuditEntry.reason == lifecycle.DETACHED,
+        )
+    )
+    assert entry is not None
+    entry.reason = "비밀 공급사 을 삭제하면서 참조를 비움"
+    entry.changes = {k: v for k, v in entry.changes.items() if k != lifecycle.BECAUSE}
+    db.commit()
+    mine = _reasons(client, member, part, bolt["id"])
+    assert "비밀 공급사" not in "".join(mine) and lifecycle.DETACHED in mine
+    assert "비밀 공급사 을 삭제하면서 참조를 비움" in _reasons(client, admin, part, bolt["id"])
+
+
+def test_못_보는_객체를_합친_기록의_까닭에_그_이름이_없다(
+    client: TestClient, admin: Signed, member: Signed, db: Session
+) -> None:
+    other = _other(db)
+    vendor, part, _kind = _supplied(client, admin)
+    loser = _hidden(client, admin, vendor, other, label="비밀 공급사")
+    hidden_winner = _hidden(client, admin, vendor, other, label="비밀 본사")
+    bolt = _make_object(client, admin, part, label="볼트", properties={"vendor": loser["id"]})
+    merged = client.post(
+        f"/api/objects/{vendor}/{loser['id']}/merge",
+        json={"into": hidden_winner["id"]},
+        headers=admin.headers,
+    )
+    assert merged.status_code == 200, merged.text
+
+    mine = _reasons(client, member, part, bolt["id"])
+    assert "비밀" not in "".join(mine)
+    assert f"{HIDDEN} 을 {HIDDEN} 에 병합" in mine
+    assert "비밀 공급사 을 비밀 본사 에 병합" in _reasons(client, admin, part, bolt["id"])
+
+    # 이긴 쪽이 보이는 객체여도, 진 쪽의 이름은 이긴 쪽의 이력에 서지 않는다.
+    seen_winner = _make_object(client, admin, vendor, label="본사")
+    second = _hidden(client, admin, vendor, other, label="비밀 지사")
+    assert (
+        client.post(
+            f"/api/objects/{vendor}/{second['id']}/merge",
+            json={"into": seen_winner["id"]},
+            headers=admin.headers,
+        ).status_code
+        == 200
+    )
+    mine = _reasons(client, member, vendor, seen_winner["id"])
+    assert "비밀 지사" not in "".join(mine)
+    assert f"{HIDDEN} 을 본사 에 병합" in mine

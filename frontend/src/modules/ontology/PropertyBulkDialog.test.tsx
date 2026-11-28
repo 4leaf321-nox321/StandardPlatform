@@ -10,6 +10,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
+import { ApiError } from '@/shared/api/client'
 
 const ontologyApi = vi.hoisted(() => ({ importSchema: vi.fn() }))
 vi.mock('@/modules/ontology/api', () => ({ ontologyApi }))
@@ -96,9 +97,47 @@ describe('여러 속성 추가', () => {
     await userEvent.click(apply)
 
     await waitFor(() =>
-      expect(ontologyApi.importSchema).toHaveBeenLastCalledWith(expect.anything(), false),
+      expect(ontologyApi.importSchema).toHaveBeenLastCalledWith(
+        expect.anything(),
+        false,
+        undefined,
+      ),
     )
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(screen.getByText('적용했습니다.')).toBeInTheDocument()
+  })
+
+  it('적용은 미리 본 계획의 지문을 싣고, 그 사이 바뀌었으면(ONTOLOGY-0114) 계획을 비운다', async () => {
+    ontologyApi.importSchema
+      .mockResolvedValueOnce({ ...PLAN, fingerprint: 'fp-1' })
+      .mockRejectedValueOnce(
+        new ApiError(409, {
+          error: {
+            code: 'APP-ONTOLOGY-0114',
+            message: '미리 본 뒤 바뀌었습니다 — 다시 미리 보세요.',
+          },
+        }),
+      )
+    const onChanged = await mount()
+    const cell = screen.getByLabelText('1번 줄 key')
+    cell.focus()
+    await userEvent.paste('grade\t등급\ttext')
+    await userEvent.click(screen.getByRole('button', { name: /미리 보기/ }))
+    // 미리 보기에는 지문을 싣지 않는다 — 아직 읽은 계획이 없다.
+    await waitFor(() =>
+      expect(ontologyApi.importSchema).toHaveBeenLastCalledWith(expect.anything(), true, undefined),
+    )
+    const apply = await screen.findByRole('button', { name: '적용' })
+    await waitFor(() => expect(apply).toBeEnabled())
+    await userEvent.click(apply)
+
+    await waitFor(() =>
+      expect(ontologyApi.importSchema).toHaveBeenLastCalledWith(expect.anything(), false, 'fp-1'),
+    )
+    expect(await screen.findByText(/미리 본 뒤 바뀌었습니다/)).toBeInTheDocument()
+    // 옛 계획으로 다시 적용하지 않는다 — 다시 미리 봐야 「적용」 이 선다.
+    expect(screen.queryByText('1 건 변경')).toBeNull()
+    expect(screen.getByRole('button', { name: '적용' })).toBeDisabled()
+    expect(onChanged).not.toHaveBeenCalled()
   })
 })

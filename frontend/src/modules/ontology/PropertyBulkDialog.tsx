@@ -11,6 +11,9 @@
  * 적으면 「표로는 되는데 파일로는 안 되는」 상태가 생긴다.
  *
  * **더하고 고치기만 한다.** 표에 없다고 지우지 않는다(가져오기가 그렇다).
+ *
+ * 적용은 미리 본 계획의 지문(`fingerprint`)을 싣는다 — 미리 본 뒤 표를 고쳤거나 그 사이 정의가
+ * 바뀌었으면 서버가 ONTOLOGY-0114 로 막고, 이 창은 계획을 비워 다시 미리 보게 한다.
  */
 
 import { useState } from 'react'
@@ -19,6 +22,7 @@ import { Loader2 } from 'lucide-react'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { DataType, ImportPlan, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
+import { ApiError } from '@/shared/api/client'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PasteGrid, emptyRows, filledRows } from '@/shared/components/PasteGrid'
 import type { GridColumn } from '@/shared/components/PasteGrid'
@@ -127,10 +131,16 @@ export function PropertyBulkDialog({
     setBusy(true)
     setError(null)
     try {
-      const result = await ontologyApi.importSchema(schema(), !apply)
+      const result = await ontologyApi.importSchema(
+        schema(),
+        !apply,
+        apply ? plan?.fingerprint || undefined : undefined,
+      )
       setPlan(result)
       if (result.applied) onChanged()
     } catch (caught) {
+      // 미리 본 뒤 바뀌었다 — 옛 계획으로는 적용하지 않게 비운다(다시 「미리 보기」).
+      if (caught instanceof ApiError && caught.code.endsWith('ONTOLOGY-0114')) setPlan(null)
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setBusy(false)

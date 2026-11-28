@@ -136,6 +136,39 @@ class QueryOut(BaseModel):
 
 _BLOCKED = ("insert", "delete", "load", "clear", "drop", "create", "service", "with")
 
+# 차단어를 **찾지 않는 자리** — 글자(긴 것 먼저) · IRI · 주석 · 변수 · 접두어 이름. 질의
+# 전체를 그대로 훑으면 `FILTER(CONTAINS(STR(?l), "Drop"))` · 이름 `"Load case 1"@ko` · IRI
+# 의 마디 `/load/` 같은 읽기가 409 로 막혔다(2026-11-28). 이 자리에는 쓰기 · 바깥 호출의
+# 낱말이 설 수 없다(문법이 그렇다). 왼쪽부터 먼저 맞는 것을 지우므로 글자 안의 `#` · IRI
+# 안의 `"` 는 그 글자 · IRI 의 것으로 읽힌다. IRI 는 문법대로 빈칸 · `<>"{}|^`\` 가 없는
+# 것만 — `?a < 1 && ?b > 2` 를 하나로 지우지 않는다.
+_OPAQUE = re.compile(
+    r"'''(?:'{0,2}(?:[^'\\]|\\.))*'''"
+    r'|"""(?:"{0,2}(?:[^"\\]|\\.))*"""'
+    r"|'(?:[^'\\\n\r]|\\.)*'"
+    r'|"(?:[^"\\\n\r]|\\.)*"'
+    r'|<[^<>"{}|^`\\\x00-\x20]*>'
+    r"|#[^\n\r]*"
+    r"|[?$]\w+"
+    r"|(?:[A-Za-z][\w.-]*)?:[\w.:%-]*"
+)
+
+
+def _refuse_words(text: str) -> None:
+    """글자로 보는 첫 겹 — 묻기 낱말이 있나, 쓰기 · 바깥 호출의 낱말이 없나.
+
+    **이스케이프를 펼친 뒤에 본다** — rdflib 은 파싱 전에 `\\uXXXX` 를 펼친다. 글자 그대로
+    보면 `\\u0053ERVICE <http://169.254.169.254/…>` 가 차단어를 지나 서버가 그 주소를
+    불렀다(2026-10-08). 차단어는 글자 · IRI · 주석을 지운 뒤에 찾는다(`_OPAQUE`). 이 겹은
+    첫 겹이고, 파싱한 질의의 모양(SELECT · ASK 만, SERVICE 마디 없음)을 뒤에서 다시 본다."""
+    lowered = expandUnicodeEscapes(text).lower()
+    if not ("select" in lowered or "ask" in lowered):
+        raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
+    bare = _OPAQUE.sub(" ", lowered)
+    for word in _BLOCKED:
+        if re.search(rf"\b{word}\b", bare):
+            raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
+
 
 def _algebra_iris(node: Any, out: set[str] | None = None) -> set[str]:
     """파싱한 질의 나무에 나오는 IRI 전부 — 삼중 패턴 · 속성 경로(`sp:a/sp:b`, `^sp:a`) ·
@@ -294,15 +327,7 @@ def query(
     목록 · 조건 · 통계로는 한 타입 안이 쉽지만, 「코어를 건너뛰어 잇는 물음」(모델 → 과제 →
     프로젝트를 한 번에, 또는 역관계로 거슬러)은 질의어가 낫다. 읽기만 한다 — 쓰기 · 바깥 호출은
     막고, 결과는 `limit` 에서 자른다."""
-    # **이스케이프를 펼친 뒤에 본다** — rdflib 은 파싱 전에 `\uXXXX` 를 펼친다. 글자 그대로
-    # 보면 `\u0053ERVICE <http://169.254.169.254/…>` 가 차단어를 지나 서버가 그 주소를
-    # 불렀다(2026-10-08). 차단어는 첫 겹이고, 아래에서 파싱한 질의의 모양을 다시 본다.
-    lowered = expandUnicodeEscapes(payload.query).lower()
-    if not ("select" in lowered or "ask" in lowered):
-        raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
-    for word in _BLOCKED:
-        if re.search(rf"\b{word}\b", lowered):
-            raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
+    _refuse_words(payload.query)
 
     names = _names(request)
     # **그래프를 세우기 전에 질의를 푼다** — 접두어만 있으면 된다. 문법이 틀린 질의로 수만
@@ -633,12 +658,7 @@ def _binding(term: dict[str, Any]) -> dict[str, str]:
 
 def _check(text: str, names: export.Names) -> None:
     """`query` 와 같은 검사 — 묻기(SELECT · ASK)만, 쓰기 · 바깥 호출(SERVICE)은 막는다."""
-    lowered = expandUnicodeEscapes(text).lower()
-    if not ("select" in lowered or "ask" in lowered):
-        raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
-    for word in _BLOCKED:
-        if re.search(rf"\b{word}\b", lowered):
-            raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
+    _refuse_words(text)
     try:
         prepared = translateQuery(
             parseQuery(text),

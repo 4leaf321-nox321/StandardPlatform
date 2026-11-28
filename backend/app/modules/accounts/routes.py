@@ -22,6 +22,7 @@ from app.modules.accounts.schemas import (
     HomeWorkspaceRequest,
     MembershipsRequest,
     RejectRequest,
+    SignupOut,
     SignupRequest,
     SystemAdminRequest,
     TemporaryPasswordResponse,
@@ -34,17 +35,19 @@ from app.shared.pagination import Page
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
-@router.post("/signup", response_model=AccountOut, status_code=201)
-def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> AccountOut:
-    """가입 신청. 승인 전까지는 로그인할 수 없다(status=pending)."""
-    user = services.signup(
+@router.post("/signup", response_model=SignupOut, status_code=202)
+def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> SignupOut:
+    """가입 신청. 승인 전까지는 로그인할 수 없다(status=pending). **아이디가 이미 있어도
+    같은 답**(202 · 같은 말)이고 그때는 아무것도 만들지 않는다 — 로그인 없이 아이디가
+    있는지를 알아낼 수 없게. 만든 계정은 싣지 않는다(시스템 관리자가 승인 대기에서 본다)."""
+    services.signup(
         db,
         email=payload.email,
         password=payload.password,
         display_name=payload.display_name,
         workspace_slug=payload.workspace_slug,
     )
-    return services.account_out(db, user)
+    return SignupOut(message=services.SIGNUP_RECEIVED)
 
 
 @router.get("/summary", response_model=AccountSummaryOut)

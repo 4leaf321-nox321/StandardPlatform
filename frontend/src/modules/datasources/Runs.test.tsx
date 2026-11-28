@@ -157,7 +157,7 @@ describe('최근 동기화', () => {
     await userEvent.click(screen.getByRole('button', { name: /동기화/ }))
     expect(await screen.findByRole('button', { name: /적용/ })).toBeEnabled()
     expect(screen.getByText(/적용할 수 있습니다\. 기다리는 선 · 참조는/)).toBeInTheDocument()
-    expect(screen.getByText(/선 기다림 1 · 참조 대기 1/)).toBeInTheDocument()
+    expect(screen.getByText(/관계 대기 1 · 참조 대기 1/)).toBeInTheDocument()
     expect(screen.getByRole('list', { name: '안내' })).not.toHaveClass('text-destructive')
     expect(screen.queryByRole('list', { name: '오류' })).toBeNull()
   })

@@ -14,11 +14,13 @@
 #
 #   <BackupRoot>/db/db-<시각>.dump   pg_dump 커스텀 포맷 — 일 7벌 + 일요일분 4벌
 #                                   (작업 파일 내용 job_files.data 는 뺀다 — 임시물)
-#   <BackupRoot>/filestore/          첨부 미러 1벌
+#   <BackupRoot>/filestore/          첨부 미러 1벌(_jobs/ · _incoming/ 은 임시물이라 뺀다)
+#   <BackupRoot>/filestore-deleted/<YYYYmmdd>/   그날 미러에서 빠진 파일 — 같은 경로로 14일
 #   <BackupRoot>/env/.env            접속 정보·JWT 비밀키
-#   <BackupRoot>/LAST_BACKUP.txt     무엇을 언제 받았는지
+#   <BackupRoot>/LAST_BACKUP.txt     무엇을 언제 받았는지 · 경고
 #
-# 첨부는 **불변 파일**이라 세대가 필요 없다 — 미러 한 벌이면 된다. 덤프만 세대를 둔다.
+# 첨부는 **불변 파일**이라 세대 대신 미러 한 벌이다 — 다만 바로 지우지 않는다(아래 「첨부」).
+# 되살리기: rsync -a <BackupRoot>/filestore-deleted/<날짜>/ <첨부 폴더>/
 #
 # ## 매일 받게 하기 (systemd 타이머)
 #
@@ -64,6 +66,11 @@ FILESTORE=""
 KEEP_DAILY="${KEEP_DAILY:-7}"
 KEEP_WEEKLY="${KEEP_WEEKLY:-4}"
 SKIP_IF_FRESH_HOURS="${SKIP_IF_FRESH_HOURS:-0}"
+KEEP_DELETED_DAYS="${KEEP_DELETED_DAYS:-14}"
+# 한 번에 지울 첨부가 미러의 이 비율(%)을 넘고 이 수도 넘으면 이번에는 안 지운다.
+MASS_DELETE_PERCENT="${MASS_DELETE_PERCENT:-50}"
+MASS_DELETE_MIN="${MASS_DELETE_MIN:-100}"
+ALLOW_MASS_DELETE="${ALLOW_MASS_DELETE:-0}"
 
 while getopts ":i:o:e:f:h" opt; do
     case "$opt" in
@@ -71,7 +78,7 @@ while getopts ":i:o:e:f:h" opt; do
         o) BACKUP_ROOT="$OPTARG" ;;
         e) ENV_FILE="$OPTARG" ;;
         f) FILESTORE="$OPTARG" ;;
-        h) sed -n '2,46p' "$0"; exit 0 ;;
+        h) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) err "쓰지 않는 옵션입니다. -h 로 사용법을 보세요." ;;
     esac
 done
@@ -121,14 +128,63 @@ mv "$DUMP.part" "$DUMP"
 
 # ── 첨부 ──────────────────────────────────────────────────────────────────────
 FILES=0
+MIRROR="$BACKUP_ROOT/filestore"
+DELETED_ROOT="$BACKUP_ROOT/filestore-deleted"
+DELETED_DIR="$DELETED_ROOT/$(date +%Y%m%d)"
+MIRROR_NOTE="빠진 것 없음"
+WARNING=""
 if [[ -d "$FILESTORE" ]]; then
-    info "첨부 미러: $FILESTORE -> $BACKUP_ROOT/filestore"
-    mkdir -p "$BACKUP_ROOT/filestore"
-    # --delete 로 미러를 맞춘다. 첨부는 불변이라 세대가 필요 없다.
-    rsync -a --delete "$FILESTORE/" "$BACKUP_ROOT/filestore/"
-    FILES=$(find "$BACKUP_ROOT/filestore" -type f | wc -l)
+    info "첨부 미러: $FILESTORE -> $MIRROR"
+    # **미러에서 바로 지우지 않는다.** 원본에서 사라진 파일(첨부 정리 · 실수로 지움 · 빈 폴더로 다시 마운트)을
+    # 그날 밤 미러에서도 지우면, 한 벌뿐인 백업까지 원본과 같은 날 잃는다(2026-11-28 점검 — 예전에는
+    # `rsync --delete` 그대로였다). 빠지는 파일은 filestore-deleted/<그날>/ 로 옮기고 KEEP_DELETED_DAYS 일 뒤
+    # 지운다. 미러의 절반 넘게(그리고 100개 넘게) 지우게 되면 그날은 안 지우고 「경고」 를 남긴다 — 정말 지운
+    # 것이면 한 번만 ALLOW_MASS_DELETE=1.
+    mkdir -p "$MIRROR"
+    # **작업 파일(_jobs/)과 받다 만 업로드(_incoming/)는 담지 않는다** — 7일 · 하루 뒤 지워지는 임시물이고, 큰
+    # 사진 zip 몇 개가 미러를 채웠다. 앞 판이 담아 둔 것은 빠진 파일 칸으로 옮긴다(14일 뒤 지워진다).
+    for temp in _jobs _incoming; do
+        if [[ -e "$MIRROR/$temp" ]]; then
+            mkdir -p "$DELETED_DIR"
+            target="$DELETED_DIR/$temp"
+            if [[ -e "$target" ]]; then target="$DELETED_DIR/$temp.$STAMP"; fi
+            mv "$MIRROR/$temp" "$target"
+            info "미러에서 임시 폴더를 뺌: $temp → $target"
+        fi
+    done
+    # 빠지는 파일(지워졌거나 덮인 것)은 지우지 않고 그날의 칸으로 옮긴다(--backup-dir).
+    RSYNC=(rsync -a --exclude=/_jobs/ --exclude=/_incoming/ --backup "--backup-dir=$DELETED_DIR")
+    MIRRORED=$(find "$MIRROR" -type f | wc -l)
+    # 지울 것을 먼저 센다(파일만 — 폴더 줄은 / 로 끝난다).
+    GOING=$("${RSYNC[@]}" --delete --dry-run --itemize-changes "$FILESTORE/" "$MIRROR/" \
+        | grep -c '^\*deleting .*[^/]$' || true)
+    if (( GOING > MASS_DELETE_MIN && GOING * 100 > MIRRORED * MASS_DELETE_PERCENT )) \
+        && [[ "$ALLOW_MASS_DELETE" != "1" ]]; then
+        WARNING="첨부 미러의 삭제를 건너뜀 — 지울 파일 ${GOING}개가 미러 ${MIRRORED}개의 ${MASS_DELETE_PERCENT}% 를 넘습니다. 원본($FILESTORE)이 비었거나 다른 곳을 가리키는지 확인하세요. 새 파일만 복사했습니다. 정말 지운 것이면 한 번만: ALLOW_MASS_DELETE=1 로 다시 돌립니다."
+        echo "경고: $WARNING" >&2
+        "${RSYNC[@]}" "$FILESTORE/" "$MIRROR/"
+        MIRROR_NOTE="삭제 건너뜀(지울 것 ${GOING}개)"
+    else
+        "${RSYNC[@]}" --delete "$FILESTORE/" "$MIRROR/"
+        if (( GOING > 0 )); then MIRROR_NOTE="${GOING}개를 $DELETED_DIR 로 옮김"; fi
+    fi
+    FILES=$(find "$MIRROR" -type f | wc -l)
 else
     echo "경고: filestore 가 없습니다 — 아직 첨부가 없다면 정상입니다." >&2
+fi
+
+# 빠진 파일의 칸은 KEEP_DELETED_DAYS 일 — **폴더 이름의 날짜로 판정한다**(mtime 은 복사하면 바뀐다).
+if [[ -d "$DELETED_ROOT" ]]; then
+    CUTOFF_DAY="$(date -d "-$KEEP_DELETED_DAYS days" +%Y%m%d)"
+    for dir in "$DELETED_ROOT"/*/; do
+        [[ -d "$dir" ]] || continue
+        day="$(basename "$dir")"
+        [[ "$day" =~ ^[0-9]{8}$ ]] || continue
+        if [[ "$day" < "$CUTOFF_DAY" ]]; then
+            info "오래된 빠진 첨부 삭제: filestore-deleted/$day"
+            rm -rf "${DELETED_ROOT:?}/$day"
+        fi
+    done
 fi
 
 # .env 에 JWT 비밀키가 있다. **이게 없으면 복구해도 전원이 다시 로그인한다.**
@@ -163,21 +219,25 @@ cat > "$BACKUP_ROOT/LAST_BACKUP.txt" <<TXT
 받은 시각    : $(date -Is)
 설치 경로    : $INSTALL_DIR  (.env $ENV_FILE · 첨부 $FILESTORE)
 데이터베이스 : $DB_NAME @ $DB_HOST:$DB_PORT  ($(basename "$DUMP"), ${MB}MB)
-첨부         : $FILES 개 (미러: $BACKUP_ROOT/filestore)
+첨부         : $FILES 개 (미러: $MIRROR)
+첨부 미러    : $MIRROR_NOTE (빠진 파일은 $DELETED_ROOT/<날짜>/ 에 ${KEEP_DELETED_DAYS}일)
 보관         : 일 ${KEEP_DAILY}벌 + 일요일분 ${KEEP_WEEKLY}벌
-
+${WARNING:+경고         : $WARNING
+}
 복구:
   sudo ./restore.sh -b '$BACKUP_ROOT' -d ${DB_NAME}_restore_check          # 확인만
   sudo ./restore.sh -b '$BACKUP_ROOT' -d $DB_NAME -F '$FILESTORE' -f       # 실제 복구(서비스를 멈춘 뒤)
   DB 가 있는 서버에서 sudo 로 — DB 만들기 · 이름 바꾸기 · pgvector 는 그 서버의 postgres 계정이 한다.
   실제 복구는 임시 DB 에 풀어 검사한 뒤 이름을 바꾸고, 지금 DB 는 ${DB_NAME}__before_restore_<시각> 으로 남긴다.
+  지워진 첨부 몇 개만 되살릴 때: rsync -a '$DELETED_ROOT/<날짜>/' '$FILESTORE/'   (그날 미러에서 빠진 것)
 
 주의: DB 와 첨부는 같은 시점의 것이어야 한다. 첨부는 미러 한 벌이라 옛 덤프로
       되돌리면 그 뒤에 올린 파일이 「DB 에는 없는데 파일은 있는」 상태가 된다 —
       그것은 무해하다. 반대는 아니다.
 TXT
 
-info "백업 완료: $DUMP (DB ${MB}MB, 첨부 $FILES 개)"
+info "백업 완료: $DUMP (DB ${MB}MB, 첨부 $FILES 개 · 미러: $MIRROR_NOTE)"
+[[ -z "$WARNING" ]] || echo "경고: $WARNING" >&2
 echo
 echo "  **한 번은 실제로 복구해 보세요.** 받아만 두고 복구를 해 본 적이 없는"
 echo "  백업은 백업이 아닙니다 — restore.sh 가 확인용 DB 로 그것을 해 봅니다."

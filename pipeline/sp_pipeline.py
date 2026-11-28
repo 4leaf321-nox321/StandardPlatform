@@ -279,6 +279,150 @@ BUNDLE_OPTIONS = {
 #: (method, url, headers, body) -> (status, json). 시험이 갈아 끼운다.
 Sender = Callable[[str, str, dict[str, str], bytes | None], tuple[int, Any]]
 
+#: 플랫폼의 slug 규칙 — 백엔드 `ontology/services.SLUG_RE`(타입 · 관계 종류 · 묶음)와 같다.
+#: 키트는 slug 로 **파일 이름과 주소의 한 마디**를 만든다. 대응 파일의 `"type_slug":
+#: "../../../../<어디든>/claude_desktop_config"` 가 작업 폴더 밖의 JSON 을 덮었다 — 플랫폼이
+#: 받지 않을 꼴은 키트가 먼저 막는다. (`fullmatch` 로 본다 — `$` 는 끝의 줄바꿈을 지나친다.)
+SLUG_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
+#: 속성 키 — 백엔드 `KEY_RE`. 문서 속성의 키가 주소의 한 마디가 된다.
+KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,47}")
+
+
+def require_slug(value: Any, what: str) -> str:
+    """플랫폼 slug 꼴의 값만 — 아니면 무엇이 틀렸는지 말하고 멈춘다."""
+    if not isinstance(value, str) or not SLUG_RE.fullmatch(value):
+        raise Stop(
+            f"{what} {value!r} 는 플랫폼의 slug 꼴이 아닙니다 — 소문자로 시작하는 영문 · "
+            "숫자 · 밑줄 32자 이내(예: model_spec)"
+        )
+    return value
+
+
+def require_key(value: Any, what: str) -> str:
+    """플랫폼 속성 키 꼴의 값만."""
+    if not isinstance(value, str) or not KEY_RE.fullmatch(value):
+        raise Stop(
+            f"{what} {value!r} 는 플랫폼의 속성 키 꼴이 아닙니다 — 소문자로 시작하는 영문 · "
+            "숫자 · 밑줄 48자 이내"
+        )
+    return value
+
+
+def api_path(*segments: Any) -> str:
+    """플랫폼 주소의 경로 — **마디마다 감싸서**(`quote(…, safe="")`) 잇는다.
+
+    값을 f-문자열로 그대로 이으면 값 속의 `/` · `?` · `#` 이 주소의 다른 자리가 된다:
+    `documents/{key}` 의 키가 `x?y` 면 질의가, `../..` 면 다른 경로가 된다(플랫폼 MCP 도 같은
+    것을 고쳤다, ADR 0102 §5). `.` · `..` 는 감싸도 그대로라 여기서 거절한다."""
+    parts: list[str] = []
+    for one in segments:
+        text = str(one)
+        if text in ("", ".", ".."):
+            raise Stop(f"주소의 한 마디가 비었거나 {text!r} 입니다 — 값을 확인하세요")
+        parts.append("/" + urllib.parse.quote(text, safe=""))
+    return "".join(parts)
+
+
+def api_url(server: str, path: str, params: dict[str, Any] | None = None) -> str:
+    """주소 + 질의. **질의는 `params` 로만** 붙인다(`urlencode`) — 경로에 `?` 를 이어 쓰면 값이
+    질의의 다른 칸(`&apply=true`)이 될 수 있다."""
+    if "?" in path or "#" in path:
+        raise Stop(f"경로에 질의 · 조각을 잇지 않습니다(params 로): {path!r}")
+    query = f"?{urllib.parse.urlencode(params)}" if params else ""
+    return f"{server.rstrip('/')}{path}{query}"
+
+
+#: 주소 어디에도 있으면 안 되는 글자 — 제어 문자 · 빈칸, `\`(Windows 꼴 구분자 — 중계가 `/`
+#: 로 읽는다), `#`(그 뒤가 조각이 되어 서버에 안 간다 — 꼬리를 잘라 다른 길이 된다).
+_URL_BAD = re.compile(r"[\x00-\x20\x7f\\#]")
+#: 경로에 있으면 안 되는 감싼 글자 — `.` · `/` · `\`. 키트의 값(slug · 키 · uuid)에는 이것이
+#: 들 일이 없고, 중계 · 서버가 풀어 읽으면 `..` · 구분자가 된다.
+_PATH_ESCAPES = ("%2e", "%2f", "%5c")
+
+
+def check_url(url: str) -> str:
+    """**키트가 보내는 모든 요청이 지나는 마지막 검사** — 주소가 다른 자리를 가리키면 보내지
+    않는다. 주소를 만드는 자리마다 감싸는 것(`api_path`)이 먼저고, 이것은 그 하나를 빠뜨린
+    날을 위한 것이다."""
+    parts = urllib.parse.urlsplit(url)
+    bad = _URL_BAD.search(url)
+    segments = parts.path.split("/")
+    lowered = parts.path.lower()
+    why = ""
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        why = "http · https 주소가 아님"
+    elif bad:
+        why = f"{bad.group(0)!r} 가 들어 있음"
+    elif any(one in (".", "..") for one in segments):
+        why = "`.` · `..` 마디"
+    elif any(one in lowered for one in _PATH_ESCAPES):
+        why = "감싼 `.` · `/` · `\\`(%2e · %2f · %5c)"
+    if why:
+        raise Stop(
+            f"주소가 다른 자리를 가리킬 수 있어 보내지 않았습니다({why}): "
+            f"{parts.path[:200]!r} — 값(slug · 키 · 번호)을 확인하세요"
+        )
+    return url
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """(scheme, 호스트, 포트) — 포트를 안 적었으면 그 scheme 의 기본 포트."""
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return (
+        scheme,
+        (parts.hostname or "").lower(),
+        port or {"http": 80, "https": 443}.get(scheme),
+    )
+
+
+def _shown_origin(url: str) -> str:
+    scheme, host, port = _origin(url)
+    return f"{scheme}://{host}" + (f":{port}" if port not in (None, 80, 443) else "")
+
+
+def _redirected(here: str, there: str, code: int) -> str:
+    return (
+        f"다른 주소로 넘겨져 멈췄습니다({code} → {_shown_origin(there)}) — 포털 로그인이 "
+        "끝났을 수 있습니다. 토큰은 그 주소로 보내지 않았습니다. 브라우저로 그 플랫폼에 다시 "
+        f"로그인한 뒤 다시 하세요. 늘 그렇다면 등록한 주소({_shown_origin(here)})가 플랫폼의 "
+        "주소가 맞는지(http · https · 포트까지) 확인하세요."
+    )
+
+
+class _SameOriginRedirects(urllib.request.HTTPRedirectHandler):
+    """**다른 곳(scheme · 호스트 · 포트)으로 넘기는 답은 따라가지 않는다** — 토큰이 그리로
+    가지 않게.
+
+    urllib 의 기본 처리는 넘겨진 곳에 머리글을 그대로 싣는다 — `Authorization: Bearer
+    <토큰>` 까지. 포털(HWAX) 뒤의 플랫폼은 포털 세션이 끝나면 다른 호스트의 로그인(인증
+    서버)으로 넘기고, 키트의 토큰은 만료가 없다. 같은 곳 안에서 넘기는 것(`/x/` → `/x`)만
+    따른다."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if _origin(newurl) != _origin(req.full_url):
+            with contextlib.suppress(Exception):
+                fp.close()
+            raise Stop(_redirected(req.full_url, newurl, code))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+#: 키트의 HTTP — 기본 처리기 그대로에 넘김만 바꾼 것(`urlopen` 의 전역 opener 는 건드리지
+#: 않는다).
+_OPENER = urllib.request.build_opener(_SameOriginRedirects)
+
 
 def _urllib_send(
     method: str,
@@ -287,9 +431,9 @@ def _urllib_send(
     body: bytes | None,
     timeout: float = 600,
 ) -> tuple[int, Any]:
-    request = urllib.request.Request(url, data=body, method=method, headers=headers)
+    request = urllib.request.Request(check_url(url), data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             status, raw = response.status, response.read()
             kind = str(response.headers.get("Content-Type") or "")
     except urllib.error.HTTPError as failure:
@@ -996,7 +1140,7 @@ def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any
         "X-Client": CLIENT,
     }
     raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    url = f"{server.rstrip('/')}/api/bundles/import"
+    url = api_url(server, "/api/bundles/import")
     status, answer = _send(server, "POST", url, headers, raw, who="플랫폼")
     if status != 202:
         _refused("플랫폼", status, answer)
@@ -1006,6 +1150,22 @@ def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any
         raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {job!r}")
     # 작업 번호를 함께 — 미리 본 계획을 그 플랫폼 화면 「작업」 에서 열어 적용하는 길이다.
     return {**result, "job_id": str(job.get("id") or "")}
+
+
+def _transmit(
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+    *,
+    timeout: float | None = None,
+) -> tuple[int, Any]:
+    """**플랫폼 · 허브로 가는 요청이 모두 지나는 한 곳** — 주소를 마지막으로 보고(`check_url`)
+    보낸다. `SEND` 를 직접 부르지 않는다(시험이 갈아 끼운 가짜도 이 검사를 거치게)."""
+    check_url(url)
+    if timeout is not None and SEND is _urllib_send:
+        return _urllib_send(method, url, headers, body, timeout=timeout)
+    return SEND(method, url, headers, body)
 
 
 def _send(
@@ -1018,7 +1178,7 @@ def _send(
     who: str,
 ) -> tuple[int, Any]:
     try:
-        return SEND(method, url, headers, body)
+        return _transmit(method, url, headers, body)
     except (urllib.error.URLError, OSError) as failure:
         # **닿지 않은 것과 거절당한 것을 가른다.** 트레이스백을 보여 주면 사람은 무엇을
         # 고칠지(주소 · 서버가 떠 있나 · 사내망) 모른다.
@@ -1043,7 +1203,7 @@ def _wait_job(server: str, token: str, job: Any, *, who: str = "플랫폼") -> d
         raise Stop(f"{who}이 작업을 돌려주지 않았습니다: {job!r}")
     job_id = job_uuid(job["id"])
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
-    url = f"{server.rstrip('/')}/api/jobs/{job_id}"
+    url = api_url(server, api_path("api", "jobs", job_id))
     shown = ""
     queued_for = 0.0
     while True:
@@ -1087,10 +1247,18 @@ def _wait_job(server: str, token: str, job: Any, *, who: str = "플랫폼") -> d
         WAIT(POLL_SECONDS)
 
 
-def _get_json(server: str, token: str, path: str, *, who: str = "허브") -> Any:
+def _get_json(
+    server: str,
+    token: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    who: str = "허브",
+) -> Any:
+    """`path` 는 `api_path(…)`(또는 값이 없는 고정 경로), 질의는 `params` 로."""
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
     status, answer = _send(
-        server, "GET", f"{server.rstrip('/')}{path}", headers, None, who=who
+        server, "GET", api_url(server, path, params), headers, None, who=who
     )
     if status != 200:
         _refused(who, status, answer)
@@ -1106,10 +1274,8 @@ def _probe_job(server: str, token: str, job_id: str) -> tuple[int, Any] | None:
     """작업 하나를 **묻기만** — 짧게 기다리고, 못 닿으면(포털의 로그인 화면 포함) None."""
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
     try:
-        url = f"{server.rstrip('/')}/api/jobs/{job_uuid(job_id)}"
-        if SEND is _urllib_send:
-            return _urllib_send("GET", url, headers, None, timeout=PROBE_SECONDS)
-        return SEND("GET", url, headers, None)
+        url = api_url(server, api_path("api", "jobs", job_uuid(job_id)))
+        return _transmit("GET", url, headers, None, timeout=PROBE_SECONDS)
     except (urllib.error.URLError, OSError, ValueError, Stop):
         return None
 
@@ -1247,7 +1413,7 @@ def apply_plan(server: str, token: str, job_id: str) -> dict[str, Any]:
     """
     job_id = job_uuid(job_id, "계획 작업의 번호")
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
-    url = f"{server.rstrip('/')}/api/jobs/{job_id}/apply"
+    url = api_url(server, api_path("api", "jobs", job_id, "apply"))
     status, answer = _send(server, "POST", url, headers, None, who="플랫폼")
     if status != 202:
         error = answer.get("error", {}) if isinstance(answer, dict) else {}
@@ -1324,7 +1490,7 @@ def jobs_link(server: str, job_id: str) -> str:
     적용은 사람이 거기서 「적용」 을 누른다. 명령 창보다 쉽고, **그 플랫폼의 화면에서** 누르니
     엉뚱한 곳에 넣을 일이 없다. 계획을 본 사람(이 토큰의 주인)만 적용할 수 있다.
     """
-    return f"{server.rstrip('/')}/jobs?job={job_id}"
+    return api_url(server, "/jobs", {"job": job_id})
 
 
 def command_line(*args: str) -> str:
@@ -1380,12 +1546,12 @@ def _export_bundle(hub: str, hub_token: str, groups: list[str]) -> Any:
     }
     raw = json.dumps({"groups": groups}, ensure_ascii=False).encode("utf-8")
     status, answer = _send(
-        hub, "POST", f"{hub.rstrip('/')}/api/bundles/export", headers, raw, who="허브"
+        hub, "POST", api_url(hub, "/api/bundles/export"), headers, raw, who="허브"
     )
     if status != 202:
         _refused("허브", status, answer)
     job = _wait_job(hub, hub_token, answer, who="허브")
-    return _get_json(hub, hub_token, f"/api/jobs/{job_uuid(job['id'])}/download")
+    return _get_json(hub, hub_token, api_path("api", "jobs", job_uuid(job["id"]), "download"))
 
 
 def resolve_names(
@@ -1395,7 +1561,12 @@ def resolve_names(
 
     도구가 스스로 맞추지 않는 이유: 식별자 → 별칭 → 이름 순서와 겹침 규칙은 플랫폼의 것이고,
     두 벌로 두면 「도구는 된다는데 넣으면 안 되는」 상태가 생긴다.
+
+    slug 꼴이 아닌 타입은 **묻지 않고** None(플랫폼에 그런 타입은 있을 수 없다 — 404 와 같다)
+    — 그 값으로 주소를 만들면 다른 길(`x/../../jobs/<번호>/apply#`)이 된다.
     """
+    if not isinstance(type_slug, str) or not SLUG_RE.fullmatch(type_slug):
+        return None
     out: dict[str, dict[str, Any]] = {}
     headers = {
         "Authorization": f"Bearer {token}",
@@ -1403,7 +1574,7 @@ def resolve_names(
         "X-Client": CLIENT,
     }
     unique = list(dict.fromkeys(one for one in names if one))
-    url = f"{server.rstrip('/')}/api/objects/{urllib.parse.quote(type_slug)}/resolve-many"
+    url = api_url(server, api_path("api", "objects", type_slug, "resolve-many"))
     for at in range(0, len(unique), 500):
         raw = json.dumps({"names": unique[at : at + 500]}, ensure_ascii=False).encode("utf-8")
         status, body = _send(server, "POST", url, headers, raw, who="플랫폼")
@@ -1421,16 +1592,16 @@ def resolve_names(
 def fetch_keys(server: str, token: str, type_slug: str) -> set[str]:
     """플랫폼에서 그 타입의 식별자를 전부 받는다(쪽마다) — 원천의 코드가 코어에 붙나를
     볼 때."""
+    require_slug(type_slug, "코어 대조의 타입")
     keys: set[str] = set()
     offset = 0
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
     while True:
-        url = (
-            f"{server.rstrip('/')}/api/objects/{urllib.parse.quote(type_slug)}"
-            f"?limit=500&offset={offset}"
+        url = api_url(
+            server, api_path("api", "objects", type_slug), {"limit": 500, "offset": offset}
         )
         try:
-            status, body = SEND("GET", url, headers, None)
+            status, body = _transmit("GET", url, headers, None)
         except (urllib.error.URLError, OSError) as failure:
             reason = getattr(failure, "reason", failure)
             raise Stop(
@@ -1600,6 +1771,16 @@ def cmd_pull(
     body = _export_bundle(hub, hub_token, groups)
     if not isinstance(body, dict) or body.get("format") != FORMAT:
         raise Stop(f"허브의 응답이 묶음이 아닙니다: {str(body)[:200]}")
+    # 파일 이름이 허브가 보낸 slug 에서 나온다 — slug 꼴만(밖의 경로를 가리키지 못하게). 실행
+    # 폴더를 만들기 전에 본다(반쯤 쓴 폴더를 남기지 않는다).
+    files: list[tuple[str, str, Any]] = []
+    for folder, listed in (
+        (OBJECTS_DIR, body.get("objects") or []),
+        (RELATIONS_DIR, body.get("relations") or []),
+    ):
+        for index, one in enumerate(listed, start=1):
+            slug = require_slug(one.get("type_slug"), "허브가 보낸 묶음의 타입")
+            files.append((folder, f"{index:03d}-{slug}", one))
     cmd_init(path, title=f"허브에서 받기 — {', '.join(groups)}")
     manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
     manifest["source"] = source
@@ -1616,10 +1797,8 @@ def cmd_pull(
     manifest["notes"] = "\n".join(str(one) for one in body.get("warnings") or [])
     _write(path / MANIFEST, manifest)
     _write(path / ONTOLOGY, body.get("ontology") or {})
-    for index, batch in enumerate(batches, start=1):
-        _write(path / OBJECTS_DIR / f"{index:03d}-{batch['type_slug']}.json", batch)
-    for index, batch in enumerate(body.get("relations") or [], start=1):
-        _write(path / RELATIONS_DIR / f"{index:03d}-{batch['type_slug']}.json", batch)
+    for folder, name, batch in files:
+        _write(path / folder / f"{name}.json", batch)
     graves = body.get("tombstones") or {}
     if graves.get("objects") or graves.get("relations"):
         _write(path / TOMBSTONES, graves)
@@ -2135,7 +2314,7 @@ def _apply_answer(outcome: dict[str, Any]) -> dict[str, Any]:
 def cmd_runs(*, server: str, token: str, limit: int = 20) -> tuple[bool, str]:
     """넣은 판들 — **되돌릴 번호를 여기서 찾는다.**"""
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
-    url = f"{server.rstrip('/')}/api/bundles/runs?limit={max(1, min(limit, 100))}"
+    url = api_url(server, "/api/bundles/runs", {"limit": max(1, min(int(limit), 100))})
     status, answer = _send(server, "GET", url, headers, None, who="플랫폼")
     if status != 200:
         _refused("플랫폼", status, answer)
@@ -2175,9 +2354,10 @@ def undo_job(
         "Content-Type": "application/json",
         "X-Client": CLIENT,
     }
-    url = (
-        f"{server.rstrip('/')}/api/bundles/runs/{run_id}/undo"
-        f"?apply={'true' if apply else 'false'}"
+    url = api_url(
+        server,
+        api_path("api", "bundles", "runs", run_id, "undo"),
+        {"apply": "true" if apply else "false"},
     )
     status, answer = _send(server, "POST", url, headers, b"", who="플랫폼")
     if status != 202:
@@ -2201,7 +2381,7 @@ def cmd_undo_apply(run_id: str, plan_job: str, *, server: str, token: str) -> di
         ) from None
     # 판 번호는 **표준 꼴로 견준다** — 대문자로 적은 같은 번호를 「다른 판」 으로 거절했다.
     run_id = job_uuid(run_id, "되돌릴 판의 번호")
-    plan = _get_json(server, token, f"/api/jobs/{plan_job}", who="플랫폼")
+    plan = _get_json(server, token, api_path("api", "jobs", plan_job), who="플랫폼")
     params = (plan.get("params") or {}) if isinstance(plan, dict) else {}
     try:
         planned_run = job_uuid(params.get("run_id"))

@@ -33,7 +33,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -42,7 +42,7 @@ from app.config import get_settings
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.jobs.models import Job, JobFile
 from app.modules.objects.models import ObjectRelationTombstone
-from app.shared import filestore
+from app.shared import extensions, filestore
 from app.shared.errors import AppError, code
 
 #: 공용 저장소 아래 작업 파일의 폴더 — 첨부(내용 주소 `ab/cd/<sha256>`)와 모양이 달라 첨부의
@@ -288,26 +288,48 @@ def sweep_orphans(db: Session, *, now: float | None = None) -> int:
     return removed
 
 
+#: 오래된 기록을 지우는 한 묶음 · 한 차례의 묶음 수 — 요청 시간 기록 · 접근 로그와 같다
+#: (`server/performance.PURGE_BATCH`). 한 문장으로 지우던 때는 몇 달 치(수백만 줄)가 한
+#: 트랜잭션이라, 그동안 잠금 · WAL 이 쌓이고 그 표를 쓰는 요청이 기다렸다. 남은 것은 다음
+#: 차례(한 시간 뒤)가 이어 지운다.
+PURGE_BATCH = 50_000
+PURGE_MAX_BATCHES = 20
+
+
+def _purge_batched(db: Session, model: Any, *where: Any) -> int:
+    """`where` 에 맞는 `model` 의 줄을 `PURGE_BATCH` 씩 지우고 묶음마다 커밋한다."""
+    gone = 0
+    for _ in range(PURGE_MAX_BATCHES):
+        chunk = select(model.id).where(*where).limit(PURGE_BATCH).scalar_subquery()
+        removed = extensions.rows_changed(
+            db.execute(
+                delete(model)
+                .where(model.id.in_(chunk))
+                .execution_options(synchronize_session=False)
+            )
+        )
+        db.commit()
+        gone += removed
+        if removed < PURGE_BATCH:
+            break
+    return gone
+
+
 def purge_old_tombstones(db: Session) -> int:
-    """기한 지난 **끊긴 선의 무덤**을 지운다.
+    """기한 지난 **끊긴 선의 무덤**을 지운다(묶음으로 — `PURGE_BATCH`).
 
     무덤은 영영 쌓이고 내보내기는 그 이력을 통째로 싣는다 — 몇 해가 지나면 봉투의 대부분이
     「없어진 것」 이 된다. 받는 쪽이 이 기간보다 오래 잠들어 있었다면 무덤으로 따라잡을 게
     아니라 **처음부터 다시 받아야** 한다.
     """
     cutoff = datetime.now(UTC) - timedelta(days=get_settings().tombstone_ttl_days)
-    gone = db.execute(
-        delete(ObjectRelationTombstone)
-        .where(ObjectRelationTombstone.removed_at < cutoff)
-        .returning(ObjectRelationTombstone.id)
+    return _purge_batched(
+        db, ObjectRelationTombstone, ObjectRelationTombstone.removed_at < cutoff
     )
-    count = len(gone.all())
-    db.commit()
-    return count
 
 
 def purge_old_undo_journals(db: Session) -> int:
-    """기한 지난 **되돌릴 기록**을 지운다 — 판은 남기고 줄만.
+    """기한 지난 **되돌릴 기록**을 지운다 — 판은 남기고 줄만(묶음으로 — `PURGE_BATCH`).
 
     바뀐 줄마다 한 줄이라 백필 한 번이 수만 줄을 남긴다. 판을 함께 지우면 「그때 무엇이
     들어갔나」 까지 사라진다 — 그것은 남기고, 되돌릴 수 없다는 사실만 목록에서 드러나게
@@ -315,29 +337,17 @@ def purge_old_undo_journals(db: Session) -> int:
     """
     cutoff = datetime.now(UTC) - timedelta(days=get_settings().undo_journal_ttl_days)
     old_runs = select(BundleRun.id).where(BundleRun.at < cutoff)
-    gone = db.execute(
-        delete(BundleUndoEntry)
-        .where(BundleUndoEntry.run_id.in_(old_runs))
-        .returning(BundleUndoEntry.id)
-    )
-    count = len(gone.all())
-    db.commit()
-    return count
+    return _purge_batched(db, BundleUndoEntry, BundleUndoEntry.run_id.in_(old_runs))
 
 
 def purge_old_jobs(db: Session) -> int:
-    """기한 지난 **끝난** 작업 기록을 지운다.
+    """기한 지난 **끝난** 작업 기록을 지운다(묶음으로 — `PURGE_BATCH`).
 
     도는 것은 아무리 오래돼도 안 지운다 — 멎은 작업은 워커가 되살릴 몫이고, 여기서 지우면
     그 일이 있었다는 사실까지 사라진다. 적용 작업이 가리키던 계획 작업이 먼저 지워져도
     `parent_id` 는 SET NULL 이라 남는다.
     """
     cutoff = datetime.now(UTC) - timedelta(days=get_settings().job_ttl_days)
-    gone = db.execute(
-        delete(Job)
-        .where(Job.status.in_(("done", "failed", "cancelled")), Job.finished_at < cutoff)
-        .returning(Job.id)
+    return _purge_batched(
+        db, Job, Job.status.in_(("done", "failed", "cancelled")), Job.finished_at < cutoff
     )
-    count = len(gone.all())
-    db.commit()
-    return count

@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -35,7 +35,7 @@ from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit
-from app.shared.errors import AppError, Conflict, code
+from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
 
 
@@ -317,6 +317,73 @@ def _rewrite_ref(
 replace_ref = _rewrite_ref
 
 
+# --- 기록의 까닭 — 이름을 싣지 않는다 ------------------------------------------------
+#
+# 지우기 · 합치기는 **가리키던 객체마다** 기록을 남긴다. 그 객체는 남의 부서 것일 수 있고, 그
+# 기록은 그 객체의 이력과 그 부서의 변경 이력에 선다. 예전에는 까닭에 지운 · 합친 객체의 이름을
+# 박았다(「ACME 을 Altair 에 합침」) — 조회를 부서로 좁힌 설치에서 그 객체를 못 보는 사람에게
+# 이름이 샜다(이력은 관계의 끝 이름만 가렸다, 2026-11-28 점검). 이제 까닭은 이름 없는 말로
+# 두고, 누구를 지웠고 어디에 합쳤는지는 `changes` 의 표식(`BECAUSE`)에 **id 로** 남긴다 —
+# 이력이 보는 사람마다 이름을 붙이고, 못 보는 객체는 「(볼 수 없는 객체)」 로
+# 적는다(`history`).
+
+#: 지우면서 가리키던 칸을 비운 기록의 까닭.
+DETACHED = "가리키던 객체를 삭제하면서 참조를 비움"
+#: 다른 객체에 합치면서 가리키던 칸을 옮긴 기록의 까닭.
+MERGED = "가리키던 객체를 다른 객체에 병합"
+#: 이긴 쪽의 합침 기록(`object.merge`)의 까닭.
+MERGED_INTO = "다른 객체를 이 객체에 병합"
+#: 진 쪽의 지움 기록의 까닭 — 「참조를 비우고 지움」 과 짝.
+MERGED_AWAY = "다른 객체에 병합하고 삭제"
+#: `changes` 에 싣는 표식의 키 — `{"kind": "detach" | "merge", "object": 지운 · 진 쪽 id,
+#: "into": 이긴 쪽 id(합침만)}`. `_` 로 시작해 이력의 칸 목록에는 안 선다.
+BECAUSE = "_because"
+
+
+def because(
+    kind: str, row: ObjectInstance, into: ObjectInstance | None = None
+) -> dict[str, str]:
+    """기록에 싣는 표식 — 이름이 아니라 id 로(`BECAUSE`)."""
+    marker = {"kind": kind, "object": str(row.id)}
+    if into is not None:
+        marker["into"] = str(into.id)
+    return marker
+
+
+def _lock_for_rewrite(db: Session, row: ObjectInstance, *also: ObjectInstance) -> None:
+    """지우는 · 지는 쪽(`row`), 이긴 쪽(`also`), 그리고 `row` 를 가리키는 객체 전부를 **id
+    차례로 한 문장에** 잠그고, `row` · `also` 를 잠근 뒤의 값으로 다시 읽는다.
+
+    합치기는 이긴 쪽의 속성을 읽어 빈 칸을 채운 뒤 통째로 쓴다 — 안 잠그면 그 사이 끝난 이긴
+    쪽의 고치기가 소리 없이 옛 값으로 돌아갔다(2026-11-28 점검). 둘만 잠그면 이번에는 차례가
+    갈린다 — 가리키는 객체는 뒤에 칸 정의마다 잠그므로(`_rewrite_property_refs`), 자기 타입을
+    가리키는 타입에서 일괄 수정(id 차례로 잠금)이 가리키는 객체를 쥔 채 지는 쪽을 기다리면 서로
+    기다린다. 그래서 처음에 **전부를 한 차례로** 잡는다 — 뒤의 덩어리 잠금은 이미 쥔 줄이라 안
+    기다린다. 가리키는 수는 요청이면 2만 건 아래(`_require_inline`)이고, 작업이어도 어차피 전부
+    고쳐 쓸 줄이다. 세지만 하고 id 는 받아 오지 않는다.
+
+    그 사이 다른 합치기 · 지우기가 먼저 끝났으면 없는 것과 같은 말로 거절한다(OBJECTS-11)."""
+    # 세션에 실린 변경을 먼저 쓴다 — 아래 다시 읽기(`populate_existing`)가 그것을 덮지 않게.
+    db.flush()
+    pinned = [row.id, *(one.id for one in also)]
+    pointing = select(ObjectRef.src_id).where(ObjectRef.dst_id == row.id)
+    locked = (
+        select(ObjectInstance.id)
+        .where(or_(ObjectInstance.id.in_(pinned), ObjectInstance.id.in_(pointing)))
+        .order_by(ObjectInstance.id)
+        .with_for_update(of=ObjectInstance)
+        .subquery()
+    )
+    db.execute(select(func.count()).select_from(locked))
+    db.scalars(
+        select(ObjectInstance)
+        .where(ObjectInstance.id.in_(pinned))
+        .execution_options(populate_existing=True)
+    ).all()
+    if any(one.deleted_at is not None for one in (row, *also)):
+        raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
+
+
 def _rewrite_property_refs(
     db: Session,
     user: User,
@@ -325,9 +392,12 @@ def _rewrite_property_refs(
     *,
     new_id: uuid.UUID | None,
     reason: str,
+    marker: dict[str, str],
 ) -> int:
     """이 객체를 가리키는 모든 칸을 고친다 — **보이지 않는 것까지.** 반쯤 고치면 남의
     부서 화면에만 uuid 가 남고, 그것은 이 사람이 알 수 없다.
+
+    기록마다 `marker`(`because`)를 싣는다 — 까닭(`reason`)에는 이름이 없다(위 「기록의 까닭」).
 
     인기 모델은 기록 10만 건이 가리킨다 — 덩어리마다 그 칸만 읽어 잠그고, 문장 하나로 그 칸만
     고치고, 이력은 바뀐 칸만 덩어리째 남긴다(`objects.rewrite`). 바깥 알림은 합치기 · 지우기
@@ -374,7 +444,10 @@ def _rewrite_property_refs(
                         other_id,
                         f"{owner_type.slug}:{label}",
                         workspace_id,
-                        rewrite.changed_property(definition.key, raw, after),
+                        {
+                            **rewrite.changed_property(definition.key, raw, after),
+                            BECAUSE: marker,
+                        },
                     )
                 )
             rewrite.write_key(db, definition.key, writes)
@@ -405,8 +478,13 @@ def delete_detaching(
     그 객체의 화면에서 「왜 이 칸이 비었지」 를 물으면 답이 있어야 한다."""
     if inline:
         _require_inline(db, row, object_type, what="참조를 비우고 지우기", job="detach")
-    reason = f"{row.label} 을 삭제하면서 참조를 비움"
-    cleared = _rewrite_property_refs(db, user, row, object_type, new_id=None, reason=reason)
+    _lock_for_rewrite(db, row)
+    # 까닭에 이름을 싣지 않는다 — 가리키던 객체(남의 부서 것일 수 있다)의 이력에 선다.
+    reason = DETACHED
+    marker = because("detach", row)
+    cleared = _rewrite_property_refs(
+        db, user, row, object_type, new_id=None, reason=reason, marker=marker
+    )
     edges = list(
         db.scalars(
             select(ObjectRelation).where(
@@ -423,7 +501,7 @@ def delete_detaching(
             target_table="object_relations",
             target_id=edge.id,
             target_label=f"{edge.src_object_id} -{edge.relation}-> {edge.dst_object_id}",
-            changes=audit.relation_endpoints(edge, "", ""),
+            changes={**audit.relation_endpoints(edge, "", ""), BECAUSE: marker},
             reason=reason,
         )
         db.delete(edge)
@@ -469,9 +547,14 @@ def merge_into(
     )
     if inline:
         _require_inline(db, row, object_type, what="합치기", job="merge")
-    reason = f"{row.label} 을 {target.label} 에 합침"
+    # 둘과 가리키는 것 전부를 id 차례로 잠근다 — 아래가 이긴 쪽의 칸을 읽어 통째로 쓴다.
+    _lock_for_rewrite(db, row, target)
+    # 까닭에 이름을 싣지 않는다 — 가리키던 객체 · 이긴 쪽의 이력에 서고, 그것을 읽는 사람이
+    # 진 쪽(남의 부서 것일 수 있다)을 못 볼 수 있다. 이름은 이력이 표식에서 붙인다.
+    reason = MERGED
+    marker = because("merge", row, target)
     moved_refs = _rewrite_property_refs(
-        db, user, row, object_type, new_id=target.id, reason=reason
+        db, user, row, object_type, new_id=target.id, reason=reason, marker=marker
     )
 
     mine = list(
@@ -577,7 +660,7 @@ def merge_into(
     )
 
     row.merged_into_id = target.id
-    _soft_delete(db, user, row, object_type, reason=reason)
+    _soft_delete(db, user, row, object_type, reason=MERGED_AWAY)
     audit.record(
         db,
         action="object.merge",
@@ -598,8 +681,9 @@ def merge_into(
             "proposals_moved": proposals_moved,
             "proposals_dropped": proposals_dropped,
             **audit.diff({"properties": before}, {"properties": target.properties or {}}),
+            BECAUSE: marker,
         },
-        reason=reason,
+        reason=MERGED_INTO,
     )
     db.commit()
     return {

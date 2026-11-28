@@ -1201,9 +1201,9 @@ def plan_attach(
         plan.after = [*before, word]
     holder = aliases.taken_by(db, object_type, aliases.HUMAN, [word]).get(norm)
     if holder is not None and holder != target.id:
-        other = db.get(ObjectInstance, holder)
+        # 임자의 이름은 이 사람이 그 객체를 볼 수 있을 때만(`aliases.holder_name`).
         plan.blocking.append(
-            f"「{word}」 은(는) 이미 {other.label if other else '다른 객체'}의 별칭입니다 — "
+            f"「{word}」 은(는) 이미 {aliases.holder_name(db, holder, user)}의 별칭입니다 — "
             "같은 별칭이 둘이면 어느 쪽인지 아무도 모릅니다. 그쪽 별칭을 먼저 정리하세요."
         )
     if norm in (compare_key(target.label), compare_key(target.key or "")):
@@ -1211,7 +1211,7 @@ def plan_attach(
             "이 객체의 이름(식별자)과 같습니다 — 찾은 사람에게 안 보였을 수 있습니다(부서 밖)."
         )
     clash = db.scalar(
-        select(ObjectInstance.label).where(
+        select(ObjectInstance.id).where(
             ObjectInstance.type_id == object_type.id,
             ObjectInstance.id != target.id,
             ObjectInstance.deleted_at.is_(None),
@@ -1222,8 +1222,10 @@ def plan_attach(
         )
     )
     if clash is not None:
+        # 그 객체의 이름도 이 사람이 볼 수 있을 때만 — 식별자로 맞았으면 이름이 새 말이다.
+        named = aliases.holder_name(db, clash, user)
         plan.warnings.append(
-            f"같은 타입의 「{clash}」 의 이름(식별자)과 같습니다 — 그 표기로 찾으면 둘이 "
+            f"같은 타입의 「{named}」 의 이름(식별자)과 같습니다 — 그 표기로 찾으면 둘이 "
             "나옵니다(데이터 품질의 「별칭이 다른 객체의 이름과 같음」)."
         )
     return plan

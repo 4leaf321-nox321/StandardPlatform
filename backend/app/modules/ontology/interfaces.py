@@ -38,6 +38,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.ontology import bounded
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 
 #: 같아야 하는 칸. **필수(`required`)는 따로 본다** — 한 방향이라서.
@@ -766,21 +767,19 @@ def risks(db: Session, bindings: Iterable[Binding]) -> list[str]:
             continue
         name = f"{one.type_slug}.{one.key}"
         if "required" in one.changed and one.shape.required:
-            without = int(
-                db.scalar(
-                    select(func.count())
-                    .select_from(ObjectInstance)
-                    .where(
-                        ObjectInstance.type_id == owner.id,
-                        ObjectInstance.deleted_at.is_(None),
-                        ~ObjectInstance.properties.has_key(one.key),
-                    )
-                )
-                or 0
+            # 상한까지만 센다(`bounded`) — 정의 가져오기 · 제안의 계획은 요청 안에서 돈다.
+            without = bounded.count(
+                db,
+                select(ObjectInstance.id).where(
+                    ObjectInstance.type_id == owner.id,
+                    ObjectInstance.deleted_at.is_(None),
+                    ~ObjectInstance.properties.has_key(one.key),
+                ),
             )
             out.append(
                 f"속성 {name}: 인터페이스 {one.interface} 를 따라 필수가 됩니다. 값이 없는 "
-                f"객체 {without}개는 그대로 두지만, 그 객체의 속성을 고칠 때 걸립니다."
+                f"객체({bounded.shown(without, unit='개')})는 그대로 두지만, 그 객체의 속성을 "
+                "고칠 때 걸립니다."
             )
         if "multi" in one.changed:
             out.append(
@@ -837,24 +836,23 @@ def unimplement_risks(
             named = set(ends or ())
             if not named & lost or named & reach_after:
                 continue
-            count = int(
-                db.scalar(
-                    select(func.count())
-                    .select_from(ObjectRelation)
-                    .where(ObjectRelation.relation == kind.slug, edge_end.in_(mine))
-                )
-                or 0
-            ) + int(
-                db.scalar(
-                    select(func.count())
-                    .select_from(ObjectLink)
-                    .where(ObjectLink.relation == kind.slug, link_type == type_slug)
-                )
-                or 0
+            # 상한까지만 센다(`bounded`) — 정의 가져오기 · 제안의 계획은 요청 안에서 돈다.
+            edges = bounded.count(
+                db,
+                select(ObjectRelation.id).where(
+                    ObjectRelation.relation == kind.slug, edge_end.in_(mine)
+                ),
             )
+            links = bounded.count(
+                db,
+                select(ObjectLink.id).where(
+                    ObjectLink.relation == kind.slug, link_type == type_slug
+                ),
+            )
+            count = bounded.CAP + 1 if max(edges, links) > bounded.CAP else edges + links
             out.append(
                 f"관계 {kind.slug}: 구현을 해제하면 타입 {type_slug} 은(는) {side} 끝"
                 f"({', '.join(sorted(named & lost))})에 더는 안 맞습니다 — 이미 이은 "
-                f"{count}건은 남지만 새로 잇지는 못합니다."
+                f"{bounded.shown(count)}은 남지만 새로 잇지는 못합니다."
             )
     return out

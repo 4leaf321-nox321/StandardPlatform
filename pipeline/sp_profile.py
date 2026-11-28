@@ -29,6 +29,7 @@ from typing import Any
 
 import sp_pipeline as pipeline
 import sp_table
+import sp_work
 
 FORMAT = "sp-profile/1"
 ENUM_LIMIT = 20
@@ -801,10 +802,15 @@ def run(
     text = render(result) + "\n\n" + render_draft(found)
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = f"{source.stem}-{sheet}" if sheet else source.stem
-        pipeline._write(out_dir / f"{stem}.profile.json", result)
-        pipeline._write(out_dir / f"{stem}.draft.json", found)
-        (out_dir / f"{stem}.profile.txt").write_text(text + "\n", encoding="utf-8")
+        # 이름의 시트는 **읽은 시트**(CSV 는 시트가 없어 `sheet` 를 안 본다 — 예전에는 그
+        # 값이 검사 없이 이름이 되어 Windows 에서 `01-조사/` 밖에 썼다). 경로 글자는 지우고,
+        # 쓰는 자리는 다시 `inside` 로 본다.
+        stem = sp_table.survey_stem(source, table.sheet if sheet else "")
+        pipeline._write(sp_work.inside(out_dir, f"{stem}.profile.json"), result)
+        pipeline._write(sp_work.inside(out_dir, f"{stem}.draft.json"), found)
+        sp_work.inside(out_dir, f"{stem}.profile.txt").write_text(
+            text + "\n", encoding="utf-8"
+        )
     return result, text
 
 

@@ -14,6 +14,7 @@ import { objectApi } from '@/modules/objects/api'
 import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import type { HistoryEntry, Snapshot } from '@/modules/objects/api'
 import { hasPeriod, periodText } from '@/modules/objects/periods'
+import { isStaleEdit } from '@/modules/objects/staleEdit'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -39,6 +40,11 @@ interface ObjectHistoryProps {
   current: Snapshot
   refLabels: Record<string, string>
   canEdit: boolean
+  /**
+   * 「지금」 을 그린 객체의 `updated_at` — 되돌릴 때 함께 보낸다. 그 사이 누가 수정했으면 서버가 덮지
+   * 않고 거절한다(OBJECTS-0162).
+   */
+  baseUpdatedAt?: string
   /** 되돌린 뒤 — 상세를 다시 읽는다. */
   onRestored: () => void
   /** 상세가 다시 읽힐 때마다 바뀌는 값(응답 객체) — 이력도 같이 다시 읽는다. */
@@ -120,6 +126,7 @@ export function ObjectHistory({
   current,
   refLabels,
   canEdit,
+  baseUpdatedAt,
   onRestored,
   reloadKey,
 }: ObjectHistoryProps) {
@@ -290,7 +297,14 @@ export function ObjectHistory({
             setUndoBatch(batchId)
           }}
           onRestore={async () => {
-            await objectApi.restore(typeSlug, objectId, picked.id)
+            try {
+              await objectApi.restore(typeSlug, objectId, picked.id, baseUpdatedAt)
+            } catch (caught) {
+              // 그 사이 누가 수정했다 — 지금 값을 다시 읽어 창의 「지금」 을 새로 하고, 거절의 말은
+              // 창에 남긴다(다시 누르면 새로 읽은 때로 보낸다).
+              if (isStaleEdit(caught)) onRestored()
+              throw caught
+            }
             setPicked(null)
             onRestored()
           }}

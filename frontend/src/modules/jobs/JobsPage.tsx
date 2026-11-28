@@ -457,7 +457,7 @@ function Detail({
           {!isTerminal(job)
             ? '아직 끝나지 않았습니다 — 끝나면 여기에 결과가 표시됩니다.'
             : job.has_output
-              ? '만든 파일을 받으세요.'
+              ? '만든 파일을 다운로드하세요.'
               : '남길 결과가 없는 작업입니다.'}
         </p>
       )}
@@ -465,13 +465,13 @@ function Detail({
         {job.has_output && (
           <Button size="xs" variant="outline" onClick={onDownload} disabled={busy}>
             <Download className="mr-1 size-3" />
-            파일 받기
+            파일 다운로드
           </Button>
         )}
         {!plan && hasRows(job.result) && (
           <Button size="xs" variant="outline" onClick={onDownloadRows} disabled={busy}>
             <Download className="mr-1 size-3" />
-            모든 줄 받기(CSV)
+            모든 줄 다운로드(CSV)
           </Button>
         )}
         {canApply && (
@@ -481,7 +481,7 @@ function Detail({
               적용
             </Button>
             <span className="text-muted-foreground text-xs">
-              아직 아무것도 안 들어갔습니다 — 위 계획을 읽고 눌러 주세요.
+              아직 아무것도 적용하지 않았습니다 — 위 계획을 읽고 「적용」 을 클릭하세요.
             </span>
           </>
         )}
@@ -515,13 +515,13 @@ function Detail({
                 ? '막히는 것이 있거나 이동할 것이 없어 적용할 수 없습니다 — 부서 관리의 「자료 이동」 에서 다시 미리 보세요.'
                 : move || rename
                   ? '막는 것이 있거나 수신 시스템 통보 확인이 없어 적용할 수 없습니다 — 온톨로지 화면에서 다시 계획하세요.'
-                  : '오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.'}
+                  : '오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 파일을 수정해 다시 업로드하세요.'}
             </span>
           )}
         {job.status === 'done' && !twoStep && plan?.applied === false && (
           <span className="text-muted-foreground text-xs">
-            계획만 본 것입니다 — 넣으려면 그 화면(데이터 소스의 「동기화」)에서 적용으로 다시
-            돌립니다.
+            계획만 본 것입니다 — 적용하려면 그 화면(데이터 소스의 「동기화」)에서 적용으로 다시
+            실행합니다.
           </span>
         )}
       </div>
@@ -799,7 +799,7 @@ export default function JobsPage() {
               사람은 「왜 다섯을 골랐는데 셋만 갔나」 를 묻게 된다. */}
           {applicable.length < picked.size && (
             <span className="text-muted-foreground text-xs">
-              적용은 오류 없는 계획만 — {picked.size - applicable.length}건은 빠집니다
+              적용은 오류 없는 계획만 — {picked.size - applicable.length}건은 제외됩니다
             </span>
           )}
           {oneByOne > 0 && (
@@ -820,14 +820,14 @@ export default function JobsPage() {
         description={
           confirming === 'apply' ? (
             <>
-              고른 계획마다 <b>적용 작업</b>이 서고 워커가 차례로 넣습니다. 오류가 있는 계획과 이미
-              적용한 것은 빠집니다 — 한 건이 막혀도 나머지는 갑니다. 넣은 뒤 되돌리려면 객체 화면의{' '}
-              <b>일괄 되돌리기</b>를 씁니다.
+              선택한 계획마다 <b>적용 작업</b>이 생성되고 워커가 차례로 적용합니다. 오류가 있는
+              계획과 이미 적용한 것은 제외됩니다 — 한 건이 막혀도 나머지는 적용됩니다. 적용한 뒤
+              복원하려면 변경 이력의 <b>같이 바뀐 것 한 번에 복원</b>을 사용합니다.
             </>
           ) : (
             <>
-              도는 중인 작업에 <b>멈춤을 부탁</b>합니다. 워커가 다음 묶음에서 보고 멈추므로,
-              이미 넣은 행은 그대로 남습니다 — 끝난 작업은 빠집니다.
+              실행 중인 작업에 <b>멈춤을 요청</b>합니다. 워커가 다음 묶음에서 보고 멈추므로,
+              이미 추가한 행은 그대로 남습니다 — 끝난 작업은 제외됩니다.
             </>
           )
         }

@@ -371,6 +371,93 @@ def test_타입_옮기기는_계획이_기본이고_많으면_작업이_된다()
     assert got["job_id"] == "j2"
 
 
+def test_적용은_미리_본_지문을_넘긴다() -> None:
+    """요청 안의 적용(가져오기 · 키 변경 · 옮기기 · 복원)은 미리 본 계획의 `fingerprint` 를
+    `expected_fingerprint` 로 넘긴다 — 그 사이 계획이 바뀌었으면 서버가 ONTOLOGY-0114 로
+    막는다. 미리 보기에는 싣지 않고, 작업으로 넘어가는 계획에도 싣지 않는다(작업은 제 지문)."""
+    ctx = _ctx("Bearer t")
+    seen = _serve(lambda _r: httpx.Response(200, json={"applied": True}))
+    asyncio.run(server.ontology_import(ctx, {"types": []}, expected_fingerprint="f1"))
+    assert "expected_fingerprint" not in seen[-1].url.params, "미리 보기에는 안 싣는다"
+    asyncio.run(
+        server.ontology_import(ctx, {"types": []}, apply=True, expected_fingerprint="f1")
+    )
+    assert seen[-1].url.params["expected_fingerprint"] == "f1"
+    asyncio.run(server.ontology_import(ctx, {"types": []}, apply=True))
+    assert "expected_fingerprint" not in seen[-1].url.params
+
+    asyncio.run(
+        server.ontology_rename(
+            ctx, "property", "part", "weight", key="w", apply=True, expected_fingerprint="f2"
+        )
+    )
+    assert json.loads(seen[-1].content)["expected_fingerprint"] == "f2"
+    asyncio.run(
+        server.ontology_rename(ctx, "type", "part2", "part", expected_fingerprint="f2")
+    )
+    assert "expected_fingerprint" not in json.loads(seen[-1].content)
+
+    asyncio.run(
+        server.ontology_move(ctx, "vendor", "supplier", apply=True, expected_fingerprint="f3")
+    )
+    assert json.loads(seen[-1].content)["expected_fingerprint"] == "f3"
+
+    asyncio.run(server.ontology_restore(ctx, "s1", apply=True, expected_fingerprint="f4"))
+    assert seen[-1].url.params["expected_fingerprint"] == "f4"
+    assert seen[-1].url.params["dry_run"] == "false"
+
+    def big(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/move"):
+            return httpx.Response(
+                409, json={"error": {"code": "APP-ONTOLOGY-0106", "message": "작업으로"}}
+            )
+        if request.url.path.endswith("/move/job"):
+            return httpx.Response(202, json={"id": "j3", "status": "queued"})
+        return httpx.Response(200, json={"id": "j3", "status": "done", "result": {}})
+
+    seen = _serve(big)
+    asyncio.run(
+        server.ontology_move(ctx, "vendor", "supplier", apply=True, expected_fingerprint="f3")
+    )
+    job = next(one for one in seen if one.url.path.endswith("/move/job"))
+    assert "expected_fingerprint" not in json.loads(job.content), "작업은 제 지문을 든다"
+
+
+def test_값이_많은_종류_변경의_가져오기는_묶음_계획_작업이_된다() -> None:
+    """ONTOLOGY-0115 — 요청 안에서 값을 못 센다. 같은 정의(source 까지)로 묶음 가져오기 계획
+    작업을 만들고 그 계획을 돌려준다. 적용은 사람이 본 뒤 job_apply 로."""
+    ctx = _ctx("Bearer t")
+
+    def big(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/ontology/import":
+            return httpx.Response(
+                409, json={"error": {"code": "APP-ONTOLOGY-0115", "message": "작업으로"}}
+            )
+        if request.url.path == "/api/bundles/import":
+            return httpx.Response(202, json={"id": "j4", "status": "queued"})
+        return httpx.Response(200, json={"id": "j4", "status": "done", "result": {}})
+
+    seen = _serve(big)
+    schema = {"types": [{"slug": "log", "label": "기록"}]}
+    got = asyncio.run(
+        server.ontology_import(
+            ctx, schema, apply=True, source="relay", expected_fingerprint="f"
+        )
+    )
+    bundle = next(one for one in seen if one.url.path == "/api/bundles/import")
+    assert json.loads(bundle.content) == {
+        "ontology": schema,
+        "apply": False,
+        "source": "relay",
+    }
+    assert got["job_id"] == "j4"
+
+    # 미리 보기는 0115 가 아니다(경고로 말한다) — 그래도 작업을 만들지 않는다.
+    seen = _serve(big)
+    asyncio.run(server.ontology_import(ctx, schema))
+    assert all(one.url.path != "/api/bundles/import" for one in seen)
+
+
 def test_정의_점검은_읽기만_하고_한_종류로_좁힌다() -> None:
     """ADR 0092 — 후보만 받는다. 위험 도구가 아니다(아무것도 안 바꾼다)."""
     ctx = _ctx("Bearer t")
@@ -1747,6 +1834,18 @@ def test_지표_도구는_주기를_안_주면_안_보내고_홈과_기록은_�
     assert dict(seen[4].url.params) == {"name": "symptom", "q": "소"}
     wrong = asyncio.run(server.metric_query(ctx, "m1", shape="dim_values", dims=["a", "b"]))
     assert "기준 하나" in wrong["error"]
+    before = len(seen)
+    filtered = asyncio.run(
+        server.metric_query(
+            ctx, "m1", shape="dim_values", dims=["symptom"], filters={"factory": "F1"}
+        )
+    )
+    # 거르기를 말없이 버리지 않는다 — 요청도 안 나간다.
+    assert filtered["unused"] == ["filters"], filtered
+    assert len(seen) == before
+    searched = asyncio.run(server.metric_query(ctx, "m1", dims=["symptom"], search="소"))
+    assert searched["unused"] == ["search"], searched
+    assert len(seen) == before
 
 
 def test_제외_조건과_구성비와_규칙_기준이_그대로_건너간다() -> None:
@@ -2882,3 +2981,16 @@ def test_문서는_본문_없이_판과_sha256_만_읽을_수_있다() -> None:
     seen = _serve(lambda _r: httpx.Response(200, json={"revision": 3, "body": "x"}))
     asyncio.run(server.document_read(_ctx("Bearer t"), "part", "o1", "paper"))
     assert "body" not in seen[0].url.params
+
+
+def test_객체_고치기는_읽은_때를_글자_그대로_실어_보낸다() -> None:
+    """동시 수정(ADR 0103) — `base_updated_at` 은 바꿀 칸과 함께만 간다(그것만으로는
+    안 보낸다)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"id": "id"}))
+    ctx = _ctx("Bearer t")
+    stamp = "2026-11-28T03:04:05.123456Z"
+    asyncio.run(server.object_update(ctx, "mach", "id", label="x", base_updated_at=stamp))
+    assert json.loads(seen[-1].content) == {"label": "x", "base_updated_at": stamp}
+    before = len(seen)
+    nothing = asyncio.run(server.object_update(ctx, "mach", "id", base_updated_at=stamp))
+    assert len(seen) == before and nothing["ok"] is True

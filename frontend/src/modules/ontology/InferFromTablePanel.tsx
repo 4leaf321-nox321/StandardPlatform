@@ -8,6 +8,9 @@
  * 열마다 **참조 후보**도 보인다 — 값이 어느 있는 타입의 객체로 풀리나(ADR 0009). 넣을 때와 같은
  * 이름 풀이로 센 것이라, 「하나로 97%」 면 넣을 때도 97% 가 풀린다. 확실할 때만 서버가 참조로
  * 제안하고, 나머지는 후보를 눌러 사람이 고른다.
+ *
+ * 정의의 적용은 「정의 계획 보기」 의 지문(`fingerprint`)을 싣는다 — 그 사이 정의가 바뀌었으면
+ * 서버가 ONTOLOGY-0114 로 막고(타입도 행도 안 들어감), 이 판은 계획을 비워 다시 보게 한다.
  */
 
 import { useRef, useState } from 'react'
@@ -25,6 +28,7 @@ import type {
   NavGroupRow,
   RefCandidate,
 } from '@/modules/ontology/api'
+import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -145,6 +149,12 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
   const [usage, setUsage] = useState<'axis' | 'log'>('log')
   const [workspace, setWorkspace] = useState(user?.home_workspace_slug ?? NONE)
   const [schemaPlan, setSchemaPlan] = useState<ImportPlan | null>(null)
+  /**
+   * 이미 적용한 정의(JSON) — 행 추가만 실패해 다시 클릭하면 같은 정의는 다시 적용하지 않고 행만
+   * 다시 넣는다. 다시 적용하면 이미 생긴 타입에서 계획이 「새로」 → 「그대로」 로 바뀌어, 옛
+   * 지문이 「미리 본 뒤 바뀌었습니다」(ONTOLOGY-0114)로 막혔다.
+   */
+  const [appliedSchema, setAppliedSchema] = useState<string | null>(null)
   const [rowsPlan, setRowsPlan] = useState<RowsPlan | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -153,6 +163,7 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
     setBusy(true)
     setError(null)
     setSchemaPlan(null)
+    setAppliedSchema(null)
     setRowsPlan(null)
     try {
       const got = await ontologyApi.infer(file)
@@ -212,10 +223,20 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
         columns,
         raw_rows: result.raw_rows,
       })
-      const applied = await ontologyApi.importSchema(built.schema, false)
-      setSchemaPlan(applied)
-      if (!applied.applied) return
-      onChanged()
+      const sent = JSON.stringify(built.schema)
+      // 같은 정의를 이미 적용했다(행 추가만 실패) — 정의는 건너뛰고 행만 다시. 정의가 달라졌으면
+      // (slug · 이름을 바꿈) 미리 본 지문으로 적용한다 — 계획이 달라졌으면 서버가 막는다.
+      if (sent !== appliedSchema) {
+        const applied = await ontologyApi.importSchema(
+          built.schema,
+          false,
+          schemaPlan?.fingerprint || undefined,
+        )
+        setSchemaPlan(applied)
+        if (!applied.applied) return
+        setAppliedSchema(sent)
+        onChanged()
+      }
       setRowsPlan(
         await objectApi.importRows(slug.trim(), built.import_rows, {
           apply: true,
@@ -223,6 +244,8 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
         }),
       )
     } catch (caught) {
+      // 미리 본 뒤 바뀌었다 — 옛 계획으로는 적용하지 않게 비운다(다시 「정의 계획 보기」).
+      if (caught instanceof ApiError && caught.code.endsWith('ONTOLOGY-0114')) setSchemaPlan(null)
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setBusy(false)

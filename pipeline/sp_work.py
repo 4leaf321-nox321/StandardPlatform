@@ -75,6 +75,23 @@ def inside(folder: Path, relative: str) -> Path:
     return target
 
 
+#: 파일 이름 **한 조각**에 못 들이는 글자 — 경로 구분자(`/` · `\`), Windows 의 드라이브 ·
+#: 스트림(`:`)과 못 쓰는 글자(`*?"<>|`), 제어 문자.
+_NOT_IN_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]+')
+
+
+def name_part(value: str, fallback: str) -> str:
+    """파일 이름에 잇는 **바깥 값**(엑셀 시트 이름 등)을 한 조각으로 — 경로를 가리킬 수 없게.
+
+    `source_profile(sheet="/../../../X")` 의 시트가 그대로 결과 파일 이름에 들어가, Windows
+    에서 `01-조사/` 밖에 썼다(Windows 는 없는 폴더의 `..` 도 글자로 접는다). 빈칸 · 한글은
+    그대로 둔다 — 예전에 만든 `<이름>-<시트>.draft.json` 을 같은 이름으로 다시 찾는다. 끝의
+    점 · 빈칸은 Windows 가 떼어 다른 이름이 되므로 뗀다.
+    """
+    clean = _NOT_IN_NAME.sub("-", value).strip(" .")
+    return clean or fallback
+
+
 def load(folder: Path) -> dict[str, Any]:
     try:
         body = json.loads((folder / WORK).read_text(encoding="utf-8"))

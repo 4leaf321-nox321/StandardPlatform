@@ -63,6 +63,12 @@ export default function SignupPage() {
           <p className="text-muted-foreground text-sm">
             관리자가 승인하면 로그인할 수 있습니다. 메일 통보는 없으니 담당자에게 직접 알려 주세요.
           </p>
+          {/* 서버는 아이디가 이미 있어도 같은 답을 준다(아무나 아이디가 있는지 알아내지 못하게) —
+              그때는 새 계정이 생기지 않으므로 그 길을 여기서 말한다. */}
+          <p className="text-muted-foreground text-sm">
+            이미 있는 아이디로 신청했다면 새 계정은 만들어지지 않습니다 — 비밀번호를 잊었으면
+            관리자에게 비밀번호 초기화를 요청하세요.
+          </p>
           <Button onClick={() => navigate('/login')} className="w-full">
             로그인 화면으로
           </Button>
