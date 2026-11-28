@@ -79,6 +79,15 @@ def _world(
         "_notify_step_failed",
         lambda label, failures, _error: seen["notified"].append((label, failures)),
     )
+    # **고아 파일 정리도 가짜로, 차례는 가짜 시계에서** — 워커는 만들 때 진짜 단조 시계로 첫
+    # 차례를 정한다. 막 켠 CI 러너에서는 그 차례가 시험 안에 들어와, 가짜 세션으로 정리가 돌다
+    # 실패해 「고아 파일 정리」 알림이 먼저 섰다(오래 켜 둔 PC 에서는 안 들어와 통과했다).
+    monkeypatch.setattr(
+        worker_module,
+        "_clean_orphans",
+        lambda: seen["calls"].update(gc=1 + seen["calls"].get("gc", 0)),
+    )
+    worker._last_gc = clock.now
     return worker, clock, seen
 
 
